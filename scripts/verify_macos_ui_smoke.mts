@@ -565,6 +565,7 @@ const verifyWorkspaceLayout = (size: WindowSize) => {
   waitForAX("beginner-chart-workspace");
   waitForAX("beginner-symbol-search");
   waitForAX("beginner-analyze-button");
+  waitForAX("beginner-chart-timeframe");
   assertInsideWindow("beginner-symbol-search", actual);
   assertInsideWindow("beginner-analyze-button", actual);
 
@@ -767,6 +768,7 @@ const main = () => {
       "beginner-nav-settings",
       "beginner-symbol-search",
       "beginner-analyze-button",
+      "beginner-chart-timeframe",
       "beginner-chart-workspace",
       "beginner-add-watchlist",
       "beginner-watchlist-workspace",

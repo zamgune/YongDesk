@@ -342,6 +342,28 @@ public struct EngineClient: Sendable {
         try await analyze(symbol: symbol, timeframe: .oneDay, days: 365)
     }
 
+    public func chartData(
+        symbol: String,
+        assetClass: AnalysisAssetClass,
+        timeframe: AnalysisTimeframe
+    ) async throws -> Data {
+        let normalizedSymbol = symbol.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedSymbol.isEmpty else {
+            throw URLError(.badURL)
+        }
+        var components = URLComponents()
+        components.path = "/api/local/chart"
+        components.queryItems = [
+            URLQueryItem(name: "symbol", value: normalizedSymbol),
+            URLQueryItem(name: "assetClass", value: assetClass.rawValue),
+            URLQueryItem(name: "tf", value: timeframe.rawValue),
+        ]
+        guard let path = components.string else {
+            throw URLError(.badURL)
+        }
+        return try await getData(path, timeout: 45)
+    }
+
     public func workspaceAnalysis(
         symbol: String,
         assetClass: AnalysisAssetClass,

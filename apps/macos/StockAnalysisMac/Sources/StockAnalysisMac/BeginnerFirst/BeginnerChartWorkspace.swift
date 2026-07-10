@@ -9,10 +9,12 @@ struct BeginnerChartWorkspace: View {
     let analysis: MarketAnalysisSnapshot?
     @Binding var selectedTab: BeginnerAnalysisTab
     @Binding var selectedHorizon: BeginnerTradeHorizon
+    @Binding var selectedChartTimeframe: BeginnerChartTimeframe
     @Binding var resultPreview: String
     let isLoading: Bool
     let compact: Bool
     let onAnalyze: () -> Void
+    let onChartTimeframeChanged: (BeginnerChartTimeframe) -> Void
     let onAddToWatchlist: () -> Void
     let onOpenOrder: () -> Void
     let onRefreshNews: () -> Void
@@ -23,6 +25,15 @@ struct BeginnerChartWorkspace: View {
         guard let latest = model.latestWorkspaceAnalysis,
               beginnerCanonicalSymbol(latest.symbol) == beginnerCanonicalSymbol(selectedSymbol) else {
             return nil
+        }
+        return latest
+    }
+
+    private var chartAnalysis: MarketAnalysisSnapshot? {
+        guard let latest = model.latestChartAnalysis,
+              beginnerCanonicalSymbol(latest.symbol) == beginnerCanonicalSymbol(selectedSymbol),
+              latest.timeframe == selectedChartTimeframe.rawValue else {
+            return analysis
         }
         return latest
     }
@@ -40,6 +51,13 @@ struct BeginnerChartWorkspace: View {
         }
         .background(BeginnerPalette.background)
         .accessibilityIdentifier("beginner-chart-workspace")
+        .task {
+            chartControls.timeframe = selectedChartTimeframe.rawValue
+        }
+        .onChange(of: selectedChartTimeframe) { _, timeframe in
+            chartControls.timeframe = timeframe.rawValue
+            onChartTimeframeChanged(timeframe)
+        }
     }
 
     private var marketSummary: some View {
@@ -144,25 +162,25 @@ struct BeginnerChartWorkspace: View {
                     VStack(alignment: .leading, spacing: 3) {
                         Text("가격 흐름")
                             .font(.headline)
-                        Text("초기 릴리스는 일봉과 최근 종가를 사용합니다.")
+                        Text("선택한 봉 주기의 확정 캔들과 최근 종가를 사용합니다.")
                             .font(.caption)
                             .foregroundStyle(BeginnerPalette.muted)
                     }
                     Spacer()
-                    Picker("차트 범위", selection: $chartControls.timeframe) {
-                        Text("30일").tag("30d")
-                        Text("90일").tag("90d")
-                        Text("1년").tag("1y")
+                    Picker("차트 주기", selection: $selectedChartTimeframe) {
+                        ForEach(BeginnerChartTimeframe.allCases) { timeframe in
+                            Text(timeframe.title).tag(timeframe)
+                        }
                     }
                     .labelsHidden()
-                    .pickerStyle(.segmented)
-                    .frame(width: 190)
-                    .accessibilityIdentifier("beginner-chart-range")
+                    .pickerStyle(.menu)
+                    .frame(width: 104)
+                    .accessibilityIdentifier("beginner-chart-timeframe")
                 }
 
                 HStack(spacing: 0) {
-                    PriceChart(selectedSymbol: selectedSymbol, analysis: analysis, controls: chartControls)
-                    PriceAxis(analysis: analysis)
+                    PriceChart(selectedSymbol: selectedSymbol, analysis: chartAnalysis, controls: chartControls)
+                    PriceAxis(analysis: chartAnalysis)
                         .frame(width: 70)
                 }
                 .frame(height: 360)
@@ -340,7 +358,7 @@ struct BeginnerChartWorkspace: View {
         let source = beginnerDataSourceLabel(workspaceAnalysis.dataSource)
         let quoteAt = beginnerTimestamp(workspaceAnalysis.quoteAt ?? workspaceAnalysis.generatedAt)
         let stale = workspaceAnalysis.stale == true ? " · 지연 가능" : ""
-        return "일봉 차트 · \(source) · \(workspaceAnalysis.currency ?? analysis?.currency ?? "-") · \(quoteAt)\(stale)"
+        return "\(selectedChartTimeframe.title) 차트 · \(source) · \(workspaceAnalysis.currency ?? chartAnalysis?.currency ?? analysis?.currency ?? "-") · \(quoteAt)\(stale)"
     }
 
     private var displayName: String {

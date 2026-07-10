@@ -23,7 +23,7 @@ export type CryptoTickerQuote = {
   tradeTimestamp: number | null;
 };
 
-export type UpbitCandleInterval = "30m" | "1h" | "4h" | "1d" | "1wk";
+export type UpbitCandleInterval = "5m" | "15m" | "30m" | "1h" | "4h" | "1d" | "1wk";
 
 export type UpbitCandle = {
   market: string;
@@ -338,6 +338,8 @@ export const getCryptoTickers = async (
 };
 
 const UPBIT_CANDLE_CONTRACT: Record<UpbitCandleInterval, { path: string; seconds: number }> = {
+  "5m": { path: "/v1/candles/minutes/5", seconds: 5 * 60 },
+  "15m": { path: "/v1/candles/minutes/15", seconds: 15 * 60 },
   "30m": { path: "/v1/candles/minutes/30", seconds: 30 * 60 },
   "1h": { path: "/v1/candles/minutes/60", seconds: 60 * 60 },
   "4h": { path: "/v1/candles/minutes/240", seconds: 4 * 60 * 60 },

@@ -192,6 +192,33 @@ test("local engine searches Korean symbols with bilingual names", async () => {
   assert.equal(payload.matches?.[0]?.nameEn, "Samsung Electronics");
 });
 
+test("local chart returns each requested candle timeframe without external data in fixture mode", async () => {
+  const previousFixtureMode = process.env.STOCK_ANALYSIS_MARKET_FIXTURE_MODE;
+  process.env.STOCK_ANALYSIS_MARKET_FIXTURE_MODE = "1";
+  try {
+    const stockResponse = await handleLocalEngineRequest(new Request(
+      "http://127.0.0.1:38771/api/local/chart?symbol=005930.KS&assetClass=stock&tf=15m",
+    ));
+    assert.equal(stockResponse.status, 200);
+    const stock = await stockResponse.json() as { timeframe?: string; currency?: string; candles?: unknown[] };
+    assert.equal(stock.timeframe, "15m");
+    assert.equal(stock.currency, "KRW");
+    assert.equal(stock.candles?.length, 180);
+
+    const cryptoResponse = await handleLocalEngineRequest(new Request(
+      "http://127.0.0.1:38771/api/local/chart?symbol=KRW-BTC&assetClass=crypto&tf=5m",
+    ));
+    assert.equal(cryptoResponse.status, 200);
+    const crypto = await cryptoResponse.json() as { timeframe?: string; currency?: string; dataSource?: string };
+    assert.equal(crypto.timeframe, "5m");
+    assert.equal(crypto.currency, "KRW");
+    assert.equal(crypto.dataSource, "fixture");
+  } finally {
+    if (previousFixtureMode === undefined) delete process.env.STOCK_ANALYSIS_MARKET_FIXTURE_MODE;
+    else process.env.STOCK_ANALYSIS_MARKET_FIXTURE_MODE = previousFixtureMode;
+  }
+});
+
 test("local watchlist stores unique items, enforces its limit, and isolates summary failures", async () => {
   const create = async (payload: Record<string, unknown>) =>
     handleLocalEngineRequest(new Request("http://127.0.0.1:38771/api/local/watchlist", {

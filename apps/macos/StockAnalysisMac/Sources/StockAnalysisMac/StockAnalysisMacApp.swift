@@ -58,6 +58,7 @@ final class AppModel: ObservableObject {
     @Published var paperTradingMessage = "모의 주문을 실행하면 paper 계좌와 포지션이 여기에 표시됩니다."
     @Published var terminalDashboard: TerminalDashboardSnapshot?
     @Published var latestMarketAnalysis: MarketAnalysisSnapshot?
+    @Published var latestChartAnalysis: MarketAnalysisSnapshot?
     @Published var latestWorkspaceAnalysis: WorkspaceAnalysis?
     @Published var workspaceAnalysisMessage = "종목을 선택하면 1시간·4시간·일봉 기준을 함께 계산합니다."
     @Published private(set) var isWorkspaceAnalysisLoading = false
@@ -1820,6 +1821,33 @@ final class AppModel: ObservableObject {
             workspaceAnalysisMessage = "\(targetSymbol) 분석 실패: \(message)"
             statusLine = message
             return workspaceAnalysisMessage
+        }
+    }
+
+    func refreshChart(
+        symbol: String,
+        assetClass: AnalysisAssetClass,
+        timeframe: AnalysisTimeframe
+    ) async {
+        let normalizedSymbol = symbol.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        guard !normalizedSymbol.isEmpty else { return }
+        do {
+            let data = try await client.chartData(
+                symbol: normalizedSymbol,
+                assetClass: assetClass,
+                timeframe: timeframe
+            )
+            guard let chart = Self.parseMarketAnalysis(data), chart.timeframe == timeframe.rawValue else {
+                throw NSError(
+                    domain: "YongStockDesk.Chart",
+                    code: 1,
+                    userInfo: [NSLocalizedDescriptionKey: "차트 응답의 주기를 확인할 수 없습니다."]
+                )
+            }
+            latestChartAnalysis = chart
+        } catch {
+            latestChartAnalysis = nil
+            workspaceAnalysisMessage = "\(timeframe.rawValue) 차트 조회 실패: \(Self.errorMessage(error))"
         }
     }
 
@@ -9844,17 +9872,22 @@ struct ChartControlState: Equatable {
 
     var visibleCandleLimit: Int {
         switch timeframe {
-        case "30d": return 30
-        case "1y": return 252
-        default: return 90
+        case "5m", "15m", "30m": return 180
+        case "1h", "4h": return 160
+        case "1wk": return 104
+        default: return 120
         }
     }
 
     var timeframeLabel: String {
         switch timeframe {
-        case "30d": return "최근 30일"
-        case "1y": return "최근 1년"
-        default: return "최근 90일"
+        case "5m": return "5분봉"
+        case "15m": return "15분봉"
+        case "30m": return "30분봉"
+        case "1h": return "1시간봉"
+        case "4h": return "4시간봉"
+        case "1wk": return "주봉"
+        default: return "일봉"
         }
     }
 }

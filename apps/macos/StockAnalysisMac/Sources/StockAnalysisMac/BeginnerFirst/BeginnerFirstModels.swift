@@ -144,6 +144,51 @@ enum BeginnerAnalysisTab: String, CaseIterable, Identifiable {
     }
 }
 
+enum BeginnerChartTimeframe: String, CaseIterable, Identifiable {
+    case fiveMinutes = "5m"
+    case fifteenMinutes = "15m"
+    case thirtyMinutes = "30m"
+    case oneHour = "1h"
+    case fourHours = "4h"
+    case oneDay = "1d"
+    case oneWeek = "1wk"
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .fiveMinutes: return "5분"
+        case .fifteenMinutes: return "15분"
+        case .thirtyMinutes: return "30분"
+        case .oneHour: return "1시간"
+        case .fourHours: return "4시간"
+        case .oneDay: return "일봉"
+        case .oneWeek: return "주봉"
+        }
+    }
+
+    var analysisTimeframe: AnalysisTimeframe {
+        switch self {
+        case .fiveMinutes: return .fiveMinutes
+        case .fifteenMinutes: return .fifteenMinutes
+        case .thirtyMinutes: return .thirtyMinutes
+        case .oneHour: return .oneHour
+        case .fourHours: return .fourHours
+        case .oneDay: return .oneDay
+        case .oneWeek: return .oneWeek
+        }
+    }
+
+    var visibleCandleLimit: Int {
+        switch self {
+        case .fiveMinutes, .fifteenMinutes, .thirtyMinutes: return 180
+        case .oneHour, .fourHours: return 160
+        case .oneDay: return 120
+        case .oneWeek: return 104
+        }
+    }
+}
+
 enum BeginnerTradeHorizon: String, CaseIterable, Identifiable {
     case day
     case swing
