@@ -246,7 +246,7 @@ let healthJSON = """
 {
   "ok": true,
   "engine": "stock-analysis-local-engine",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "generatedAt": "2026-07-09T00:00:00.000Z",
   "storageRoot": "/tmp/stock-analysis",
   "localUserId": "local-macos-user",
@@ -1315,7 +1315,7 @@ func verifyEngineClientActionRequests() async throws {
     requireRequest(requests, 30, method: "POST", path: "/api/paper-trading/order-intent", bodyContains: ["intent-1", "NVDA"])
     requireRequest(requests, 31, method: "POST", path: "/api/automation/cycle", bodyContains: ["{}"])
     requireRequest(requests, 32, method: "POST", path: "/api/automation/cycle", bodyContains: ["dryRun"])
-    requireRequest(requests, 33, method: "POST", path: "/api/local/orders/sync", bodyContains: ["{}"])
+    requireRequest(requests, 33, method: "POST", path: "/api/local/orders/sync", bodyContains: ["\"startup\":false"])
     requireRequest(requests, 34, method: "GET", path: "/api/local/holdings?symbol=NVDA&accountSeq=7")
     requireRequest(requests, 35, method: "POST", path: "/api/local/orders/precheck", bodyContains: ["NVDA", "\"quantity\":10"])
     requireRequest(requests, 36, method: "GET", path: "/api/market/NVDA?days=365&tf=1d")

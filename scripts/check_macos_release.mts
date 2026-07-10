@@ -516,7 +516,7 @@ export const assessMacRelease = (
       "앱 배포 시트의 설치 후 점검을 실행해 sidecar, App Support 저장소, 뉴스/RSS, 전략 저장소 상태를 확인하세요.",
       "새 Mac에서는 Toss API 키를 앱 설정에서 다시 검증해 sidecar 저장소와 macOS Keychain에 저장하고 자동거래 계좌를 선택해야 합니다.",
       "Toss 개발자 콘솔의 허용 IP와 앱의 연결 진단 공인 IP가 일치해야 합니다.",
-      "1.0.0은 credential 상태와 관계없이 실제 주문을 차단하고 OrderIntent·RiskCheck 결과를 paper 계좌에만 기록합니다.",
+      "1.1.0 Toss 실거래는 단일 Mac·선택 계좌의 QA 승인과 별도 수동/자동화 토글을 모두 통과한 지정가 주문만 허용합니다. 코인은 paper 전용입니다.",
     ],
     files,
   };
@@ -532,7 +532,7 @@ const defaultReleaseSetChecklist = [
   "Applications로 앱을 옮긴 뒤 배포 > 설치 후 점검을 실행합니다.",
   "Toss API 키는 Mac마다 다시 검증해 sidecar 저장소와 macOS Keychain에 저장하고 자동거래 계좌를 다시 선택합니다.",
   "Toss 허용 IP와 앱 연결 진단 공인 IP가 일치해야 합니다.",
-  "1.0.0은 Toss·Upbit·Bithumb 실제 주문을 차단하며 OrderIntent·RiskCheck 결과는 paper 전용입니다.",
+  "1.1.0 Toss 실거래는 단일 Mac·선택 계좌의 QA 승인과 별도 수동/자동화 토글을 모두 통과한 지정가 주문만 허용합니다. Upbit·Bithumb은 paper 전용입니다.",
 ];
 
 export const assessMacReleaseSet = (

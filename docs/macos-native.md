@@ -21,7 +21,7 @@ SwiftUI
 → Toss·Upbit·Bithumb adapter
 ```
 
-이 다이어그램은 전체 코드 경계를 나타낸다. 데스크톱 1.0.0 실행은 Toss와 코인 모두 adapter의 실제 submit 호출 전에 종료되고 paper 계좌에만 기록된다.
+이 다이어그램은 전체 코드 경계를 나타낸다. 1.1.0은 sidecar 정책 원장을 통과한 Toss KR/US 지정가만 adapter submit에 도달하며, 코인은 계속 paper 계좌에만 기록된다.
 
 ## 로컬 엔진
 
@@ -86,7 +86,7 @@ curl http://127.0.0.1:38771/health
 - `공인 IP 확인`과 `IP 복사`는 Toss 개발자 콘솔의 허용 IP 등록을 돕는다.
 - credential 삭제는 sidecar 암호화 저장소와 Keychain 백업을 함께 제거한다.
 - 보유, 미체결, 매수 가능 금액, 매도 가능 수량과 주문 precheck는 실제 주문 없이 사용할 수 있다.
-- 데스크톱 1.0.0은 운영자·사용자 toggle 값과 관계없이 Toss broker submit을 `501 not supported`로 차단한다.
+- Toss 실거래는 현재 Mac·선택 계좌의 QA 승인, 별도 수동 토글, 10분 미리보기, typed confirmation, RiskCheck와 KST 한도를 모두 통과한 지정가 주문만 제출한다.
 - credential 등록 성공이나 계좌 조회는 live 제출 상태로 전환되지 않는다.
 
 ### 전략과 자동화
@@ -95,7 +95,7 @@ curl http://127.0.0.1:38771/health
 - 전략은 초안 저장, 현재 config hash 시뮬레이션, 명시적 활성화 순서로 준비한다.
 - Beginner-first 전략 workspace는 주식 고정 수량(기본 1주), 코인 고정 주문금액(기본 50,000원), 현재가·기준가 분리, 차수별 예상 수량·노출을 표시한다. 기존 `orderSizing` 없는 전략은 금액 기준으로 호환한다.
 - `현재 틱`, `발동가 테스트`와 자동화 dry-run은 broker submit을 호출하지 않는다.
-- `자동화 1회 실행`은 데스크톱 1.0.0에서 주식과 코인 모두 paper 계좌만 갱신한다.
+- `자동화 1회 실행`은 Toss 자동화 live 토글이 별도로 열리기 전까지 주식·코인 모두 paper 계좌만 갱신한다. 코인 실주문은 지원하지 않는다.
 - 연속 scheduler는 기본 OFF이며 30초~15분 주기, 중복 cycle 방지, 마지막 결과와 다음 실행 시각을 저장한다.
 - `보유 조회`, `사전검증`, `주문 동기화`는 각각 조회와 준비 작업이며 그 자체로 주문을 만들지 않는다.
 - `전략 초안`은 현재 limit `OrderIntent`를 3차 `percent-grid` 초안으로 변환하며, 시뮬레이션과 활성화를 대신하지 않는다.
@@ -109,7 +109,7 @@ curl http://127.0.0.1:38771/health
 - 거래소별 credential을 검증하고 암호화 저장소와 Keychain에 보관한다.
 - 계좌, 주문 가능 정보, REST 현재가 응답 신선도, 최소·최대 주문금액과 수수료를 확인하고 limit 주문 입력을 preview한다. Upbit 호가 단위는 deprecated chance 필드가 아니라 공식 `/v1/orderbook/instruments`의 `tick_size`를 사용하고, Bithumb은 chance 응답의 `price_unit`을 사용한다.
 - 암호화폐 전략은 거래소를 명시하며 페이퍼 모드에서는 소수 수량을 지원한다.
-- 1.0.0에서는 코인 실제 주문을 지원하지 않는다. 체결·부분체결·미체결·취소 동기화와 재시작 멱등성 검증 전까지 sidecar가 paper 자동화만 실행한다.
+- 1.1.0에서도 코인 실제 주문을 지원하지 않는다. 체결·부분체결·미체결·취소 동기화와 재시작 멱등성 검증 전까지 sidecar가 paper 자동화만 실행한다.
 - 주문 사전검증 결과의 차단 사유와 현재가·최소 주문금액을 앱에서 표시하며, 이 점검은 broker submit을 호출하지 않는다.
 
 거래소 연결 여부와 실시간 코인 차트는 현재 별도 기능이다. credential 검증이 성공해도 WebSocket 캔들 수집을 구현하기 전에는 실시간 차트로 표현하지 않는다.
@@ -192,7 +192,7 @@ Apple ID 방식을 사용할 때는 `APPLE_ID`, `APPLE_TEAM_ID`, `APPLE_APP_PASS
 
 ## 안전 경계
 
-향후 실제 주문 제출을 다시 열 때는 다음 조건을 모두 통과해야 한다. 데스크톱 1.0.0은 이 경계 전에 broker submit을 강제 차단한다.
+Toss 실제 주문 제출은 다음 조건을 모두 통과해야 한다. 코인 실주문은 이 경계 전에 계속 차단한다.
 
 ```text
 OrderIntent
@@ -209,8 +209,8 @@ OrderIntent
 - SwiftUI와 signal code는 broker를 직접 호출하지 않는다.
 - 앱 실행, credential 등록, 시뮬레이션과 precheck는 주문 제출이 아니다.
 - live gate가 열려 있어도 `RiskCheck`, worker pause와 kill switch는 제출을 차단한다.
-- Toss API는 1.0.0에서 credential·계좌·보유·미체결·precheck 전용이며 broker submit 경로에 도달하지 않는다.
+- Toss API는 1.1.0에서 QA 승인된 단일 Mac·선택 계좌에 한해 KR/US 지정가 submit 경로에 도달한다. `unknown` 주문은 자동 재시도·추측 매칭 없이 모든 live 제출을 잠근다.
 - 공식/RSS 뉴스 polling 실패는 분석·자동화를 중단시키지 않지만 실패 상태를 표시한다.
 - 커뮤니티 민심은 주문 입력에 직접 사용하지 않는다.
-- 코인 API는 1.0.0에서 조회·사전검증·paper 자동화 전용이며 broker submit 경로에 도달하지 않는다.
+- 코인 API는 1.1.0에서 조회·사전검증·paper 자동화 전용이며 broker submit 경로에 도달하지 않는다.
 - 실제 계좌 조회가 가능한 상태에서는 자동 self-test가 사용자 의도 없이 계좌 endpoint를 호출하지 않는다.

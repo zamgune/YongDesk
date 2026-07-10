@@ -1,6 +1,6 @@
 {
   "name": "stocks-app",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "private": true,
   "packageManager": "yarn@1.22.22",
   "engines": {
@@ -45,6 +45,7 @@
     "test:market-analysis-contract": "node --experimental-loader ./scripts/ts_path_loader.mjs --test --experimental-strip-types tests/market_analysis_contract.test.mts",
     "test:community-pain": "node --test --experimental-strip-types tests/community_pain_signal.test.mts",
     "test:local-engine": "node --experimental-loader ./scripts/ts_path_loader.mjs --test --experimental-strip-types tests/local_engine.test.mts",
+    "test:live-trading": "node --experimental-loader ./scripts/ts_path_loader.mjs --test --experimental-strip-types tests/local_live_trading.test.mts",
     "test:local-engine-news": "node --experimental-loader ./scripts/ts_path_loader.mjs --test --experimental-strip-types tests/local_engine_news.test.mts",
     "test:market-workspace": "node --experimental-loader ./scripts/ts_path_loader.mjs --test --experimental-strip-types tests/market_workspace.test.mts",
     "test:mac-release": "node --experimental-strip-types --test tests/macos_release_check.test.mts",

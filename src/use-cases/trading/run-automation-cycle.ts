@@ -5,6 +5,7 @@ import { getBrokerAccountPreference } from "@/lib/broker/account-preferences";
 import { loadDecryptedCredentials } from "@/lib/broker/credential-store";
 import { createTossClient, TossApiError } from "@/lib/toss/client";
 import { createTossBroker } from "@/adapters/toss/toss-broker";
+import type { BrokerPort } from "@/ports/broker";
 import { createOrderPrecheck } from "./precheck-order.ts";
 import { runAutomationWorkerTick } from "./run-automation-worker.ts";
 import { syncOrderFills } from "./sync-order-fills.ts";
@@ -42,7 +43,17 @@ const seoulToday = (): string =>
     day: "2-digit",
   }).format(new Date());
 
-export const runUserAutomationCycle = async (userId: string): Promise<AutomationCycleSummary> => {
+export type RunUserAutomationCycleOptions = {
+  /** macOS local sidecar는 주문 전 원장을 먼저 기록하는 BrokerPort를 주입한다. */
+  broker?: BrokerPort;
+  /** 외부 master gate 대신 local policy gate가 이미 평가된 경우에만 사용한다. */
+  liveTradingEnabledOverride?: boolean;
+};
+
+export const runUserAutomationCycle = async (
+  userId: string,
+  options: RunUserAutomationCycleOptions = {},
+): Promise<AutomationCycleSummary> => {
   try {
     const configs = (await listStrategyConfigs(userId)).filter((c) => c.status === "enabled" && c.market !== "CRYPTO");
     const credentials = await loadDecryptedCredentials(userId, "toss");
@@ -74,10 +85,12 @@ export const runUserAutomationCycle = async (userId: string): Promise<Automation
     }
     const accountSeq = selectedAccount.accountSeq;
 
-    const liveTradingGate = await getLiveTradingGate(userId);
-    const liveTradingEnabled = liveTradingGate.effective;
+    const liveTradingGate = options.liveTradingEnabledOverride === undefined
+      ? await getLiveTradingGate(userId)
+      : null;
+    const liveTradingEnabled = options.liveTradingEnabledOverride ?? liveTradingGate?.effective ?? false;
 
-    const broker = createTossBroker({ client, liveTradingEnabled });
+    const broker = options.broker ?? createTossBroker({ client, liveTradingEnabled });
     const precheck = createOrderPrecheck({
       accountSeq,
       getBuyingPower: (seq, currency) => client.getBuyingPower(seq, currency),

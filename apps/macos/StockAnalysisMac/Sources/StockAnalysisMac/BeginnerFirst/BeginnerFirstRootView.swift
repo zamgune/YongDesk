@@ -14,6 +14,7 @@ struct BeginnerFirstRootView: View {
     @State private var resultPreview = ""
     @State private var isLoading = false
     @State private var showingOrderDrawer = false
+    @State private var showingLiveOrderDrawer = false
     @State private var activeSheet: BeginnerSettingsSheet?
     @State private var selectedConnectionProvider: BeginnerAPIConnectionProvider = .toss
     @State private var workspaceRevision = UUID()
@@ -85,7 +86,7 @@ struct BeginnerFirstRootView: View {
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                     }
                 }
-                .accessibilityHidden(showingOrderDrawer || !model.settings.hasCompletedOnboarding)
+                .accessibilityHidden(showingOrderDrawer || showingLiveOrderDrawer || !model.settings.hasCompletedOnboarding)
 
                 if showingOrderDrawer {
                     Color.black.opacity(0.34)
@@ -102,11 +103,34 @@ struct BeginnerFirstRootView: View {
                         onOpenStrategy: {
                             showingOrderDrawer = false
                             destination = .strategy
+                        },
+                        onOpenLiveOrder: {
+                            showingOrderDrawer = false
+                            showingLiveOrderDrawer = true
                         }
                     )
                     .frame(width: min(max(proxy.size.width * 0.38, 410), 490))
                     .transition(.move(edge: .trailing).combined(with: .opacity))
                     .zIndex(3)
+                    .accessibilityHidden(!model.settings.hasCompletedOnboarding)
+                }
+
+                if showingLiveOrderDrawer {
+                    Color.black.opacity(0.34)
+                        .ignoresSafeArea()
+                        .onTapGesture { showingLiveOrderDrawer = false }
+                        .accessibilityHidden(true)
+
+                    BeginnerLiveOrderDrawer(
+                        selectedSymbol: selectedSymbol,
+                        selectedSession: selectedSession,
+                        resultPreview: $resultPreview,
+                        isLoading: $isLoading,
+                        onClose: { showingLiveOrderDrawer = false }
+                    )
+                    .frame(width: min(max(proxy.size.width * 0.40, 430), 520))
+                    .transition(.move(edge: .trailing).combined(with: .opacity))
+                    .zIndex(4)
                     .accessibilityHidden(!model.settings.hasCompletedOnboarding)
                 }
 
@@ -129,6 +153,7 @@ struct BeginnerFirstRootView: View {
                 }
             }
             .animation(.easeInOut(duration: 0.18), value: showingOrderDrawer)
+            .animation(.easeInOut(duration: 0.18), value: showingLiveOrderDrawer)
         }
         .frame(minWidth: 1_024, minHeight: 720)
         .background(BeginnerPalette.backgroundDeep)

@@ -43,12 +43,12 @@
 | 전략 | 1% 반복과 분할차수 전략의 trigger·state 계산 | 구현됨 | 실제 체결가, 쿨다운과 위험 제한 사용 | 직접 제출 안 함 |
 | 전략 | 문장형 블록, 동적 1~20차, 직접 만들기 | HTML 시안 | 실제 `RepeatPolicy`와 `custom` 계약 연결 전 | 없음 |
 | 자동화 | 전략 CRUD, config hash 시뮬레이션, 활성화 | 구현됨 | 현재 시뮬레이션 통과 전 활성화 차단 | 없음 |
-| 자동화 | 1회 실행, 연속 scheduler, worker pause | 구현됨 | scheduler 기본 OFF, 중복 cycle 방지, 데스크톱 1.0.0은 paper-only | 없음 |
+| 자동화 | 1회 실행, 연속 scheduler, worker pause | 구현됨 | scheduler 기본 OFF, 중복 cycle 방지. Toss 자동화 live는 수동 인수 5건·재시작 재조정·안전 증거 뒤 별도 OFF 토글 | 실 API 인수 필요 |
 | 모의투자 | 페이퍼 주문·체결·보유·감사 로그 | 구현됨 | 로컬 저장소 사용, 실브로커 호출 없음 | 없음 |
-| 주문 안전 | holdings, precheck, sync, `OrderIntent`, `RiskCheck` | 구현됨 | 조회·사전검증 계약은 사용 가능, 데스크톱 1.0.0 제출은 차단 | 없음 |
-| 안전장치 | 운영자·사용자 live gate, worker control, kill switch | 구현됨 | 향후 제출 경계를 유지하되 1.0.0은 broker 이전에서 강제 차단 | 차단 경계 |
+| 주문 안전 | holdings, precheck, sync, `OrderIntent`, `RiskCheck` | 구현됨 | 10분 미리보기·제출 직전 재검증·typed confirmation·Toss KR/US 지정가 제출 | 실 API 인수 필요 |
+| 안전장치 | 설치·계좌 바인딩, 수동/자동화 gate, worker control, kill switch | 구현됨 | sidecar fail-closed, KST 매수 한도, `unknown` 주문 전역 잠금 | 차단 경계 |
 | Toss | credential 검증·저장, 계좌 선택, 공인 IP 확인 | 외부 설정 필요 | 사용자 키와 Toss 허용 IP 등록 필요 | 없음 |
-| Toss | 국내·미국 주식 주문 어댑터 | 부분 구현 | 데스크톱 1.0.0은 credential·계좌·보유·미체결·precheck만 사용하고 live 제출 강제 차단 | 없음 |
+| Toss | 국내·미국 주식 지정가 주문 | 구현됨 | 단일 Mac·선택 계좌에서 수동 기본 OFF. 매수 건당 10만원·KST 일 30만원, USD 환율 fail-closed | 실 API 인수 필요 |
 | 코인 | Upbit·Bithumb credential, 잔고·주문가능정보·현재가·최소금액 사전검증 | 외부 설정 필요 | 거래소별 API 키 필요, 실제 주문은 호출하지 않음 | 없음 |
 | 코인 | Upbit·Bithumb limit 주문 어댑터 | 부분 구현 | 1.0.0은 체결·부분체결 동기화 전까지 live 경로를 강제 차단 | 없음 |
 | 배포 | arm64/x64 앱·DMG·ZIP·manifest 생성·설치 검증 | 구현됨 | 생성·검증 도구가 구현됨. 1.0.0 로컬 검증 기록은 릴리스 이력에 보존되며, 새 패키지는 아키텍처별로 다시 검증해야 함 | 없음 |
@@ -66,7 +66,7 @@
 6. 분석 화면은 최근 종가와 일봉 차트 뒤에 단타·스윙·장기 계획, 신호, 뉴스·민심 근거를 점진적으로 표시한다.
 7. 모의 주문은 사용자가 drawer를 연 뒤에만 기존 paper 흐름으로 진행하며 실브로커를 호출하지 않는다.
 8. 전략 설정은 `초안 저장 → 조건 확인 → 시뮬레이션 → 활성화` 순서와 scheduler·자동화 일시중지·kill switch 동작을 유지한다.
-9. 데스크톱 1.0.0은 Toss와 코인 모두 paper 자동화만 허용하며 broker submit에 도달하지 않는다.
+9. Toss 수동 지정가 실거래는 설정의 QA·수동 토글을 통과한 단일 Mac/선택 계좌에서만 가능하다. Toss 자동화와 코인 자동화는 별도 해제 전 paper-only다.
 
 문장형 전략 조립기는 여전히 HTML 시안이다. Beginner-first 레이아웃 적용이 기존 전략 계약이나 자동화 순서를 변경한 것은 아니다.
 
@@ -122,7 +122,7 @@
 
 ## 브로커와 주문 안전
 
-향후 실제 제출을 다시 열 때도 다음 순서를 바꿀 수 없다. 현재 데스크톱 1.0.0은 이 경로에 들어가기 전에 Toss와 코인 제출을 차단한다.
+Toss 실제 제출은 다음 순서를 바꿀 수 없다. 코인 제출은 계속 이 경계 전에 차단한다.
 
 ```text
 전략 신호
@@ -142,8 +142,8 @@
 - UI, 분석 코드와 뉴스 신호는 broker adapter를 직접 호출하지 않는다.
 - 실거래가 켜져 있어도 `RiskCheck` 실패, worker pause 또는 kill switch가 제출을 차단한다.
 - 모든 제출·차단·거절·실패는 로컬 audit trail에 기록한다.
-- Toss는 1.0.0에서 credential·계좌·보유·미체결·precheck를 제공하지만 실제 주문 생성·정정·취소는 차단한다.
-- Upbit·Bithumb은 1.0.0에서 credential·잔고·주문가능정보·현재가 확인과 paper 자동화까지만 제공한다. 실제 코인 주문은 체결 동기화와 재시작 멱등성 검증 전까지 sidecar에서 차단한다.
+- Toss는 1.1.0에서 QA 승인된 단일 Mac·선택 계좌의 KR/US 지정가 주문만 제출한다. `unknown` 주문은 추측 복구하지 않고 모든 live 제출을 잠근다. 자세한 운영 조건은 [1.1.0 Toss 실거래 운영 경계](live-trading-v1.1.md)를 따른다.
+- Upbit·Bithumb은 1.1.0에서도 credential·잔고·주문가능정보·현재가 확인과 paper 자동화까지만 제공한다. 실제 코인 주문은 체결 동기화와 재시작 멱등성 검증 전까지 sidecar에서 차단한다.
 
 ## 배포 상태
 
