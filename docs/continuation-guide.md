@@ -120,7 +120,7 @@ node --experimental-strip-types scripts/verify_desktop_readiness.mts
 
 `STOCK_ANALYSIS_MARKET_FIXTURE_MODE=1`은 네트워크·credential 없이 주식과 코인 workspace를 결정론적으로 검증하는 모드다. 응답이 fixture임을 명시하므로 실 API QA나 투자 판단에는 사용하지 않는다.
 
-앱 번들과 패키지까지 포함하려면 `INCLUDE_MAC_BUNDLE=1`로 같은 readiness 스크립트를 실행한다. 현재 Beginner-first AX smoke, 1440×900·1024×720 콘텐츠 영역, arm64·x64 DMG 설치본의 sidecar·앱 실행·UI 검증까지 통과했다. 실제 API 인수 절차와 기록 양식은 [데스크톱 실 API 인수 QA](desktop-live-api-qa.md)를 따른다.
+앱 번들과 패키지까지 포함하려면 `INCLUDE_MAC_BUNDLE=1`로 같은 readiness 스크립트를 실행한다. Beginner-first AX smoke와 arm64·x64 DMG 설치 검증의 1.0.0 기록은 [릴리스 이력](releases/v1.0.0.md)에 보존한다. 코드, UI smoke 또는 패키징 스크립트가 바뀌면 해당 기록을 현재 통과 증거로 재사용하지 말고 새 패키지에서 다시 생성한다. 실제 API 인수 절차와 기록 양식은 [데스크톱 실 API 인수 QA](desktop-live-api-qa.md)를 따른다.
 
 ## 현재 우선순위
 

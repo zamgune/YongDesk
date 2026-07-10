@@ -11,6 +11,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint .",
+    "docs:check": "node --experimental-strip-types scripts/check_docs_links.mts",
     "backtest:crypto-buy": "node --experimental-strip-types scripts/crypto_buy_backtest.mts",
     "local-engine": "node --experimental-loader ./scripts/ts_path_loader.mjs --experimental-strip-types scripts/local_engine.mts",
     "mac:app": "node --experimental-strip-types scripts/build_macos_app.mts",

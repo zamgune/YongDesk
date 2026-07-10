@@ -2,7 +2,7 @@
 
 > Archive · 2026-07-10: 기존 터미널형 macOS UX의 목표와 수용 기준을 보존한 문서다. 현재 기능과 다음 UI 방향은 [기능 상태](../features.md)와 [이어서 개발하기](../continuation-guide.md)를 우선한다.
 
-이 문서는 macOS 네이티브 앱의 v1 목표 UX와 구현 체크리스트를 고정한다. 기준 화면은 `docs/ux-prototypes/macos-native/terminal-dense-detail.html`의 탭형 터미널 대시보드다.
+이 문서는 macOS 네이티브 앱의 v1 목표 UX와 구현 체크리스트를 고정한다. 기준 화면은 `docs/archive/ux-prototypes/macos-native/terminal-dense-detail.html`의 탭형 터미널 대시보드다.
 
 ## 제품 목표
 
@@ -13,7 +13,7 @@
 
 ## 기준 UX
 
-- Prototype: `docs/ux-prototypes/macos-native/terminal-dense-detail.html`
+- Prototype: `docs/archive/ux-prototypes/macos-native/terminal-dense-detail.html`
 - 기본 구조:
   - 좌측 고정: 관심목록, 자산군 필터, 스캐너 칩, 보유/감시 상태.
   - 상단 고정: 검색, sidecar 상태, 모의/실거래 게이트, 긴급 중지.
@@ -138,7 +138,7 @@
 - [x] P0/P1/P2 항목이 누락 없이 포함되어 있는지 확인한다.
   - P0/P1은 v1 구현 대상으로 체크했고, P2 오디오 Squawk는 v1 이후 항목으로 남겼다.
 - [x] HTML 프로토타입 경로와 문서의 화면 구조가 일치하는지 확인한다.
-  - `docs/ux-prototypes/macos-native/terminal-dense-detail.html` 파일 존재와 좌측/상단/중앙 탭/우측/하단 구조를 확인했다.
+  - `docs/archive/ux-prototypes/macos-native/terminal-dense-detail.html` 파일 존재와 좌측/상단/중앙 탭/우측/하단 구조를 확인했다.
 
 ### 로컬 엔진 검증
 

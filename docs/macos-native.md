@@ -165,7 +165,7 @@ DMG에는 `StockAnalysis.app`, `Applications` symlink와 설치 안내가 있어
 
 각 아키텍처는 해당 DMG·ZIP·manifest 생성, checksum, `mac:verify:dmg:<arch>`와 `mac:verify:install:<arch> --ui-smoke` 결과가 모두 확인된 뒤에만 배포 가능으로 표시한다. 한 아키텍처의 성공으로 다른 아키텍처를 추정하지 않는다.
 
-이전 터미널형 UI 패키지의 검증 결과는 Beginner-first UI 완료 증거로 재사용하지 않았다. 현재 worktree는 새 AXIdentifier 기반 smoke를 1440×900과 최소 1024×720 콘텐츠 영역에서 통과했고, arm64/x64 DMG·ZIP·manifest와 설치 검증 리포트를 다시 생성했다.
+이전 터미널형 UI 패키지의 검증 결과는 Beginner-first UI 완료 증거로 재사용하지 않는다. Beginner-first AX smoke와 arm64/x64 1.0.0 설치 검증의 과거 결과는 [릴리스 이력](releases/v1.0.0.md)에 보존한다. UI, AXIdentifier, 번들 구성 또는 패키징 스크립트가 바뀌면 새 패키지에서 1440×900·최소 1024×720 UI smoke와 아키텍처별 설치 검증을 다시 실행해야 한다.
 
 네트워크와 credential 없이 반복 가능한 UI·workspace 검증에는 `STOCK_ANALYSIS_MARKET_FIXTURE_MODE=1`을 사용한다. 이 모드는 응답에 fixture 출처와 경고를 표시하므로 실제 투자 판단이나 실 API 인수 증거로 사용하지 않는다. 로컬 준비 게이트와 실 API 인수 절차는 [데스크톱 실 API 인수 QA](desktop-live-api-qa.md)를 따른다.
 

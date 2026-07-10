@@ -1,6 +1,6 @@
 # YongStockDesk 기능 상태
 
-이 문서는 `main`의 실제 코드와 검증 결과를 기준으로 유지하는 기능 목록이다. README나 UX 시안과 설명이 다르면 이 문서의 상태를 우선하고, 코드 변경과 같은 PR에서 갱신한다.
+이 문서는 실제 코드와 검증 근거를 기준으로 유지하는 기능 목록이다. README나 UX 시안과 설명이 다르면 이 문서의 상태를 우선하고, 코드 변경과 같은 PR에서 갱신한다. 과거 DMG·UI smoke 결과는 [1.0.0 릴리스 이력](releases/v1.0.0.md)에 보존하며, 새 코드·패키징 변경 뒤에는 같은 결과를 현재 증거로 재사용하지 않는다.
 
 ## 상태 정의
 
@@ -50,7 +50,7 @@
 | Toss | 국내·미국 주식 주문 어댑터 | 부분 구현 | 데스크톱 1.0.0은 credential·계좌·보유·미체결·precheck만 사용하고 live 제출 강제 차단 | 없음 |
 | 코인 | Upbit·Bithumb credential, 잔고·주문가능정보·현재가·최소금액 사전검증 | 외부 설정 필요 | 거래소별 API 키 필요, 실제 주문은 호출하지 않음 | 없음 |
 | 코인 | Upbit·Bithumb limit 주문 어댑터 | 부분 구현 | 1.0.0은 체결·부분체결 동기화 전까지 live 경로를 강제 차단 | 없음 |
-| 배포 | arm64/x64 앱·DMG·ZIP·manifest 생성·설치 검증 | 구현됨 | Beginner-first AX smoke, sidecar, 앱 실행과 두 DMG 설치본 검증 완료; 로컬 테스트 배포용 | 없음 |
+| 배포 | arm64/x64 앱·DMG·ZIP·manifest 생성·설치 검증 | 구현됨 | 생성·검증 도구가 구현됨. 1.0.0 로컬 검증 기록은 릴리스 이력에 보존되며, 새 패키지는 아키텍처별로 다시 검증해야 함 | 없음 |
 | 배포 | Gatekeeper 경고 없는 공개 배포 | 외부 설정 필요 | Developer ID, notarization과 stapling 필요 | 없음 |
 
 ## 현재 macOS 사용자 흐름
@@ -145,9 +145,9 @@
 
 ## 배포 상태
 
-`yarn mac:app`은 package version을 Info.plist와 sidecar에 일치시킨 `dist/macos/StockAnalysis.app`을 만들고, 고정된 Node 22.17.0 런타임과 sidecar를 포함한다. 현재 arm64와 x64용 DMG·ZIP·manifest가 재생성됐고 SHA-256과 DMG 레이아웃 검증을 통과했다.
+`yarn mac:app`은 package version을 Info.plist와 sidecar에 일치시킨 `dist/macos/StockAnalysis.app`을 만들고, 고정된 Node 22.17.0 런타임과 sidecar를 포함한다. arm64/x64 DMG·ZIP·manifest의 1.0.0 생성·검증 결과는 [릴리스 이력](releases/v1.0.0.md)에 보존한다.
 
-현재 `StockAnalysis-1.0.0-macos-install-verification.json`은 arm64·x64 DMG 설치본 모두 `sidecarVerified`, `sidecarEndpointVerified`, `appLaunchVerified`, `uiSmokeVerified=true`를 기록한다. UI smoke는 1440×900과 최소 1024×720 콘텐츠 영역을 확인하고 실제 주문 제출 버튼을 누르지 않는다. 경고 없는 공개 배포 판정에는 다음이 추가로 필요하다.
+새 패키지를 배포 증거로 사용하려면 해당 패키지의 install verification에서 `sidecarVerified`, `sidecarEndpointVerified`, `appLaunchVerified`, `uiSmokeVerified=true`를 다시 확인한다. UI smoke는 1440×900과 최소 1024×720 콘텐츠 영역을 확인하고 실제 주문 제출 버튼을 누르지 않는다. 경고 없는 공개 배포 판정에는 다음이 추가로 필요하다.
 
 - Developer ID Application 인증서
 - hardened runtime 서명
