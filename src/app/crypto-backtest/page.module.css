@@ -1,0 +1,345 @@
+.page {
+  min-height: 100vh;
+  padding: 40px 24px 80px;
+  position: relative;
+}
+
+.page::before {
+  content: "";
+  position: absolute;
+  inset: -120px;
+  background:
+    radial-gradient(720px 360px at 10% 10%, rgba(28, 157, 111, 0.14), transparent 60%),
+    radial-gradient(680px 420px at 90% 0%, rgba(243, 155, 109, 0.18), transparent 60%);
+  pointer-events: none;
+}
+
+.shell {
+  position: relative;
+  z-index: 1;
+  max-width: 1360px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.hero,
+.toolbar,
+.chartCard,
+.summaryCard,
+.tableCard {
+  background: var(--card);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow);
+}
+
+.hero {
+  border-radius: 26px;
+  padding: 24px 28px;
+  display: flex;
+  justify-content: space-between;
+  gap: 24px;
+  align-items: flex-start;
+}
+
+.titleBlock {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: 760px;
+}
+
+.kicker {
+  font-size: 12px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--accent-0);
+  font-family: var(--font-mono), monospace;
+}
+
+.title {
+  font-size: clamp(30px, 5vw, 48px);
+  letter-spacing: -0.04em;
+}
+
+.subtitle {
+  color: var(--ink-2);
+  line-height: 1.6;
+  max-width: 680px;
+}
+
+.heroActions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.secondaryLink,
+.secondaryButton,
+.button {
+  min-height: 44px;
+  border-radius: 999px;
+  padding: 10px 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 600;
+}
+
+.secondaryLink {
+  border: 1px solid var(--border);
+  background: #fff;
+}
+
+.secondaryButton {
+  border: 1px solid var(--border);
+  background: #fff;
+  cursor: pointer;
+  color: var(--ink-0);
+}
+
+.toolbar {
+  border-radius: 22px;
+  padding: 16px;
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.input,
+.select {
+  min-height: 44px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: #fff;
+  padding: 10px 16px;
+  font-size: 14px;
+}
+
+.input {
+  min-width: 140px;
+  font-family: var(--font-mono), monospace;
+}
+
+.button {
+  border: none;
+  cursor: pointer;
+  color: #fff;
+  background: linear-gradient(180deg, #3a8a96 0%, var(--accent-0) 50%, #1f5a63 100%);
+}
+
+.button:disabled {
+  opacity: 0.7;
+  cursor: wait;
+}
+
+.error,
+.placeholder {
+  color: var(--ink-2);
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: minmax(0, 2.2fr) minmax(300px, 0.9fr);
+  gap: 24px;
+  align-items: start;
+}
+
+.chartCard {
+  border-radius: 24px;
+  padding: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.chartHeader,
+.tableHeader {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: flex-end;
+  flex-wrap: wrap;
+}
+
+.chartHeader h2,
+.tableHeader h2,
+.summaryCard h3 {
+  font-size: 20px;
+}
+
+.chartHeader p,
+.tableHeader p {
+  color: var(--ink-2);
+  font-size: 13px;
+}
+
+.chartMeta {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  color: var(--ink-2);
+  font-size: 12px;
+  font-family: var(--font-mono), monospace;
+}
+
+.chart {
+  width: 100%;
+  height: 430px;
+}
+
+.volumeChart {
+  width: 100%;
+  height: 170px;
+}
+
+.sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.summaryCard {
+  border-radius: 22px;
+  padding: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.summaryGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px 10px;
+}
+
+.summaryGrid strong {
+  font-size: 18px;
+}
+
+.metricLabel {
+  display: block;
+  color: var(--ink-2);
+  font-size: 12px;
+  margin-bottom: 4px;
+}
+
+.stateList {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  color: var(--ink-1);
+}
+
+.tableCard {
+  border-radius: 24px;
+  padding: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.tradeList {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 14px;
+}
+
+.tradeItem {
+  border-radius: 18px;
+  border: 1px solid var(--border);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(250, 245, 238, 0.98));
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.tradeTop {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+}
+
+.tradeType {
+  display: inline-flex;
+  margin-bottom: 4px;
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: var(--bg-1);
+  color: var(--ink-2);
+  font-size: 11px;
+  text-transform: uppercase;
+  font-family: var(--font-mono), monospace;
+}
+
+.tradePnlPositive,
+.tradePnlNegative {
+  font-weight: 700;
+  font-family: var(--font-mono), monospace;
+}
+
+.tradePnlPositive {
+  color: var(--accent-2);
+}
+
+.tradePnlNegative {
+  color: #b42318;
+}
+
+.tradeMeta {
+  display: flex;
+  gap: 8px 10px;
+  flex-wrap: wrap;
+  color: var(--ink-2);
+  font-size: 12px;
+}
+
+.tradeReasons {
+  color: var(--ink-1);
+  line-height: 1.5;
+  font-size: 13px;
+}
+
+@media (max-width: 980px) {
+  .hero {
+    flex-direction: column;
+  }
+
+  .grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 640px) {
+  .page {
+    padding: 24px 14px 64px;
+  }
+
+  .hero,
+  .toolbar,
+  .chartCard,
+  .summaryCard,
+  .tableCard {
+    padding: 14px;
+  }
+
+  .toolbar {
+    align-items: stretch;
+  }
+
+  .input,
+  .select,
+  .button,
+  .secondaryButton,
+  .secondaryLink {
+    width: 100%;
+  }
+
+  .tradeList {
+    grid-template-columns: 1fr;
+  }
+}

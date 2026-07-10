@@ -1,0 +1,60 @@
+{
+  "description": "Baseline fixtures for add-trend-following-signals. These cases document the expected branches until a test runner is added.",
+  "cases": [
+    {
+      "name": "continuation-entry",
+      "given": [
+        "close is above SMA20",
+        "SMA20 is above SMA50",
+        "SMA50 is non-falling",
+        "SMA5 is above or crossing above SMA20",
+        "SMA20 slope is positive",
+        "volume ratio is at least 1.2x",
+        "close location is at least 0.60"
+      ],
+      "expected": "emit Trend Follow Entry with entryPrice, initialStop, riskPerShare, partialTakeProfitLevel, and trendExitLevel"
+    },
+    {
+      "name": "breakout-entry",
+      "given": [
+        "close breaks the prior 20-bar high",
+        "SMA20 slope is positive",
+        "SMA20 is above SMA50",
+        "SMA50 is non-falling",
+        "volume ratio is at least 1.35x"
+      ],
+      "expected": "emit Trend Breakout Entry with the same risk fields as continuation entry"
+    },
+    {
+      "name": "whipsaw-rejection",
+      "given": [
+        "SMA5 crosses above SMA20",
+        "SMA20 is flat or falling",
+        "volume confirmation fails"
+      ],
+      "expected": "emit no actionable entry and expose rejection reasons in diagnostics"
+    },
+    {
+      "name": "insufficient-history",
+      "given": [
+        "fewer than 50 completed candles are available"
+      ],
+      "expected": "emit no actionable entry and report insufficient trend history"
+    },
+    {
+      "name": "two-r-reference",
+      "given": [
+        "an entry signal is emitted"
+      ],
+      "expected": "include a 2R reference level while preserving SMA50 as the trend exit context"
+    },
+    {
+      "name": "trend-exit",
+      "given": [
+        "an active trend position exists",
+        "close breaks SMA50 or the active initial stop"
+      ],
+      "expected": "emit Trend Exit and clear activeSetup"
+    }
+  ]
+}

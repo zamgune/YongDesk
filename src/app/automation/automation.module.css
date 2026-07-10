@@ -1,0 +1,980 @@
+.page {
+  min-height: 100vh;
+  min-height: 100dvh;
+  background:
+    linear-gradient(180deg, rgba(20, 184, 166, 0.08), transparent 360px),
+    var(--app-bg);
+  color: var(--text-0);
+  padding: 24px 16px 42px;
+}
+
+.header,
+.workspace,
+.authGrid,
+.notice {
+  width: min(1320px, 100%);
+  margin: 0 auto;
+}
+
+.header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 18px;
+  align-items: center;
+  padding-bottom: 18px;
+}
+
+.header h1 {
+  margin: 4px 0 6px;
+  font-size: 34px;
+  line-height: 1.08;
+  letter-spacing: 0;
+}
+
+.header p {
+  max-width: 840px;
+  color: var(--text-1);
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.headerActions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 10px;
+  align-items: center;
+}
+
+.headerActions a,
+.headerActions button,
+.actions button,
+.panel button,
+.segmented button,
+.tradeSearch button {
+  min-height: 40px;
+  border: 1px solid var(--border-1);
+  border-radius: 10px;
+  background: var(--surface-0);
+  color: var(--text-0);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 900;
+  line-height: 1.1;
+  padding: 0 14px;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.buttonPrimary,
+.segmented .active {
+  border-color: var(--primary-border);
+  background: var(--text-0);
+  color: var(--surface-0);
+}
+
+.buttonSecondary {
+  border-color: var(--border-1);
+  background: var(--surface-0);
+  color: var(--text-0);
+}
+
+.buttonGhost {
+  background: transparent;
+  color: var(--text-1);
+}
+
+.buttonDanger {
+  border-color: rgba(239, 68, 68, 0.35);
+  background: rgba(239, 68, 68, 0.08);
+  color: #b91c1c;
+}
+
+.actions button:disabled,
+.panel button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.kicker {
+  color: var(--primary);
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.notice,
+.error {
+  border: 1px solid var(--primary-border);
+  border-radius: 10px;
+  background: var(--primary-soft);
+  color: var(--text-0);
+  font-size: 13px;
+  font-weight: 800;
+  padding: 10px 12px;
+}
+
+.error {
+  border-color: rgba(239, 68, 68, 0.35);
+  background: rgba(239, 68, 68, 0.08);
+}
+
+.authGrid,
+.workspace {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(320px, 420px);
+  gap: 14px;
+}
+
+.workspace {
+  grid-template-columns: minmax(0, 1.4fr) minmax(360px, 0.8fr);
+}
+
+.panel,
+.chartPanel,
+.controlPanel {
+  border: 1px solid var(--border-1);
+  border-radius: 8px;
+  background: var(--surface-0);
+  box-shadow: 0 14px 34px var(--shadow-soft-color, rgba(15, 23, 42, 0.06));
+  padding: 16px;
+}
+
+.chartPanel {
+  min-width: 0;
+}
+
+.panelHeader {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.panelHeader > div {
+  min-width: 0;
+}
+
+.panelHeader h2,
+.panel h2 {
+  margin: 4px 0 0;
+  font-size: 21px;
+  line-height: 1.18;
+  letter-spacing: 0;
+}
+
+.panelHeader span {
+  flex: 0 0 auto;
+  border: 1px solid rgba(239, 68, 68, 0.32);
+  border-radius: 999px;
+  background: rgba(239, 68, 68, 0.08);
+  color: #b91c1c;
+  font-size: 12px;
+  font-weight: 900;
+  line-height: 1;
+  padding: 5px 9px;
+  white-space: nowrap;
+}
+
+.panel p,
+.empty {
+  color: var(--text-1);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.panel label,
+.formGrid label {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin-top: 10px;
+  color: var(--text-2);
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.panel input,
+.formGrid input,
+.formGrid select,
+.ruleGrid input {
+  min-height: 38px;
+  border: 1px solid var(--border-1);
+  border-radius: 9px;
+  background: var(--surface-1);
+  color: var(--input-text);
+  font: inherit;
+  padding: 0 10px;
+}
+
+.segmented {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 12px 0 8px;
+}
+
+.authForm {
+  display: flex;
+  flex-direction: column;
+}
+
+.authForm .buttonPrimary {
+  width: 100%;
+  margin-top: 14px;
+}
+
+.passwordToggle {
+  align-self: flex-start;
+  margin-top: 6px;
+  padding: 0;
+  background: none;
+  border: none;
+  color: var(--text-2);
+  font-size: 12px;
+  font-weight: 700;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.chart {
+  display: block;
+  width: 100%;
+  min-height: 280px;
+  border: 1px solid var(--border-1);
+  border-radius: 8px;
+  background: var(--surface-1);
+  touch-action: none;
+}
+
+.chart rect:first-child {
+  fill: var(--surface-1);
+}
+
+.gridLine {
+  stroke: var(--border-1);
+  stroke-width: 1;
+}
+
+.priceLine {
+  fill: none;
+  stroke: #334155;
+  stroke-width: 3;
+}
+
+.rangeBox {
+  fill: rgba(20, 184, 166, 0.12);
+  stroke: rgba(20, 184, 166, 0.42);
+  stroke-width: 1;
+  cursor: grab;
+}
+
+.supportLine,
+.resistanceLine,
+.currentLine {
+  stroke-width: 4;
+  stroke-linecap: round;
+}
+
+.supportLine {
+  stroke: #0f766e;
+  cursor: ns-resize;
+}
+
+.resistanceLine {
+  stroke: #b45309;
+  cursor: ns-resize;
+}
+
+.currentLine {
+  stroke: #475569;
+  stroke-dasharray: 5 5;
+}
+
+.chartLabel {
+  fill: var(--text-1);
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.chartStats,
+.resultGrid,
+.ruleGrid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.chartStats article,
+.resultGrid article,
+.ruleGrid article {
+  border: 1px solid var(--border-1);
+  border-radius: 8px;
+  background: var(--surface-1);
+  padding: 11px;
+}
+
+.resultGrid article {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.chartStats span,
+.resultGrid span,
+.ruleGrid span,
+.ladderList span,
+.intentList span {
+  display: block;
+  color: var(--text-2);
+  font-size: 11px;
+  font-weight: 900;
+}
+
+.chartStats strong,
+.resultGrid strong {
+  display: block;
+  font-size: 18px;
+  line-height: 1.18;
+  overflow-wrap: anywhere;
+}
+
+.formGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px 10px;
+}
+
+.ruleGrid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.ruleGrid article {
+  display: grid;
+  gap: 7px;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.ladderList,
+.intentList {
+  display: grid;
+  gap: 8px;
+}
+
+.ladderList article,
+.intentList article,
+.exitBox {
+  border: 1px solid var(--border-1);
+  border-radius: 8px;
+  background: var(--surface-1);
+  padding: 10px;
+}
+
+.ladderList strong,
+.intentList strong,
+.exitBox strong {
+  display: block;
+  margin-top: 4px;
+  font-size: 15px;
+}
+
+.ladderList p,
+.intentList p,
+.exitBox p {
+  margin-top: 4px;
+}
+
+.exitBox {
+  margin-top: 10px;
+}
+
+.blockerList {
+  margin: 12px 0 0;
+  border: 1px solid rgba(239, 68, 68, 0.28);
+  border-radius: 8px;
+  background: rgba(239, 68, 68, 0.07);
+  color: #b91c1c;
+  font-size: 13px;
+  font-weight: 800;
+  padding: 10px 10px 10px 28px;
+}
+
+.intentList {
+  margin-top: 12px;
+}
+
+.intentList article {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 4px 10px;
+}
+
+.intentList p {
+  grid-column: 1 / -1;
+}
+
+@media (max-width: 980px) {
+  .header,
+  .authGrid,
+  .workspace {
+    grid-template-columns: 1fr;
+  }
+
+  .headerActions {
+    justify-content: flex-start;
+  }
+
+  .actions {
+    justify-content: flex-start;
+  }
+
+  .chartStats,
+  .resultGrid,
+  .ruleGrid,
+  .formGrid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 640px) {
+  .page {
+    padding-inline: 12px;
+  }
+
+  .header {
+    gap: 14px;
+  }
+
+  .header h1 {
+    font-size: 28px;
+  }
+
+  .headerActions,
+  .actions,
+  .segmented {
+    width: 100%;
+  }
+
+  .headerActions a,
+  .headerActions button,
+  .actions button,
+  .panel > .buttonPrimary,
+  .panel > .buttonSecondary,
+  .panel > .buttonDanger,
+  .panel > .buttonGhost,
+  .segmented button {
+    flex: 1 1 100%;
+    width: 100%;
+  }
+
+  .panelHeader {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}
+
+/* 전략 빌더: 프리셋 칩 / 요약 / 컴팩트 차수 */
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 4px 0 8px;
+}
+.chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 38px;
+  padding: 0 14px;
+  border: 1px solid var(--border-1);
+  border-radius: 999px;
+  background: var(--surface-0);
+  color: var(--text-0);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 800;
+  line-height: 1.1;
+  text-decoration: none;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.chipInline {
+  min-height: 30px;
+  margin-left: 4px;
+  padding: 0 10px;
+  vertical-align: middle;
+}
+.chipActive {
+  border-color: var(--primary-border);
+  background: var(--text-0);
+  color: var(--surface-0);
+}
+.summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  padding: 12px 0;
+  border-top: 1px solid var(--border-1);
+  border-bottom: 1px solid var(--border-1);
+  margin: 8px 0;
+}
+.summary span { font-size: 12px; color: var(--text-2); display: block; }
+.summary strong { font-size: 15px; }
+.rungRow {
+  display: grid;
+  grid-template-columns: 44px minmax(180px, 1fr) auto auto minmax(72px, auto);
+  align-items: baseline;
+  gap: 8px 12px;
+  padding: 8px 0;
+  border-bottom: 1px dashed var(--border-1);
+  font-size: 13px;
+}
+.rungRow b { font-weight: 800; }
+.rungRow span {
+  min-width: 0;
+}
+.rungRow label {
+  display: inline-flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 4px;
+  margin-top: 0;
+  white-space: nowrap;
+}
+.rungRow input {
+  min-height: 32px;
+}
+.rungRow em {
+  color: var(--text-2);
+  font-style: normal;
+  text-align: right;
+  white-space: nowrap;
+}
+
+@media (max-width: 760px) {
+  .summary {
+    gap: 12px;
+  }
+
+  .summary div {
+    flex: 1 1 140px;
+  }
+
+  .rungRow {
+    grid-template-columns: 40px minmax(0, 1fr);
+    align-items: center;
+  }
+
+  .rungRow label,
+  .rungRow em {
+    grid-column: 2;
+    justify-self: start;
+    text-align: left;
+  }
+}
+
+.switchRow {
+  display: flex !important;
+  flex-direction: row !important;
+  align-items: center;
+  gap: 10px !important;
+}
+
+.switchRow input {
+  width: 18px;
+  height: 18px;
+  min-height: 18px;
+}
+
+.widePanel {
+  grid-column: 1 / -1;
+}
+
+.statusPass,
+.statusWarn,
+.statusFail {
+  border: 1px solid var(--border-1) !important;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 900;
+  line-height: 1;
+  padding: 5px 9px;
+  white-space: nowrap;
+}
+
+.statusPass {
+  border-color: rgba(20, 184, 166, 0.38) !important;
+  background: rgba(20, 184, 166, 0.1) !important;
+  color: #0f766e !important;
+}
+
+.statusWarn {
+  border-color: rgba(245, 158, 11, 0.38) !important;
+  background: rgba(245, 158, 11, 0.1) !important;
+  color: #92400e !important;
+}
+
+.statusFail {
+  border-color: rgba(239, 68, 68, 0.36) !important;
+  background: rgba(239, 68, 68, 0.08) !important;
+  color: #b91c1c !important;
+}
+
+.readinessSummary,
+.metricGrid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.readinessSummary article,
+.metricGrid div {
+  min-width: 0;
+  border: 1px solid var(--border-1);
+  border-radius: 8px;
+  background: var(--surface-1);
+  padding: 10px;
+}
+
+.readinessSummary span,
+.metricGrid span,
+.performanceTop span {
+  display: block;
+  color: var(--text-2);
+  font-size: 11px;
+  font-weight: 900;
+}
+
+.readinessSummary strong,
+.metricGrid strong,
+.performanceTop strong {
+  display: block;
+  margin-top: 4px;
+  font-size: 16px;
+  line-height: 1.18;
+  overflow-wrap: anywhere;
+}
+
+.readinessGroups {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.readinessGroup {
+  min-width: 0;
+}
+
+.readinessGroup h3,
+.panel h3 {
+  margin: 0 0 10px;
+  font-size: 15px;
+  line-height: 1.25;
+}
+
+.readinessItems {
+  display: grid;
+  gap: 8px;
+}
+
+.readinessItem {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+  border: 1px solid var(--border-1);
+  border-radius: 8px;
+  background: var(--surface-1);
+  padding: 10px;
+}
+
+.readinessItem strong {
+  display: block;
+  font-size: 13px;
+}
+
+.readinessItem p,
+.readinessItem small {
+  display: block;
+  margin-top: 3px;
+  color: var(--text-1);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.readinessItem small {
+  color: var(--text-2);
+  font-weight: 800;
+}
+
+.previewBox {
+  margin-top: 12px;
+  border: 1px solid var(--border-1);
+  border-radius: 8px;
+  background: var(--surface-1);
+  padding: 11px;
+}
+
+.previewBox strong {
+  display: block;
+  font-size: 14px;
+}
+
+.previewBox p,
+.previewBox small {
+  display: block;
+  margin-top: 4px;
+  color: var(--text-1);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.previewBox ul {
+  margin: 8px 0 0;
+  padding-left: 18px;
+  color: #b91c1c;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.performanceGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.performanceCard {
+  min-width: 0;
+  border: 1px solid var(--border-1);
+  border-radius: 8px;
+  background: var(--surface-1);
+  padding: 12px;
+}
+
+.performanceTop {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 180px;
+  gap: 10px;
+  align-items: center;
+}
+
+.performanceCard p,
+.performanceCard small {
+  display: block;
+  margin-top: 8px;
+  color: var(--text-1);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.sparkline {
+  width: 180px;
+  height: 52px;
+  border: 1px solid var(--border-1);
+  border-radius: 8px;
+  background: var(--surface-0);
+}
+
+.sparkline polyline {
+  fill: none;
+  stroke: #0f766e;
+  stroke-width: 3;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+
+.tradeShell {
+  grid-column: 1 / -1;
+  border: 1px solid var(--border-1);
+  border-radius: 8px;
+  background: var(--surface-0);
+  box-shadow: 0 14px 34px var(--shadow-soft-color, rgba(15, 23, 42, 0.06));
+  overflow: hidden;
+}
+
+.tradeTopbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border-1);
+}
+
+.tradeTopbar h2 {
+  margin: 4px 0 0;
+  font-size: 22px;
+}
+
+.tradeSearch {
+  display: flex;
+  gap: 8px;
+  min-width: min(360px, 100%);
+}
+
+.tradeSearch input {
+  flex: 1;
+  min-width: 0;
+  min-height: 40px;
+  border: 1px solid var(--border-1);
+  border-radius: 9px;
+  background: var(--surface-1);
+  color: var(--input-text);
+  font: inherit;
+  padding: 0 10px;
+}
+
+.tradeSearch button {
+  flex: 0 0 auto;
+}
+
+.tradeGrid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 380px;
+  gap: 14px;
+  padding: 14px;
+}
+
+.tradeChart {
+  min-width: 0;
+  border: 1px solid var(--border-1);
+  border-radius: 8px;
+  background: var(--surface-1);
+  padding: 12px;
+}
+
+.tradeChartHeader {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+  font-weight: 900;
+}
+
+.tradeSvg {
+  display: block;
+  width: 100%;
+  min-height: 360px;
+  border: 1px solid var(--border-1);
+  border-radius: 8px;
+  background: var(--surface-0);
+}
+
+.tradeSvg rect:first-child {
+  fill: var(--surface-0);
+}
+
+.candleWick {
+  stroke: var(--text-2);
+  stroke-width: 1;
+}
+
+.candleUp {
+  fill: #0f766e;
+}
+
+.candleDown {
+  fill: #dc2626;
+}
+
+.markerBuy,
+.markerSell {
+  cursor: pointer;
+}
+
+.markerBuy {
+  fill: #0f766e;
+}
+
+.markerSell {
+  fill: #dc2626;
+}
+
+.markerText {
+  fill: #fff;
+  font-size: 10px;
+  font-weight: 900;
+  pointer-events: none;
+}
+
+.fillDetail {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  margin-top: 10px;
+  border: 1px solid var(--border-1);
+  border-radius: 8px;
+  background: var(--surface-0);
+  padding: 10px;
+}
+
+.fillDetail span {
+  color: var(--text-1);
+}
+
+.tradeSide {
+  display: grid;
+  gap: 12px;
+  align-content: start;
+}
+
+@media (max-width: 1080px) {
+  .readinessGroups,
+  .performanceGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .tradeGrid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 640px) {
+  .readinessSummary,
+  .metricGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .readinessItem {
+    grid-template-columns: 1fr;
+  }
+
+  .performanceTop {
+    grid-template-columns: 1fr;
+  }
+
+  .sparkline {
+    width: 100%;
+  }
+
+  .tradeTopbar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .tradeSearch {
+    min-width: 0;
+    width: 100%;
+  }
+
+  .tradeSvg {
+    min-height: 300px;
+  }
+}

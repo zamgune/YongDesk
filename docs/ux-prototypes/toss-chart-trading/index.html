@@ -1,0 +1,516 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>토스 차트 매매 와이어프레임</title>
+  <style>
+    :root {
+      --bg: #f7f3ec;
+      --panel: #fffaf2;
+      --line: #ded3c4;
+      --ink: #25221d;
+      --muted: #776d61;
+      --teal: #0f766e;
+      --teal-soft: #d7f0ec;
+      --orange: #d97706;
+      --red: #dc2626;
+      --green: #15803d;
+      font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+    }
+
+    button, input, select { font: inherit; }
+
+    .shell {
+      min-height: 100vh;
+      display: grid;
+      grid-template-rows: auto 1fr;
+    }
+
+    .topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 14px 20px;
+      border-bottom: 1px solid var(--line);
+      background: rgba(255, 250, 242, .92);
+      position: sticky;
+      top: 0;
+      z-index: 10;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      min-width: 0;
+    }
+
+    .brand h1 {
+      margin: 0;
+      font-size: 18px;
+      line-height: 1.2;
+      white-space: nowrap;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      min-height: 28px;
+      padding: 0 10px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      color: var(--muted);
+      background: #fff;
+      font-size: 13px;
+      white-space: nowrap;
+    }
+
+    .search {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-width: 320px;
+    }
+
+    .search input {
+      width: 100%;
+      min-height: 36px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 0 10px;
+      background: #fff;
+      color: var(--ink);
+    }
+
+    .main {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 360px;
+      gap: 14px;
+      padding: 14px;
+    }
+
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+
+    .chartPanel {
+      display: grid;
+      grid-template-rows: auto minmax(420px, 1fr) auto;
+      min-height: calc(100vh - 92px);
+    }
+
+    .chartHead, .panelHead {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .symbol {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: baseline;
+      gap: 8px 12px;
+    }
+
+    .symbol strong { font-size: 20px; }
+    .price { color: var(--green); font-weight: 700; }
+    .muted { color: var(--muted); }
+
+    .segments {
+      display: inline-flex;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      overflow: hidden;
+      background: #fff;
+    }
+
+    .segments button {
+      min-height: 34px;
+      border: 0;
+      border-right: 1px solid var(--line);
+      padding: 0 12px;
+      background: transparent;
+      color: var(--muted);
+      cursor: pointer;
+    }
+
+    .segments button:last-child { border-right: 0; }
+    .segments button.active { background: var(--teal-soft); color: var(--teal); font-weight: 700; }
+
+    .chart {
+      position: relative;
+      min-height: 420px;
+      background:
+        linear-gradient(to right, rgba(222, 211, 196, .55) 1px, transparent 1px),
+        linear-gradient(to bottom, rgba(222, 211, 196, .55) 1px, transparent 1px),
+        #fffdf8;
+      background-size: 72px 100%, 100% 56px;
+      overflow: hidden;
+    }
+
+    .candle {
+      position: absolute;
+      width: 10px;
+      border-radius: 2px;
+    }
+
+    .up { background: var(--green); }
+    .down { background: var(--red); }
+
+    .ma {
+      position: absolute;
+      left: 5%;
+      right: 5%;
+      height: 3px;
+      border-radius: 999px;
+      background: var(--orange);
+      transform: rotate(-4deg);
+      opacity: .85;
+    }
+
+    .level {
+      position: absolute;
+      left: 0;
+      right: 0;
+      border-top: 2px dashed var(--teal);
+    }
+
+    .level span {
+      position: absolute;
+      right: 10px;
+      top: -14px;
+      background: var(--teal);
+      color: #fff;
+      border-radius: 6px;
+      padding: 4px 8px;
+      font-size: 12px;
+    }
+
+    .marker {
+      position: absolute;
+      width: 30px;
+      height: 30px;
+      border: 0;
+      border-radius: 999px;
+      color: #fff;
+      font-weight: 800;
+      cursor: pointer;
+      box-shadow: 0 6px 16px rgba(37, 34, 29, .18);
+    }
+
+    .buy { background: var(--green); }
+    .sell { background: var(--red); }
+
+    .tooltip {
+      position: absolute;
+      left: 54%;
+      top: 27%;
+      width: 240px;
+      padding: 10px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      box-shadow: 0 12px 30px rgba(37, 34, 29, .16);
+      display: none;
+    }
+
+    .tooltip.open { display: block; }
+    .tooltip h3 { margin: 0 0 8px; font-size: 15px; }
+    .tooltip p { margin: 4px 0; color: var(--muted); font-size: 13px; }
+
+    .timeline {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 8px;
+      padding: 10px 14px 14px;
+      border-top: 1px solid var(--line);
+    }
+
+    .mini {
+      min-height: 52px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 8px;
+      background: #fff;
+      font-size: 13px;
+    }
+
+    .side {
+      display: grid;
+      gap: 14px;
+      align-content: start;
+    }
+
+    .body { padding: 12px 14px 14px; }
+
+    .orderTabs {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+
+    .tabBtn {
+      min-height: 38px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      cursor: pointer;
+      font-weight: 700;
+    }
+
+    .tabBtn.active.buyText { border-color: var(--green); color: var(--green); background: #eaf7ee; }
+    .tabBtn.active.sellText { border-color: var(--red); color: var(--red); background: #fff1f1; }
+
+    label {
+      display: grid;
+      gap: 6px;
+      margin-top: 10px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    input, select {
+      min-height: 38px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 0 10px;
+      background: #fff;
+      color: var(--ink);
+    }
+
+    .primary {
+      width: 100%;
+      min-height: 42px;
+      margin-top: 12px;
+      border: 0;
+      border-radius: 8px;
+      background: var(--teal);
+      color: #fff;
+      font-weight: 800;
+      cursor: pointer;
+    }
+
+    .danger { background: var(--red); }
+
+    .row {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 8px 0;
+      border-bottom: 1px solid rgba(222, 211, 196, .7);
+      font-size: 14px;
+    }
+
+    .row:last-child { border-bottom: 0; }
+
+    .list {
+      display: grid;
+      gap: 8px;
+    }
+
+    .fill {
+      display: grid;
+      grid-template-columns: 54px 1fr auto;
+      align-items: center;
+      gap: 8px;
+      min-height: 48px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 8px;
+      background: #fff;
+      font-size: 13px;
+    }
+
+    .fill b { font-size: 14px; }
+    .buyText { color: var(--green); }
+    .sellText { color: var(--red); }
+
+    @media (max-width: 980px) {
+      .topbar, .main { padding: 10px; }
+      .topbar { align-items: stretch; flex-direction: column; }
+      .search { min-width: 0; width: 100%; }
+      .main { grid-template-columns: 1fr; }
+      .chartPanel { min-height: auto; }
+      .timeline { grid-template-columns: 1fr 1fr; }
+    }
+
+    @media (max-width: 560px) {
+      .chartHead, .panelHead { align-items: flex-start; flex-direction: column; }
+      .segments { width: 100%; }
+      .segments button { flex: 1; padding: 0 8px; }
+      .timeline { grid-template-columns: 1fr; }
+      .chart { min-height: 340px; }
+      .tooltip { left: 12px; right: 12px; top: 18px; width: auto; }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <header class="topbar">
+      <div class="brand">
+        <h1>토스 차트 매매</h1>
+        <span class="badge">실거래 OFF</span>
+        <span class="badge">토스 연결됨</span>
+      </div>
+      <div class="search">
+        <input value="005930 삼성전자" aria-label="종목 검색" />
+        <span class="badge">KR 정규장</span>
+      </div>
+    </header>
+
+    <main class="main">
+      <section class="panel chartPanel">
+        <div class="chartHead">
+          <div class="symbol">
+            <strong>삼성전자</strong>
+            <span class="muted">005930 · KOSPI</span>
+            <span class="price">72,400 +1.12%</span>
+          </div>
+          <div class="segments" aria-label="차트 주기">
+            <button>1분</button>
+            <button class="active">일봉</button>
+            <button>주봉</button>
+            <button>체결복기</button>
+          </div>
+        </div>
+
+        <div class="chart" aria-label="차트 영역">
+          <div class="ma" style="top:48%"></div>
+          <div class="level" style="top:36%"><span>저항 74,000</span></div>
+          <div class="level" style="top:66%; border-color:#d97706"><span style="background:#d97706">지지 70,800</span></div>
+
+          <div class="candle up" style="left:7%; top:58%; height:88px"></div>
+          <div class="candle down" style="left:13%; top:49%; height:74px"></div>
+          <div class="candle up" style="left:19%; top:52%; height:96px"></div>
+          <div class="candle up" style="left:25%; top:44%; height:112px"></div>
+          <div class="candle down" style="left:31%; top:40%; height:82px"></div>
+          <div class="candle up" style="left:37%; top:47%; height:128px"></div>
+          <div class="candle down" style="left:43%; top:37%; height:84px"></div>
+          <div class="candle up" style="left:49%; top:42%; height:136px"></div>
+          <div class="candle up" style="left:55%; top:33%; height:116px"></div>
+          <div class="candle down" style="left:61%; top:31%; height:86px"></div>
+          <div class="candle up" style="left:67%; top:35%; height:118px"></div>
+          <div class="candle down" style="left:73%; top:26%; height:78px"></div>
+          <div class="candle up" style="left:79%; top:29%; height:120px"></div>
+          <div class="candle up" style="left:85%; top:23%; height:98px"></div>
+
+          <button class="marker buy" style="left:36%; top:66%">B</button>
+          <button class="marker sell" style="left:58%; top:31%">S</button>
+          <button class="marker buy" style="left:68%; top:54%">B</button>
+
+          <aside class="tooltip open" id="fillDetail">
+            <h3>매수 체결 · 2026-06-18</h3>
+            <p>체결가 70,900 · 14주</p>
+            <p>전략 1% 순환매매 · 주문의도 #A142</p>
+            <p>현재 평가 +2.12%</p>
+          </aside>
+        </div>
+
+        <div class="timeline">
+          <div class="mini"><b>최근 매수</b><br><span class="muted">70,900 · 14주</span></div>
+          <div class="mini"><b>최근 매도</b><br><span class="muted">73,200 · 14주</span></div>
+          <div class="mini"><b>실현손익</b><br><span class="price">+32,200원</span></div>
+          <div class="mini"><b>미체결</b><br><span class="muted">매수 1건 · 취소 가능</span></div>
+        </div>
+      </section>
+
+      <aside class="side">
+        <section class="panel">
+          <div class="panelHead">
+            <strong>주문 패널</strong>
+            <span class="badge">주문 전 검증</span>
+          </div>
+          <div class="body">
+            <div class="orderTabs">
+              <button class="tabBtn active buyText" id="buyTab">매수</button>
+              <button class="tabBtn sellText" id="sellTab">매도</button>
+            </div>
+            <label>주문 유형
+              <select>
+                <option>지정가</option>
+                <option>시장가</option>
+              </select>
+            </label>
+            <label>가격
+              <input value="71,500" />
+            </label>
+            <label>수량
+              <input value="10" />
+            </label>
+            <div class="row"><span>예상 주문금액</span><b>715,000원</b></div>
+            <div class="row"><span>매수 가능</span><b>2,430,000원</b></div>
+            <button class="primary" id="orderButton">매수 주문 검증</button>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panelHead">
+            <strong>내 포지션</strong>
+            <span class="badge">토스 동기화</span>
+          </div>
+          <div class="body">
+            <div class="row"><span>보유수량</span><b>24주</b></div>
+            <div class="row"><span>평단가</span><b>70,950원</b></div>
+            <div class="row"><span>평가손익</span><b class="price">+34,800원</b></div>
+            <div class="row"><span>매도 가능</span><b>24주</b></div>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panelHead">
+            <strong>체결/주문 기록</strong>
+            <span class="badge">차트 마커 연동</span>
+          </div>
+          <div class="body list">
+            <div class="fill"><b class="buyText">매수</b><span>70,900원 · 14주<br><span class="muted">1% 순환매매</span></span><button>보기</button></div>
+            <div class="fill"><b class="sellText">매도</b><span>73,200원 · 14주<br><span class="muted">실현 +32,200원</span></span><button>보기</button></div>
+            <div class="fill"><b class="buyText">매수</b><span>71,300원 · 10주<br><span class="muted">수동 주문</span></span><button>보기</button></div>
+          </div>
+        </section>
+      </aside>
+    </main>
+  </div>
+
+  <script>
+    const detail = document.querySelector("#fillDetail");
+    const orderButton = document.querySelector("#orderButton");
+    const buyTab = document.querySelector("#buyTab");
+    const sellTab = document.querySelector("#sellTab");
+
+    document.querySelectorAll(".marker, .fill button").forEach((button) => {
+      button.addEventListener("click", () => detail.classList.add("open"));
+    });
+
+    buyTab.addEventListener("click", () => {
+      buyTab.classList.add("active");
+      sellTab.classList.remove("active");
+      orderButton.textContent = "매수 주문 검증";
+      orderButton.classList.remove("danger");
+    });
+
+    sellTab.addEventListener("click", () => {
+      sellTab.classList.add("active");
+      buyTab.classList.remove("active");
+      orderButton.textContent = "매도 주문 검증";
+      orderButton.classList.add("danger");
+    });
+  </script>
+</body>
+</html>

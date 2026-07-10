@@ -1,0 +1,2224 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>StockAnalysis 터미널 대시보드 상세안</title>
+  <style>
+    :root {
+      --bg: #0c0f0e;
+      --canvas: #111413;
+      --panel: #171b19;
+      --panel-2: #1d2320;
+      --panel-3: #242b27;
+      --line: #343d37;
+      --line-soft: #28302c;
+      --text: #f2f1ea;
+      --muted: #9ba69d;
+      --dim: #737d75;
+      --green: #54bd7a;
+      --green-2: #2f8f62;
+      --teal: #41b7a6;
+      --red: #e16f63;
+      --red-2: #aa4d47;
+      --amber: #d9aa4a;
+      --blue: #6ca8df;
+      --violet: #a58ce4;
+      --ink-dark: #0b0e0c;
+      --shadow: 0 22px 70px rgba(0, 0, 0, 0.34);
+      --mono: "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+      --sans: ui-sans-serif, -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      background:
+        linear-gradient(180deg, #0d100f 0%, #090b0a 100%);
+      color: var(--text);
+      font-family: var(--sans);
+      letter-spacing: 0;
+    }
+
+    h1,
+    h2,
+    h3,
+    p {
+      margin: 0;
+    }
+
+    button,
+    input {
+      font: inherit;
+    }
+
+    main {
+      width: min(1760px, 100%);
+      margin: 0 auto;
+      padding: 22px;
+    }
+
+    .pageHead {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-end;
+      gap: 24px;
+      margin-bottom: 16px;
+    }
+
+    .pageHead h1 {
+      font-size: 24px;
+      font-weight: 760;
+    }
+
+    .pageHead p {
+      margin-top: 7px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.5;
+    }
+
+    .sourceStrip {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      gap: 8px;
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .sourceStrip a {
+      color: var(--blue);
+      text-decoration: none;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 5px 9px;
+      background: #121615;
+    }
+
+    .macWindow {
+      border: 1px solid var(--line);
+      background: var(--canvas);
+      box-shadow: var(--shadow);
+      min-height: 960px;
+    }
+
+    .chrome {
+      height: 34px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 0 12px;
+      border-bottom: 1px solid var(--line);
+      background: #0e1110;
+    }
+
+    .dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 999px;
+      background: #d76257;
+    }
+
+    .dot:nth-child(2) {
+      background: #d7a447;
+    }
+
+    .dot:nth-child(3) {
+      background: #55a967;
+    }
+
+    .chromeTitle {
+      margin-left: 8px;
+      color: var(--dim);
+      font-family: var(--mono);
+      font-size: 11px;
+    }
+
+    .appShell {
+      display: grid;
+      grid-template-columns: 286px minmax(620px, 1fr) 390px;
+      grid-template-rows: 54px 44px 1fr 236px;
+      grid-template-areas:
+        "nav topbar risk"
+        "nav tabs risk"
+        "nav workbench risk"
+        "tape tape risk";
+      min-height: 926px;
+    }
+
+    .topbar {
+      grid-area: topbar;
+      display: grid;
+      grid-template-columns: 1fr auto auto;
+      align-items: center;
+      gap: 12px;
+      padding: 9px 12px;
+      border-right: 1px solid var(--line);
+      border-bottom: 1px solid var(--line);
+      background: #121614;
+      min-width: 0;
+    }
+
+    .search {
+      min-width: 0;
+      height: 34px;
+      display: grid;
+      grid-template-columns: 24px 1fr auto;
+      align-items: center;
+      gap: 8px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      padding: 0 10px;
+      background: #0f1311;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .search strong {
+      color: var(--text);
+      font-family: var(--mono);
+      font-size: 13px;
+    }
+
+    .search kbd,
+    .shortcut {
+      border: 1px solid var(--line);
+      border-radius: 5px;
+      padding: 2px 6px;
+      color: var(--dim);
+      background: var(--panel-2);
+      font-family: var(--mono);
+      font-size: 10px;
+    }
+
+    .sessionStatus {
+      display: grid;
+      grid-auto-flow: column;
+      align-items: center;
+      gap: 7px;
+      color: var(--muted);
+      font-size: 11px;
+      white-space: nowrap;
+    }
+
+    .livePill,
+    .safePill,
+    .warnPill,
+    .riskPill {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 24px;
+      border-radius: 999px;
+      padding: 0 9px;
+      border: 1px solid var(--line);
+      font-size: 11px;
+      font-weight: 760;
+      white-space: nowrap;
+    }
+
+    .livePill {
+      color: var(--red);
+      background: rgba(225, 111, 99, 0.12);
+      border-color: rgba(225, 111, 99, 0.36);
+    }
+
+    .safePill {
+      color: var(--green);
+      background: rgba(84, 189, 122, 0.12);
+      border-color: rgba(84, 189, 122, 0.35);
+    }
+
+    .warnPill {
+      color: var(--amber);
+      background: rgba(217, 170, 74, 0.12);
+      border-color: rgba(217, 170, 74, 0.34);
+    }
+
+    .riskPill {
+      color: var(--violet);
+      background: rgba(165, 140, 228, 0.12);
+      border-color: rgba(165, 140, 228, 0.36);
+    }
+
+    .killSwitch {
+      height: 34px;
+      border: 1px solid rgba(225, 111, 99, 0.45);
+      border-radius: 7px;
+      padding: 0 12px;
+      color: #ffe0dc;
+      background: #311715;
+      font-size: 12px;
+      font-weight: 780;
+      white-space: nowrap;
+    }
+
+    .workspaceTabs {
+      grid-area: tabs;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      min-width: 0;
+      overflow-x: auto;
+      padding: 6px 10px;
+      border-right: 1px solid var(--line);
+      border-bottom: 1px solid var(--line);
+      background: #101412;
+    }
+
+    .workspaceTabs button {
+      min-width: 106px;
+      height: 31px;
+      display: grid;
+      grid-template-columns: 1fr auto;
+      align-items: center;
+      gap: 7px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      padding: 0 9px;
+      color: var(--muted);
+      background: #141816;
+      font-size: 11px;
+      white-space: nowrap;
+    }
+
+    .workspaceTabs button.active {
+      color: var(--text);
+      border-color: rgba(84, 189, 122, 0.42);
+      background: #202822;
+      box-shadow: inset 0 -2px 0 var(--green);
+    }
+
+    .workspaceTabs .count {
+      min-width: 18px;
+      height: 18px;
+      display: inline-grid;
+      place-items: center;
+      border-radius: 999px;
+      color: var(--ink-dark);
+      background: var(--green);
+      font-family: var(--mono);
+      font-size: 10px;
+      font-weight: 800;
+    }
+
+    .navPane {
+      grid-area: nav;
+      display: grid;
+      grid-template-rows: auto auto auto 1fr;
+      border-right: 1px solid var(--line);
+      background: var(--panel);
+      min-width: 0;
+    }
+
+    .brand {
+      padding: 14px 14px 12px;
+      border-bottom: 1px solid var(--line);
+      background: #131715;
+    }
+
+    .brandTop {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .brand h2 {
+      font-size: 15px;
+      font-weight: 760;
+    }
+
+    .brand p {
+      margin-top: 7px;
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.45;
+    }
+
+    .miniStats {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      border-bottom: 1px solid var(--line);
+    }
+
+    .miniStat {
+      min-height: 70px;
+      padding: 10px 12px;
+      border-right: 1px solid var(--line-soft);
+      border-bottom: 1px solid var(--line-soft);
+    }
+
+    .miniStat:nth-child(2n) {
+      border-right: 0;
+    }
+
+    .label {
+      color: var(--dim);
+      font-size: 10px;
+      text-transform: uppercase;
+      font-family: var(--mono);
+    }
+
+    .value {
+      margin-top: 6px;
+      font-family: var(--mono);
+      font-size: 16px;
+      font-weight: 780;
+    }
+
+    .delta {
+      margin-top: 3px;
+      font-family: var(--mono);
+      font-size: 11px;
+    }
+
+    .up {
+      color: var(--green);
+    }
+
+    .down {
+      color: var(--red);
+    }
+
+    .flat {
+      color: var(--muted);
+    }
+
+    .watchTools {
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .segmented {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 2px;
+      padding: 3px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #111513;
+    }
+
+    .segmented button {
+      height: 28px;
+      border: 0;
+      border-radius: 6px;
+      color: var(--muted);
+      background: transparent;
+      font-size: 11px;
+    }
+
+    .segmented .active {
+      color: var(--text);
+      background: var(--panel-3);
+    }
+
+    .scannerChips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 7px;
+      margin-top: 10px;
+    }
+
+    .chip {
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 5px 8px;
+      color: var(--muted);
+      background: #101412;
+      font-size: 11px;
+      white-space: nowrap;
+    }
+
+    .chip.active {
+      color: var(--green);
+      border-color: rgba(84, 189, 122, 0.38);
+      background: rgba(84, 189, 122, 0.1);
+    }
+
+    .watchList {
+      overflow: auto;
+      min-height: 0;
+    }
+
+    .sectionTitle {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+      min-height: 34px;
+      padding: 0 12px;
+      border-bottom: 1px solid var(--line-soft);
+      background: #141816;
+      color: var(--muted);
+      font-size: 11px;
+      text-transform: uppercase;
+      font-family: var(--mono);
+    }
+
+    .watchRow {
+      display: grid;
+      grid-template-columns: 54px 1fr 62px 54px;
+      gap: 8px;
+      align-items: center;
+      min-height: 44px;
+      padding: 8px 12px;
+      border-bottom: 1px solid var(--line-soft);
+      font-family: var(--mono);
+      font-size: 12px;
+    }
+
+    .watchRow.active {
+      background: #202822;
+      box-shadow: inset 3px 0 0 var(--green);
+    }
+
+    .ticker {
+      color: var(--text);
+      font-weight: 780;
+    }
+
+    .name {
+      display: block;
+      margin-top: 2px;
+      color: var(--dim);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-family: var(--sans);
+      font-size: 11px;
+    }
+
+    .spark {
+      width: 56px;
+      height: 18px;
+    }
+
+    .workbench {
+      grid-area: workbench;
+      border-right: 1px solid var(--line);
+      background: var(--canvas);
+      min-width: 0;
+      min-height: 0;
+      overflow: auto;
+    }
+
+    .tabPanel {
+      display: none;
+      min-height: 100%;
+    }
+
+    .tabPanel.active {
+      display: block;
+    }
+
+    .overviewPanel.active {
+      display: grid;
+      grid-template-rows: auto minmax(360px, 1fr) 214px;
+      min-height: 100%;
+    }
+
+    .tabIntro {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 16px;
+      min-height: 72px;
+      padding: 14px;
+      border-bottom: 1px solid var(--line);
+      background: #131715;
+    }
+
+    .tabIntro h2 {
+      font-size: 16px;
+      font-weight: 780;
+    }
+
+    .tabIntro p {
+      margin-top: 6px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.5;
+    }
+
+    .tabActions {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      gap: 7px;
+    }
+
+    .panelGrid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+      padding: 12px;
+    }
+
+    .panelGrid.two {
+      grid-template-columns: 1.25fr 1fr;
+    }
+
+    .panelCard {
+      min-width: 0;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      overflow: hidden;
+      background: var(--panel);
+    }
+
+    .panelCard.wide {
+      grid-column: span 2;
+    }
+
+    .panelCard.full {
+      grid-column: 1 / -1;
+    }
+
+    .panelCardHead {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+      min-height: 42px;
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--line);
+      background: #151a17;
+    }
+
+    .panelCardHead h3 {
+      font-size: 13px;
+      font-weight: 760;
+    }
+
+    .panelCardBody {
+      padding: 12px;
+    }
+
+    .checkRow,
+    .auditRow,
+    .sourceRow,
+    .playbookRow,
+    .timelineRow,
+    .alertRule {
+      display: grid;
+      gap: 8px;
+      align-items: start;
+      min-height: 42px;
+      padding: 9px 0;
+      border-bottom: 1px solid var(--line-soft);
+      font-size: 12px;
+    }
+
+    .checkRow {
+      grid-template-columns: 24px 1fr auto;
+    }
+
+    .auditRow {
+      grid-template-columns: 62px 1fr auto;
+    }
+
+    .sourceRow {
+      grid-template-columns: 1fr 56px auto;
+    }
+
+    .timelineRow {
+      grid-template-columns: 72px 1fr 72px;
+    }
+
+    .alertRule {
+      grid-template-columns: 84px 1fr auto;
+    }
+
+    .playbookRow {
+      grid-template-columns: 84px 1fr 88px 88px;
+    }
+
+    .checkRow:last-child,
+    .auditRow:last-child,
+    .sourceRow:last-child,
+    .playbookRow:last-child,
+    .timelineRow:last-child,
+    .alertRule:last-child {
+      border-bottom: 0;
+    }
+
+    .rowTitle {
+      display: block;
+      color: var(--text);
+      font-weight: 680;
+    }
+
+    .rowMeta {
+      display: block;
+      margin-top: 3px;
+      color: var(--muted);
+      line-height: 1.4;
+    }
+
+    .scenarioList {
+      display: grid;
+      gap: 10px;
+    }
+
+    .scenarioItem {
+      display: grid;
+      grid-template-columns: 96px 1fr 76px;
+      align-items: center;
+      gap: 10px;
+      font-size: 12px;
+    }
+
+    .barTrack {
+      height: 8px;
+      overflow: hidden;
+      border-radius: 999px;
+      background: #0e1210;
+    }
+
+    .barFill {
+      height: 100%;
+      border-radius: inherit;
+      background: var(--green);
+    }
+
+    .barFill.amber {
+      background: var(--amber);
+    }
+
+    .barFill.red {
+      background: var(--red);
+    }
+
+    .replayRail {
+      position: relative;
+      height: 112px;
+      margin: 8px 0 14px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background:
+        linear-gradient(to right, rgba(255,255,255,0.045) 1px, transparent 1px),
+        #101412;
+      background-size: 12.5% 100%;
+    }
+
+    .replayPoint {
+      position: absolute;
+      top: 32px;
+      width: 12px;
+      height: 12px;
+      border-radius: 999px;
+      background: var(--green);
+      transform: translateX(-50%);
+    }
+
+    .replayPoint.news {
+      top: 54px;
+      background: var(--amber);
+    }
+
+    .replayPoint.risk {
+      top: 76px;
+      background: var(--red);
+    }
+
+    .replayCursor {
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      left: 64%;
+      width: 2px;
+      background: var(--blue);
+      box-shadow: 0 0 0 4px rgba(108, 168, 223, 0.12);
+    }
+
+    .playbookSummary {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 10px;
+      padding: 12px;
+    }
+
+    .marketStrip {
+      display: grid;
+      grid-template-columns: repeat(6, minmax(0, 1fr));
+      border-bottom: 1px solid var(--line);
+      background: var(--panel);
+    }
+
+    .marketBox {
+      min-height: 76px;
+      padding: 11px 12px;
+      border-right: 1px solid var(--line-soft);
+      min-width: 0;
+    }
+
+    .marketBox:last-child {
+      border-right: 0;
+    }
+
+    .marketBox .value {
+      font-size: 15px;
+    }
+
+    .chartArea {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 74px;
+      min-height: 0;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .chartPanel {
+      display: grid;
+      grid-template-rows: auto 1fr;
+      min-width: 0;
+      min-height: 0;
+    }
+
+    .chartHeader {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 14px;
+      min-height: 54px;
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--line-soft);
+      background: #121614;
+    }
+
+    .symbolBlock {
+      display: flex;
+      align-items: baseline;
+      gap: 9px;
+      min-width: 0;
+    }
+
+    .symbolBlock h2 {
+      font-family: var(--mono);
+      font-size: 22px;
+      letter-spacing: 0;
+    }
+
+    .symbolBlock span {
+      color: var(--muted);
+      font-size: 12px;
+      white-space: nowrap;
+    }
+
+    .chartControls {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      gap: 6px;
+    }
+
+    .control {
+      height: 26px;
+      min-width: 32px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 0 8px;
+      color: var(--muted);
+      background: #101412;
+      font-size: 11px;
+    }
+
+    .control.active {
+      color: var(--text);
+      background: var(--panel-3);
+    }
+
+    .chartCanvas {
+      position: relative;
+      min-height: 440px;
+      overflow: hidden;
+      background:
+        linear-gradient(to right, rgba(255,255,255,0.035) 1px, transparent 1px),
+        linear-gradient(to bottom, rgba(255,255,255,0.04) 1px, transparent 1px),
+        #0f1211;
+      background-size: 72px 100%, 100% 58px;
+    }
+
+    .chartCanvas svg {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+    }
+
+    .chartBadge {
+      position: absolute;
+      left: 14px;
+      top: 14px;
+      display: grid;
+      gap: 7px;
+      width: min(270px, calc(100% - 28px));
+      z-index: 2;
+    }
+
+    .badgeLine {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      padding: 8px 9px;
+      background: rgba(15, 18, 17, 0.88);
+      font-size: 11px;
+      backdrop-filter: blur(8px);
+    }
+
+    .badgeLine strong {
+      color: var(--text);
+      font-family: var(--mono);
+    }
+
+    .priceAxis {
+      display: grid;
+      grid-template-rows: repeat(10, 1fr);
+      border-left: 1px solid var(--line-soft);
+      background: #101412;
+      color: var(--dim);
+      font-family: var(--mono);
+      font-size: 10px;
+    }
+
+    .priceAxis span {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border-bottom: 1px solid var(--line-soft);
+    }
+
+    .detailGrid {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      min-height: 0;
+      background: var(--panel);
+    }
+
+    .detailPane {
+      min-width: 0;
+      border-right: 1px solid var(--line);
+      overflow: hidden;
+    }
+
+    .detailPane:last-child {
+      border-right: 0;
+    }
+
+    .signalRow,
+    .newsRow,
+    .metricRow {
+      display: grid;
+      gap: 8px;
+      align-items: center;
+      min-height: 36px;
+      padding: 8px 12px;
+      border-bottom: 1px solid var(--line-soft);
+      font-size: 12px;
+    }
+
+    .signalRow {
+      grid-template-columns: 66px 1fr auto;
+    }
+
+    .newsRow {
+      grid-template-columns: 48px 1fr auto;
+    }
+
+    .metricRow {
+      grid-template-columns: 1fr auto;
+      font-family: var(--mono);
+    }
+
+    .tag {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 21px;
+      border-radius: 5px;
+      padding: 0 7px;
+      font-family: var(--mono);
+      font-size: 10px;
+      font-weight: 760;
+      white-space: nowrap;
+    }
+
+    .tag.green {
+      color: var(--green);
+      background: rgba(84, 189, 122, 0.12);
+    }
+
+    .tag.red {
+      color: var(--red);
+      background: rgba(225, 111, 99, 0.12);
+    }
+
+    .tag.amber {
+      color: var(--amber);
+      background: rgba(217, 170, 74, 0.12);
+    }
+
+    .tag.blue {
+      color: var(--blue);
+      background: rgba(108, 168, 223, 0.12);
+    }
+
+    .tag.violet {
+      color: var(--violet);
+      background: rgba(165, 140, 228, 0.12);
+    }
+
+    .riskPane {
+      grid-area: risk;
+      display: grid;
+      grid-template-rows: auto auto auto 1fr auto;
+      background: var(--panel);
+      min-width: 0;
+      border-left: 0;
+    }
+
+    .decisionHeader {
+      padding: 14px;
+      border-bottom: 1px solid var(--line);
+      background: #131715;
+    }
+
+    .decisionHeader h2 {
+      font-size: 15px;
+      font-weight: 780;
+    }
+
+    .decisionHeader p {
+      margin-top: 7px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.5;
+    }
+
+    .scoreCard {
+      display: grid;
+      grid-template-columns: 118px 1fr;
+      gap: 12px;
+      padding: 14px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .scoreRing {
+      width: 108px;
+      height: 108px;
+      display: grid;
+      place-items: center;
+      border-radius: 50%;
+      background:
+        conic-gradient(var(--green) 0 67%, rgba(84, 189, 122, 0.13) 67% 100%);
+    }
+
+    .scoreRingInner {
+      width: 82px;
+      height: 82px;
+      display: grid;
+      place-items: center;
+      border-radius: 50%;
+      background: var(--panel);
+      font-family: var(--mono);
+      font-size: 22px;
+      font-weight: 800;
+    }
+
+    .scoreText {
+      min-width: 0;
+    }
+
+    .scoreText h3 {
+      font-size: 13px;
+    }
+
+    .scoreText p {
+      margin-top: 7px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.55;
+    }
+
+    .orderTicket {
+      border-bottom: 1px solid var(--line);
+      padding: 12px 14px;
+      background: #151a17;
+    }
+
+    .ticketGrid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      margin-top: 10px;
+    }
+
+    .field {
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      padding: 8px;
+      background: #101412;
+      min-width: 0;
+    }
+
+    .field span {
+      display: block;
+      color: var(--dim);
+      font-family: var(--mono);
+      font-size: 10px;
+      text-transform: uppercase;
+    }
+
+    .field strong {
+      display: block;
+      margin-top: 5px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-family: var(--mono);
+      font-size: 13px;
+    }
+
+    .ticketActions {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      margin-top: 10px;
+    }
+
+    .primaryButton,
+    .ghostButton {
+      height: 34px;
+      border-radius: 7px;
+      border: 1px solid var(--line);
+      font-size: 12px;
+      font-weight: 760;
+    }
+
+    .primaryButton {
+      color: var(--ink-dark);
+      background: var(--green);
+      border-color: var(--green);
+    }
+
+    .ghostButton {
+      color: var(--muted);
+      background: transparent;
+    }
+
+    .guardList {
+      min-height: 0;
+      overflow: auto;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .guardRow {
+      display: grid;
+      grid-template-columns: 22px 1fr auto;
+      gap: 9px;
+      align-items: start;
+      min-height: 48px;
+      padding: 10px 14px;
+      border-bottom: 1px solid var(--line-soft);
+      font-size: 12px;
+    }
+
+    .statusDot {
+      width: 10px;
+      height: 10px;
+      margin-top: 3px;
+      border-radius: 999px;
+      background: var(--green);
+    }
+
+    .statusDot.red {
+      background: var(--red);
+    }
+
+    .statusDot.amber {
+      background: var(--amber);
+    }
+
+    .guardRow strong {
+      display: block;
+      color: var(--text);
+    }
+
+    .guardRow span {
+      display: block;
+      margin-top: 4px;
+      color: var(--muted);
+      line-height: 1.4;
+    }
+
+    .automationQueue {
+      padding: 12px 14px;
+      background: #131715;
+    }
+
+    .queueItem {
+      display: grid;
+      grid-template-columns: auto 1fr auto;
+      align-items: center;
+      gap: 8px;
+      min-height: 34px;
+      border-bottom: 1px solid var(--line-soft);
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .queueItem:last-child {
+      border-bottom: 0;
+    }
+
+    .tape {
+      grid-area: tape;
+      display: grid;
+      grid-template-columns: 1.2fr 1fr 1fr 0.85fr;
+      border-top: 0;
+      border-right: 1px solid var(--line);
+      background: var(--panel);
+      min-width: 0;
+    }
+
+    .tapePane {
+      min-width: 0;
+      border-right: 1px solid var(--line);
+      overflow: hidden;
+    }
+
+    .tapePane:last-child {
+      border-right: 0;
+    }
+
+    .tapeRow {
+      display: grid;
+      grid-template-columns: 54px 1fr auto;
+      gap: 8px;
+      align-items: start;
+      min-height: 39px;
+      padding: 8px 12px;
+      border-bottom: 1px solid var(--line-soft);
+      font-size: 12px;
+    }
+
+    .tapeRow time {
+      color: var(--dim);
+      font-family: var(--mono);
+      font-size: 10px;
+      padding-top: 2px;
+    }
+
+    .tapeRow strong {
+      color: var(--text);
+      font-weight: 680;
+    }
+
+    .tapeRow p {
+      color: var(--muted);
+      line-height: 1.35;
+    }
+
+    .miniHeatmap {
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      gap: 5px;
+      padding: 12px;
+    }
+
+    .heatCell {
+      min-height: 34px;
+      display: grid;
+      place-items: center;
+      border: 1px solid var(--line-soft);
+      border-radius: 6px;
+      color: #07100b;
+      font-family: var(--mono);
+      font-size: 10px;
+      font-weight: 800;
+      background: rgba(84, 189, 122, 0.8);
+    }
+
+    .heatCell.red {
+      color: #1d0a08;
+      background: rgba(225, 111, 99, 0.78);
+    }
+
+    .heatCell.flat {
+      color: var(--muted);
+      background: #202621;
+    }
+
+    .backlog {
+      margin-top: 18px;
+      border: 1px solid var(--line);
+      background: var(--panel);
+      box-shadow: var(--shadow);
+    }
+
+    .backlogHead {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 16px;
+      padding: 14px;
+      border-bottom: 1px solid var(--line);
+      background: #131715;
+    }
+
+    .backlogHead h2 {
+      font-size: 16px;
+    }
+
+    .backlogHead p {
+      margin-top: 5px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .featureGrid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+    }
+
+    .feature {
+      min-height: 162px;
+      padding: 14px;
+      border-right: 1px solid var(--line);
+      border-bottom: 1px solid var(--line);
+    }
+
+    .feature:nth-child(4n) {
+      border-right: 0;
+    }
+
+    .feature h3 {
+      margin-top: 10px;
+      font-size: 13px;
+    }
+
+    .feature p {
+      margin-top: 8px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.5;
+    }
+
+    .priority {
+      display: inline-flex;
+      align-items: center;
+      min-height: 22px;
+      border-radius: 999px;
+      padding: 0 8px;
+      color: var(--ink-dark);
+      background: var(--amber);
+      font-size: 10px;
+      font-weight: 800;
+    }
+
+    .priority.p0 {
+      background: var(--green);
+    }
+
+    .priority.p2 {
+      color: var(--text);
+      background: var(--panel-3);
+      border: 1px solid var(--line);
+    }
+
+    .mobileNote {
+      margin-top: 16px;
+      padding: 12px 14px;
+      border: 1px solid var(--line);
+      background: #111513;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.55;
+    }
+
+    @media (max-width: 1220px) {
+      main {
+        padding: 14px;
+      }
+
+      .appShell {
+        grid-template-columns: 254px minmax(520px, 1fr);
+        grid-template-rows: 54px 44px auto auto auto;
+        grid-template-areas:
+          "nav topbar"
+          "nav tabs"
+          "nav workbench"
+          "risk risk"
+          "tape tape";
+      }
+
+      .riskPane {
+        border-top: 1px solid var(--line);
+      }
+
+      .tape {
+        grid-template-columns: 1fr 1fr;
+      }
+
+      .featureGrid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .panelGrid,
+      .panelGrid.two {
+        grid-template-columns: 1fr 1fr;
+      }
+
+      .panelCard.wide {
+        grid-column: 1 / -1;
+      }
+
+      .feature:nth-child(2n) {
+        border-right: 0;
+      }
+    }
+
+    @media (max-width: 820px) {
+      .pageHead,
+      .backlogHead {
+        align-items: flex-start;
+        flex-direction: column;
+      }
+
+      .sourceStrip {
+        justify-content: flex-start;
+      }
+
+      .appShell {
+        display: block;
+      }
+
+      .topbar {
+        grid-template-columns: 1fr;
+      }
+
+      .workspaceTabs {
+        border-right: 0;
+      }
+
+      .sessionStatus {
+        grid-auto-flow: row;
+        align-items: start;
+      }
+
+      .navPane,
+      .workbench,
+      .riskPane,
+      .tape {
+        display: block;
+        border-right: 0;
+      }
+
+      .marketStrip,
+      .detailGrid,
+      .tape,
+      .featureGrid,
+      .panelGrid,
+      .panelGrid.two,
+      .playbookSummary {
+        grid-template-columns: 1fr;
+      }
+
+      .panelCard.wide {
+        grid-column: auto;
+      }
+
+      .tabIntro {
+        flex-direction: column;
+      }
+
+      .tabActions {
+        justify-content: flex-start;
+      }
+
+      .workspaceTabs button {
+        min-width: 118px;
+      }
+
+      .auditRow,
+      .sourceRow,
+      .playbookRow,
+      .timelineRow,
+      .alertRule {
+        grid-template-columns: 1fr;
+      }
+
+      .chartArea {
+        grid-template-columns: 1fr;
+      }
+
+      .priceAxis {
+        display: none;
+      }
+
+      .chartCanvas {
+        min-height: 360px;
+      }
+
+      .watchList {
+        max-height: 380px;
+      }
+
+      .ticketGrid,
+      .ticketActions {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header class="pageHead">
+      <div>
+        <h1>StockAnalysis 터미널 대시보드 상세안</h1>
+        <p>macOS 네이티브 앱의 기본 화면 후보. 핵심 목표는 "관찰 → 판단 → 주문 전 검증 → 알림"을 한 화면에서 끝내는 것입니다.</p>
+      </div>
+      <nav class="sourceStrip" aria-label="참고 링크">
+        <a href="https://www.tradingview.com/support/solutions/43000739708-watchlist-alerts-your-trading-edge/">관심목록 알림</a>
+        <a href="https://www.interactivebrokers.com/en/trading/risk-navigator.php">리스크 내비게이터</a>
+        <a href="https://www.benzinga.com/pro/">실시간 뉴스</a>
+        <a href="https://www.koyfin.com/">시장 터미널</a>
+      </nav>
+    </header>
+
+    <section class="macWindow" aria-label="StockAnalysis 터미널 프로토타입">
+      <div class="chrome">
+        <span class="dot"></span>
+        <span class="dot"></span>
+        <span class="dot"></span>
+        <span class="chromeTitle">StockAnalysisMac / 터미널 대시보드 / 모의투자</span>
+      </div>
+
+      <div class="appShell">
+        <aside class="navPane" aria-label="관심목록 및 스캐너">
+          <div class="brand">
+            <div class="brandTop">
+              <h2>시장 인텔리전스</h2>
+              <span class="safePill">Sidecar 정상</span>
+            </div>
+            <p>공식 뉴스, RSS, 시그널 엔진, 포트폴리오 리스크를 로컬에서 감시합니다.</p>
+          </div>
+
+          <div class="miniStats">
+            <div class="miniStat">
+              <div class="label">순자산</div>
+              <div class="value">$128,420</div>
+              <div class="delta up">오늘 +1.84%</div>
+            </div>
+            <div class="miniStat">
+              <div class="label">현금</div>
+              <div class="value">$42,900</div>
+              <div class="delta flat">33.4% 대기</div>
+            </div>
+            <div class="miniStat">
+              <div class="label">사용 리스크</div>
+              <div class="value">41%</div>
+              <div class="delta up">한도 내</div>
+            </div>
+            <div class="miniStat">
+              <div class="label">알림</div>
+              <div class="value">12</div>
+              <div class="delta down">긴급 3개</div>
+            </div>
+          </div>
+
+          <div class="watchTools">
+            <div class="segmented" aria-label="자산군">
+              <button class="active">US</button>
+              <button>KR</button>
+              <button>ETF</button>
+              <button>가상자산</button>
+            </div>
+            <div class="scannerChips">
+              <span class="chip active">시그널</span>
+              <span class="chip">실적</span>
+              <span class="chip">거래량</span>
+              <span class="chip">갭</span>
+              <span class="chip">보유종목</span>
+            </div>
+          </div>
+
+          <div class="watchList">
+            <div class="sectionTitle">
+              <span>관심목록 / 모멘텀 + 뉴스</span>
+              <span>15m</span>
+            </div>
+            <div class="watchRow active">
+              <span class="ticker">NVDA</span>
+              <span><strong>$182.44</strong><span class="name">NVIDIA Corp</span></span>
+              <svg class="spark" viewBox="0 0 64 20" aria-hidden="true"><path d="M2 15 L10 13 L18 14 L26 10 L34 12 L42 7 L50 8 L62 4" fill="none" stroke="#54bd7a" stroke-width="2"/></svg>
+              <span class="up">+2.8%</span>
+            </div>
+            <div class="watchRow">
+              <span class="ticker">TSLA</span>
+              <span><strong>$315.18</strong><span class="name">Tesla Inc</span></span>
+              <svg class="spark" viewBox="0 0 64 20" aria-hidden="true"><path d="M2 6 L11 9 L19 8 L27 12 L35 11 L43 14 L51 13 L62 16" fill="none" stroke="#e16f63" stroke-width="2"/></svg>
+              <span class="down">-1.1%</span>
+            </div>
+            <div class="watchRow">
+              <span class="ticker">AAPL</span>
+              <span><strong>$246.03</strong><span class="name">Apple Inc</span></span>
+              <svg class="spark" viewBox="0 0 64 20" aria-hidden="true"><path d="M2 13 L10 11 L18 12 L26 10 L34 8 L42 8 L50 6 L62 7" fill="none" stroke="#41b7a6" stroke-width="2"/></svg>
+              <span class="up">+0.9%</span>
+            </div>
+            <div class="watchRow">
+              <span class="ticker">MSFT</span>
+              <span><strong>$501.62</strong><span class="name">Microsoft</span></span>
+              <svg class="spark" viewBox="0 0 64 20" aria-hidden="true"><path d="M2 10 L10 9 L18 11 L26 9 L34 6 L42 7 L50 5 L62 5" fill="none" stroke="#54bd7a" stroke-width="2"/></svg>
+              <span class="up">+1.4%</span>
+            </div>
+            <div class="watchRow">
+              <span class="ticker">AMD</span>
+              <span><strong>$164.22</strong><span class="name">Advanced Micro</span></span>
+              <svg class="spark" viewBox="0 0 64 20" aria-hidden="true"><path d="M2 15 L10 13 L18 11 L26 12 L34 8 L42 10 L50 7 L62 5" fill="none" stroke="#d9aa4a" stroke-width="2"/></svg>
+              <span class="up">+3.2%</span>
+            </div>
+            <div class="watchRow">
+              <span class="ticker">META</span>
+              <span><strong>$712.80</strong><span class="name">Meta Platforms</span></span>
+              <svg class="spark" viewBox="0 0 64 20" aria-hidden="true"><path d="M2 7 L10 8 L18 6 L26 9 L34 10 L42 11 L50 13 L62 12" fill="none" stroke="#e16f63" stroke-width="2"/></svg>
+              <span class="down">-0.6%</span>
+            </div>
+            <div class="watchRow">
+              <span class="ticker">PLTR</span>
+              <span><strong>$142.31</strong><span class="name">Palantir</span></span>
+              <svg class="spark" viewBox="0 0 64 20" aria-hidden="true"><path d="M2 16 L10 15 L18 13 L26 9 L34 8 L42 6 L50 7 L62 3" fill="none" stroke="#54bd7a" stroke-width="2"/></svg>
+              <span class="up">+5.1%</span>
+            </div>
+            <div class="watchRow">
+              <span class="ticker">SPY</span>
+              <span><strong>$628.10</strong><span class="name">S&P 500 ETF</span></span>
+              <svg class="spark" viewBox="0 0 64 20" aria-hidden="true"><path d="M2 12 L10 11 L18 11 L26 10 L34 9 L42 9 L50 8 L62 8" fill="none" stroke="#6ca8df" stroke-width="2"/></svg>
+              <span class="up">+0.4%</span>
+            </div>
+          </div>
+        </aside>
+
+        <header class="topbar">
+          <div class="search">
+            <span>⌘</span>
+            <span><strong>NVDA</strong> / 종목, 뉴스, 주문, 브리핑 검색</span>
+            <kbd>K</kbd>
+          </div>
+          <div class="sessionStatus">
+            <span class="safePill">모의투자 활성</span>
+            <span class="livePill">실거래 게이트 OFF</span>
+            <span class="warnPill">장 운영 중 02:31:12</span>
+          </div>
+          <button class="killSwitch">긴급 중지</button>
+        </header>
+
+        <nav class="workspaceTabs" aria-label="작업 탭">
+          <button class="active" data-tab="overview" aria-selected="true">개요 <span class="count">6</span></button>
+          <button data-tab="order" aria-selected="false">주문·리스크 <span class="count">P0</span></button>
+          <button data-tab="news" aria-selected="false">뉴스·알림 <span class="count">P1</span></button>
+          <button data-tab="replay" aria-selected="false">리플레이 <span class="count">P1</span></button>
+          <button data-tab="playbook" aria-selected="false">플레이북 <span class="count">P1</span></button>
+        </nav>
+
+        <section class="workbench" aria-label="차트 작업공간">
+          <div class="tabPanel overviewPanel active" data-tab-panel="overview">
+          <div class="marketStrip">
+            <div class="marketBox">
+              <div class="label">S&P 500</div>
+              <div class="value">6,284.9</div>
+              <div class="delta up">+0.42%</div>
+            </div>
+            <div class="marketBox">
+              <div class="label">Nasdaq 100</div>
+              <div class="value">22,118</div>
+              <div class="delta up">+0.77%</div>
+            </div>
+            <div class="marketBox">
+              <div class="label">VIX</div>
+              <div class="value">14.8</div>
+              <div class="delta down">-3.1%</div>
+            </div>
+            <div class="marketBox">
+              <div class="label">10년물 금리</div>
+              <div class="value">4.12%</div>
+              <div class="delta flat">+2bp</div>
+            </div>
+            <div class="marketBox">
+              <div class="label">USD/KRW</div>
+              <div class="value">1,371.2</div>
+              <div class="delta down">-0.22%</div>
+            </div>
+            <div class="marketBox">
+              <div class="label">상승 종목 비율</div>
+              <div class="value">61%</div>
+              <div class="delta up">상승 우세</div>
+            </div>
+          </div>
+
+          <div class="chartArea">
+            <div class="chartPanel">
+              <div class="chartHeader">
+                <div class="symbolBlock">
+                  <h2>NVDA</h2>
+                  <span>$182.44</span>
+                  <span class="up">+2.84%</span>
+                  <span>NASDAQ · 15m</span>
+                </div>
+                <div class="chartControls">
+                  <button class="control">1m</button>
+                  <button class="control active">15m</button>
+                  <button class="control">1D</button>
+                  <button class="control">HMA</button>
+                  <button class="control">RSI</button>
+                  <button class="control">거래량</button>
+                  <button class="control">뉴스 마커</button>
+                </div>
+              </div>
+
+              <div class="chartCanvas" aria-label="캔들 차트 목업">
+                <div class="chartBadge">
+                  <div class="badgeLine">
+                    <span>현재 시그널</span>
+                    <strong class="up">매수 관찰</strong>
+                  </div>
+                  <div class="badgeLine">
+                    <span>모델 신뢰도</span>
+                    <strong>67 / 100</strong>
+                  </div>
+                  <div class="badgeLine">
+                    <span>뉴스 영향</span>
+                    <strong class="amber">중간</strong>
+                  </div>
+                </div>
+                <svg viewBox="0 0 980 520" preserveAspectRatio="none" role="img" aria-label="시그널 마커가 포함된 NVDA 가격 차트">
+                  <defs>
+                    <linearGradient id="volumeFade" x1="0" x2="0" y1="0" y2="1">
+                      <stop offset="0%" stop-color="#41b7a6" stop-opacity="0.35"/>
+                      <stop offset="100%" stop-color="#41b7a6" stop-opacity="0.04"/>
+                    </linearGradient>
+                  </defs>
+                  <path d="M32 355 C104 312 148 330 205 276 C269 214 342 240 411 195 C489 145 548 166 612 125 C699 69 770 100 942 54" fill="none" stroke="#54bd7a" stroke-width="3"/>
+                  <path d="M32 382 C116 352 176 366 238 314 C322 255 397 279 475 231 C557 179 618 207 681 160 C758 103 831 128 942 92" fill="none" stroke="#a58ce4" stroke-width="2" stroke-dasharray="8 8" opacity="0.82"/>
+                  <path d="M32 418 C117 390 185 408 249 356 C331 294 418 318 494 273 C582 222 654 236 722 196 C801 145 870 157 942 119" fill="none" stroke="#6ca8df" stroke-width="2" opacity="0.8"/>
+                  <g stroke-width="2">
+                    <line x1="92" y1="321" x2="92" y2="389" stroke="#54bd7a"/><rect x="83" y="341" width="18" height="32" fill="#54bd7a"/>
+                    <line x1="132" y1="301" x2="132" y2="366" stroke="#e16f63"/><rect x="123" y="317" width="18" height="34" fill="#e16f63"/>
+                    <line x1="172" y1="278" x2="172" y2="347" stroke="#54bd7a"/><rect x="163" y="304" width="18" height="24" fill="#54bd7a"/>
+                    <line x1="212" y1="250" x2="212" y2="318" stroke="#54bd7a"/><rect x="203" y="274" width="18" height="31" fill="#54bd7a"/>
+                    <line x1="252" y1="230" x2="252" y2="310" stroke="#e16f63"/><rect x="243" y="253" width="18" height="36" fill="#e16f63"/>
+                    <line x1="292" y1="214" x2="292" y2="282" stroke="#54bd7a"/><rect x="283" y="233" width="18" height="30" fill="#54bd7a"/>
+                    <line x1="332" y1="231" x2="332" y2="304" stroke="#e16f63"/><rect x="323" y="247" width="18" height="42" fill="#e16f63"/>
+                    <line x1="372" y1="201" x2="372" y2="268" stroke="#54bd7a"/><rect x="363" y="220" width="18" height="32" fill="#54bd7a"/>
+                    <line x1="412" y1="178" x2="412" y2="249" stroke="#54bd7a"/><rect x="403" y="202" width="18" height="27" fill="#54bd7a"/>
+                    <line x1="452" y1="156" x2="452" y2="228" stroke="#54bd7a"/><rect x="443" y="184" width="18" height="24" fill="#54bd7a"/>
+                    <line x1="492" y1="170" x2="492" y2="246" stroke="#e16f63"/><rect x="483" y="189" width="18" height="40" fill="#e16f63"/>
+                    <line x1="532" y1="145" x2="532" y2="218" stroke="#54bd7a"/><rect x="523" y="165" width="18" height="34" fill="#54bd7a"/>
+                    <line x1="572" y1="122" x2="572" y2="198" stroke="#54bd7a"/><rect x="563" y="147" width="18" height="29" fill="#54bd7a"/>
+                    <line x1="612" y1="132" x2="612" y2="211" stroke="#e16f63"/><rect x="603" y="150" width="18" height="41" fill="#e16f63"/>
+                    <line x1="652" y1="100" x2="652" y2="180" stroke="#54bd7a"/><rect x="643" y="124" width="18" height="34" fill="#54bd7a"/>
+                    <line x1="692" y1="84" x2="692" y2="159" stroke="#54bd7a"/><rect x="683" y="107" width="18" height="30" fill="#54bd7a"/>
+                    <line x1="732" y1="95" x2="732" y2="171" stroke="#e16f63"/><rect x="723" y="116" width="18" height="39" fill="#e16f63"/>
+                    <line x1="772" y1="71" x2="772" y2="142" stroke="#54bd7a"/><rect x="763" y="92" width="18" height="31" fill="#54bd7a"/>
+                    <line x1="812" y1="67" x2="812" y2="130" stroke="#54bd7a"/><rect x="803" y="86" width="18" height="27" fill="#54bd7a"/>
+                    <line x1="852" y1="76" x2="852" y2="142" stroke="#e16f63"/><rect x="843" y="93" width="18" height="33" fill="#e16f63"/>
+                    <line x1="892" y1="59" x2="892" y2="124" stroke="#54bd7a"/><rect x="883" y="77" width="18" height="31" fill="#54bd7a"/>
+                  </g>
+                  <g opacity="0.85">
+                    <rect x="40" y="455" width="18" height="40" fill="url(#volumeFade)"/>
+                    <rect x="82" y="433" width="18" height="62" fill="url(#volumeFade)"/>
+                    <rect x="124" y="444" width="18" height="51" fill="url(#volumeFade)"/>
+                    <rect x="166" y="421" width="18" height="74" fill="url(#volumeFade)"/>
+                    <rect x="208" y="406" width="18" height="89" fill="url(#volumeFade)"/>
+                    <rect x="250" y="430" width="18" height="65" fill="url(#volumeFade)"/>
+                    <rect x="292" y="413" width="18" height="82" fill="url(#volumeFade)"/>
+                    <rect x="334" y="398" width="18" height="97" fill="url(#volumeFade)"/>
+                    <rect x="376" y="409" width="18" height="86" fill="url(#volumeFade)"/>
+                    <rect x="418" y="384" width="18" height="111" fill="url(#volumeFade)"/>
+                    <rect x="460" y="397" width="18" height="98" fill="url(#volumeFade)"/>
+                    <rect x="502" y="372" width="18" height="123" fill="url(#volumeFade)"/>
+                    <rect x="544" y="383" width="18" height="112" fill="url(#volumeFade)"/>
+                    <rect x="586" y="358" width="18" height="137" fill="url(#volumeFade)"/>
+                    <rect x="628" y="378" width="18" height="117" fill="url(#volumeFade)"/>
+                    <rect x="670" y="342" width="18" height="153" fill="url(#volumeFade)"/>
+                    <rect x="712" y="352" width="18" height="143" fill="url(#volumeFade)"/>
+                    <rect x="754" y="337" width="18" height="158" fill="url(#volumeFade)"/>
+                    <rect x="796" y="361" width="18" height="134" fill="url(#volumeFade)"/>
+                    <rect x="838" y="330" width="18" height="165" fill="url(#volumeFade)"/>
+                    <rect x="880" y="349" width="18" height="146" fill="url(#volumeFade)"/>
+                  </g>
+                  <g>
+                    <circle cx="574" cy="144" r="8" fill="#d9aa4a"/><text x="588" y="148" fill="#d9aa4a" font-size="13" font-family="monospace">뉴스</text>
+                    <circle cx="654" cy="108" r="8" fill="#54bd7a"/><text x="668" y="112" fill="#54bd7a" font-size="13" font-family="monospace">매수</text>
+                    <circle cx="854" cy="94" r="8" fill="#e16f63"/><text x="868" y="98" fill="#e16f63" font-size="13" font-family="monospace">리스크</text>
+                  </g>
+                </svg>
+              </div>
+            </div>
+
+            <div class="priceAxis" aria-hidden="true">
+              <span>188</span><span>186</span><span>184</span><span>182</span><span>180</span>
+              <span>178</span><span>176</span><span>174</span><span>172</span><span>170</span>
+            </div>
+          </div>
+
+          <div class="detailGrid">
+            <div class="detailPane">
+              <div class="sectionTitle"><span>시그널 스택</span><span>엔진</span></div>
+              <div class="signalRow"><span class="tag green">HMA</span><span>추세 정렬, 기울기 개선</span><span class="up">+18</span></div>
+              <div class="signalRow"><span class="tag amber">RSI</span><span>높지만 과열은 아님</span><span>+7</span></div>
+              <div class="signalRow"><span class="tag green">OBV</span><span>매집 흐름 확인</span><span class="up">+12</span></div>
+              <div class="signalRow"><span class="tag blue">ATR</span><span>손절 범위 확대</span><span>1.9%</span></div>
+              <div class="signalRow"><span class="tag red">CI</span><span>마감 근처 횡보 리스크 상승</span><span class="down">-5</span></div>
+            </div>
+
+            <div class="detailPane">
+              <div class="sectionTitle"><span>뉴스 영향</span><span>중복제거</span></div>
+              <div class="newsRow"><span class="tag amber">14:22</span><span>AI 설비투자 헤드라인이 NVDA, AMD, AVGO에 매핑됨</span><span>0.72</span></div>
+              <div class="newsRow"><span class="tag blue">13:58</span><span>애널리스트 목표가 조정, 출처 신뢰도 중간</span><span>0.46</span></div>
+              <div class="newsRow"><span class="tag green">12:41</span><span>반도체 섹터 ETF 자금 흐름 우호적</span><span>0.61</span></div>
+              <div class="newsRow"><span class="tag red">11:30</span><span>40분 뒤 매크로 이벤트, 자동화 신뢰도 축소</span><span>0.54</span></div>
+            </div>
+
+            <div class="detailPane">
+              <div class="sectionTitle"><span>포지션 지표</span><span>포트폴리오</span></div>
+              <div class="metricRow"><span>현재 노출</span><strong>$18,240</strong></div>
+              <div class="metricRow"><span>최대 허용 노출</span><strong>$24,000</strong></div>
+              <div class="metricRow"><span>추천 추가 수량</span><strong>12주</strong></div>
+              <div class="metricRow"><span>손절 거리</span><strong>3.2%</strong></div>
+              <div class="metricRow"><span>보상 / 리스크</span><strong class="up">2.1R</strong></div>
+            </div>
+          </div>
+          </div>
+
+          <div class="tabPanel" data-tab-panel="order">
+            <div class="tabIntro">
+              <div>
+                <h2>주문·리스크</h2>
+                <p>P0/P1 구현 대상인 OrderIntent 감사 로그, 리스크 시나리오, 주문 전 체크리스트를 한 탭으로 묶습니다.</p>
+              </div>
+              <div class="tabActions">
+                <span class="livePill">실거래 차단</span>
+                <span class="safePill">모의 주문 가능</span>
+              </div>
+            </div>
+
+            <div class="panelGrid two">
+              <article class="panelCard">
+                <div class="panelCardHead">
+                  <h3>주문 전 체크리스트</h3>
+                  <span class="tag amber">P1</span>
+                </div>
+                <div class="panelCardBody">
+                  <div class="checkRow">
+                    <span class="statusDot"></span>
+                    <span><span class="rowTitle">OrderIntent 생성됨</span><span class="rowMeta">NVDA 매수 12주, 지정가 $181.80, 유효시간 20분</span></span>
+                    <span class="tag green">정상</span>
+                  </div>
+                  <div class="checkRow">
+                    <span class="statusDot"></span>
+                    <span><span class="rowTitle">RiskCheck 통과</span><span class="rowMeta">집중도, 손절 거리, 계좌 리스크가 정책 범위 안입니다.</span></span>
+                    <span class="tag green">정상</span>
+                  </div>
+                  <div class="checkRow">
+                    <span class="statusDot amber"></span>
+                    <span><span class="rowTitle">CPI 발표 40분 전</span><span class="rowMeta">자동화 신뢰도를 낮추고 시장가 주문을 금지합니다.</span></span>
+                    <span class="tag amber">주의</span>
+                  </div>
+                  <div class="checkRow">
+                    <span class="statusDot red"></span>
+                    <span><span class="rowTitle">실거래 게이트 OFF</span><span class="rowMeta">실거래 전송은 차단하고 모의 주문만 허용합니다.</span></span>
+                    <span class="tag red">차단</span>
+                  </div>
+                </div>
+              </article>
+
+              <article class="panelCard">
+                <div class="panelCardHead">
+                  <h3>리스크 시나리오</h3>
+                  <span class="tag green">P0</span>
+                </div>
+                <div class="panelCardBody">
+                  <div class="scenarioList">
+                    <div class="scenarioItem"><span>NASDAQ -2%</span><div class="barTrack"><div class="barFill amber" style="width: 58%;"></div></div><strong class="down">-$1,420</strong></div>
+                    <div class="scenarioItem"><span>반도체 -4%</span><div class="barTrack"><div class="barFill red" style="width: 82%;"></div></div><strong class="down">-$2,260</strong></div>
+                    <div class="scenarioItem"><span>VIX +5p</span><div class="barTrack"><div class="barFill amber" style="width: 49%;"></div></div><strong class="down">-$980</strong></div>
+                    <div class="scenarioItem"><span>USD/KRW +1.5%</span><div class="barTrack"><div class="barFill" style="width: 31%;"></div></div><strong class="up">+$210</strong></div>
+                  </div>
+                </div>
+              </article>
+
+              <article class="panelCard wide">
+                <div class="panelCardHead">
+                  <h3>OrderIntent 감사 로그</h3>
+                  <span class="tag green">P0</span>
+                </div>
+                <div class="panelCardBody">
+                  <div class="auditRow"><time>14:23:11</time><span><span class="rowTitle">시그널 후보 생성</span><span class="rowMeta">HMA + OBV + 뉴스 영향 점수 기반, 모델 신뢰도 67</span></span><span class="tag blue">생성</span></div>
+                  <div class="auditRow"><time>14:23:12</time><span><span class="rowTitle">시세 스냅샷 저장</span><span class="rowMeta">bid/ask, 스프레드, ATR, 거래량, 뉴스 원문 해시 저장</span></span><span class="tag green">저장</span></div>
+                  <div class="auditRow"><time>14:23:13</time><span><span class="rowTitle">RiskCheck 결과 기록</span><span class="rowMeta">모의 주문 허용, 실거래 게이트 차단</span></span><span class="tag amber">보류</span></div>
+                  <div class="auditRow"><time>14:23:15</time><span><span class="rowTitle">사용자 검토 대기</span><span class="rowMeta">주문 버튼 클릭 전 체크리스트 확인 필요</span></span><span class="tag violet">대기</span></div>
+                </div>
+              </article>
+            </div>
+          </div>
+
+          <div class="tabPanel" data-tab-panel="news">
+            <div class="tabIntro">
+              <div>
+                <h2>뉴스·알림</h2>
+                <p>관심목록 단위 알림과 뉴스 신뢰도 점수를 묶어 알림 피로도를 줄이고, 자동매매 입력값 품질을 관리합니다.</p>
+              </div>
+              <div class="tabActions">
+                <span class="warnPill">긴급 3개</span>
+                <span class="safePill">중복 제거 ON</span>
+              </div>
+            </div>
+
+            <div class="panelGrid">
+              <article class="panelCard wide">
+                <div class="panelCardHead">
+                  <h3>관심목록 단위 알림</h3>
+                  <span class="tag green">P0</span>
+                </div>
+                <div class="panelCardBody">
+                  <div class="alertRule"><span>모멘텀</span><span><span class="rowTitle">15분 거래량 2.0x + HMA 상승 전환</span><span class="rowMeta">US 성장주 관심목록 전체에 적용</span></span><span class="tag green">활성</span></div>
+                  <div class="alertRule"><span>보유 리스크</span><span><span class="rowTitle">손절선 1% 이내 접근</span><span class="rowMeta">보유종목에만 macOS 알림과 메뉴바 배지 표시</span></span><span class="tag red">긴급</span></div>
+                  <div class="alertRule"><span>뉴스</span><span><span class="rowTitle">신뢰도 A/B 출처 + 영향 점수 0.65 이상</span><span class="rowMeta">NVDA, AMD, AVGO, QQQ에 티커 매핑</span></span><span class="tag amber">감시</span></div>
+                  <div class="alertRule"><span>실적</span><span><span class="rowTitle">발표 24시간 전 자동 진입 금지</span><span class="rowMeta">OrderIntent 생성은 허용, 주문 전 체크리스트에서 차단</span></span><span class="tag blue">보호</span></div>
+                </div>
+              </article>
+
+              <article class="panelCard">
+                <div class="panelCardHead">
+                  <h3>뉴스 신뢰도 점수</h3>
+                  <span class="tag amber">P1</span>
+                </div>
+                <div class="panelCardBody">
+                  <div class="sourceRow"><span><span class="rowTitle">공식 공시 / 기업 IR</span><span class="rowMeta">원문 우선, 자동매매 입력 허용</span></span><strong>A</strong><span class="tag green">0.92</span></div>
+                  <div class="sourceRow"><span><span class="rowTitle">검증된 금융 뉴스</span><span class="rowMeta">중복 확인 후 알림</span></span><strong>B</strong><span class="tag blue">0.74</span></div>
+                  <div class="sourceRow"><span><span class="rowTitle">일반 RSS</span><span class="rowMeta">요약만 표시, 주문 입력 제한</span></span><strong>C</strong><span class="tag amber">0.48</span></div>
+                  <div class="sourceRow"><span><span class="rowTitle">미확인 소셜 루머</span><span class="rowMeta">v1 기본 경로 제외</span></span><strong>D</strong><span class="tag red">차단</span></div>
+                </div>
+              </article>
+
+              <article class="panelCard full">
+                <div class="panelCardHead">
+                  <h3>티커 매핑 및 알림 쿨다운</h3>
+                  <span class="tag blue">운영</span>
+                </div>
+                <div class="panelCardBody">
+                  <div class="auditRow"><time>14:22</time><span><span class="rowTitle">AI 설비투자 헤드라인</span><span class="rowMeta">NVDA 0.72, AMD 0.61, AVGO 0.57로 매핑. 20분 쿨다운 적용.</span></span><span class="tag amber">중요</span></div>
+                  <div class="auditRow"><time>13:58</time><span><span class="rowTitle">애널리스트 목표가 조정</span><span class="rowMeta">출처 B, 같은 원문 3개 중복 제거, 영향 점수 0.46</span></span><span class="tag blue">요약</span></div>
+                  <div class="auditRow"><time>12:41</time><span><span class="rowTitle">반도체 ETF 자금 유입</span><span class="rowMeta">SOXX, SMH, NVDA, AMD에 섹터 영향으로 연결</span></span><span class="tag green">긍정</span></div>
+                </div>
+              </article>
+            </div>
+          </div>
+
+          <div class="tabPanel" data-tab-panel="replay">
+            <div class="tabIntro">
+              <div>
+                <h2>리플레이</h2>
+                <p>과거 캔들, 뉴스, 시그널, RiskCheck 결과를 시간순으로 재생해 전략이 왜 진입하거나 차단됐는지 검토합니다.</p>
+              </div>
+              <div class="tabActions">
+                <button class="control active">재생</button>
+                <button class="control">1x</button>
+                <button class="control">이벤트만</button>
+              </div>
+            </div>
+
+            <div class="panelGrid two">
+              <article class="panelCard wide">
+                <div class="panelCardHead">
+                  <h3>세션 리플레이 타임라인</h3>
+                  <span class="tag amber">P1</span>
+                </div>
+                <div class="panelCardBody">
+                  <div class="replayRail">
+                    <span class="replayPoint" style="left: 18%;"></span>
+                    <span class="replayPoint news" style="left: 42%;"></span>
+                    <span class="replayPoint" style="left: 57%;"></span>
+                    <span class="replayPoint risk" style="left: 64%;"></span>
+                    <span class="replayPoint news" style="left: 78%;"></span>
+                    <span class="replayCursor"></span>
+                  </div>
+                  <div class="timelineRow"><time>13:55</time><span><span class="rowTitle">AMD 모의 체결</span><span class="rowMeta">지정가 체결 후 포트폴리오 리스크 사용량 38% → 41%</span></span><span class="tag violet">체결</span></div>
+                  <div class="timelineRow"><time>14:09</time><span><span class="rowTitle">리스크 정책 적용</span><span class="rowMeta">NVDA 추가 수량을 12주로 제한</span></span><span class="tag blue">리스크</span></div>
+                  <div class="timelineRow"><time>14:18</time><span><span class="rowTitle">매수 관찰 전환</span><span class="rowMeta">HMA 기울기와 OBV 다이버전스 확인</span></span><span class="tag green">시그널</span></div>
+                  <div class="timelineRow"><time>14:22</time><span><span class="rowTitle">AI 설비투자 뉴스</span><span class="rowMeta">영향 점수 0.72, 실거래는 CPI 구간으로 차단 유지</span></span><span class="tag amber">뉴스</span></div>
+                </div>
+              </article>
+
+              <article class="panelCard">
+                <div class="panelCardHead">
+                  <h3>리플레이 판정</h3>
+                  <span class="tag green">학습</span>
+                </div>
+                <div class="panelCardBody">
+                  <div class="metricRow"><span>진입 후보 정확도</span><strong>67%</strong></div>
+                  <div class="metricRow"><span>차단 근거</span><strong>CPI 구간</strong></div>
+                  <div class="metricRow"><span>놓친 알림</span><strong class="up">0개</strong></div>
+                  <div class="metricRow"><span>다음 개선</span><strong>쿨다운</strong></div>
+                  <p style="margin-top: 12px; color: var(--muted); font-size: 12px; line-height: 1.55;">리플레이는 백테스트 점수보다 운영 판단을 복기하는 용도입니다. 뉴스 영향, 시그널, 리스크 차단이 같은 시간축에 있어야 실제 개선이 가능합니다.</p>
+                </div>
+              </article>
+            </div>
+          </div>
+
+          <div class="tabPanel" data-tab-panel="playbook">
+            <div class="tabIntro">
+              <div>
+                <h2>포지션 플레이북</h2>
+                <p>진입 전 목표가, 손절, 추가매수, 축소 조건을 저장해 수동 클릭과 자동 워커가 같은 규칙을 보게 합니다.</p>
+              </div>
+              <div class="tabActions">
+                <button class="control active">NVDA</button>
+                <button class="control">보유종목</button>
+                <button class="control">템플릿</button>
+              </div>
+            </div>
+
+            <div class="playbookSummary">
+              <div class="field"><span>가설</span><strong>AI 리더 모멘텀</strong></div>
+              <div class="field"><span>진입 방식</span><strong>눌림 지정가</strong></div>
+              <div class="field"><span>무효화</span><strong>$176.10 이탈</strong></div>
+              <div class="field"><span>목표</span><strong>2.1R / 분할청산</strong></div>
+            </div>
+
+            <div class="panelGrid two">
+              <article class="panelCard wide">
+                <div class="panelCardHead">
+                  <h3>규칙 목록</h3>
+                  <span class="tag amber">P1</span>
+                </div>
+                <div class="panelCardBody">
+                  <div class="playbookRow"><span>진입</span><span><span class="rowTitle">15m HMA 유지 + 현재가 $181.80 이하</span><span class="rowMeta">시장가 추격 금지, 지정가만 허용</span></span><strong>$181.80</strong><span class="tag green">대기</span></div>
+                  <div class="playbookRow"><span>손절</span><span><span class="rowTitle">종가 기준 $176.10 이탈 또는 뉴스 리스크 급등</span><span class="rowMeta">자동 축소 후보 생성</span></span><strong>$176.10</strong><span class="tag red">보호</span></div>
+                  <div class="playbookRow"><span>추가</span><span><span class="rowTitle">돌파 후 되돌림, 거래량 1.8x 이상</span><span class="rowMeta">최대 추가 수량 12주</span></span><strong>12주</strong><span class="tag blue">제한</span></div>
+                  <div class="playbookRow"><span>청산</span><span><span class="rowTitle">2.1R 도달 시 40% 축소, 나머지는 추적 손절</span><span class="rowMeta">실적 발표 24시간 전 재검토</span></span><strong>$194.20</strong><span class="tag violet">계획</span></div>
+                </div>
+              </article>
+
+              <article class="panelCard">
+                <div class="panelCardHead">
+                  <h3>자동 워커 연결</h3>
+                  <span class="tag blue">운영</span>
+                </div>
+                <div class="panelCardBody">
+                  <div class="checkRow"><span class="statusDot"></span><span><span class="rowTitle">모의 실행 허용</span><span class="rowMeta">플레이북 조건 충족 시 paper state에 주문 기록</span></span><span class="tag green">ON</span></div>
+                  <div class="checkRow"><span class="statusDot red"></span><span><span class="rowTitle">실거래 실행 차단</span><span class="rowMeta">live gate가 OFF라 broker submit 호출 금지</span></span><span class="tag red">OFF</span></div>
+                  <div class="checkRow"><span class="statusDot amber"></span><span><span class="rowTitle">사용자 확인 필요</span><span class="rowMeta">CPI 전후 60분은 수동 승인 요구</span></span><span class="tag amber">승인</span></div>
+                </div>
+              </article>
+            </div>
+          </div>
+        </section>
+
+        <aside class="riskPane" aria-label="판단 및 리스크 패널">
+          <div class="decisionHeader">
+            <h2>판단 패널</h2>
+            <p>추천은 주문이 아니라 OrderIntent 후보입니다. 실거래는 인증 정보, 실거래 권한, RiskCheck, 긴급 중지를 모두 통과해야 합니다.</p>
+          </div>
+
+          <div class="scoreCard">
+            <div class="scoreRing">
+              <div class="scoreRingInner">67</div>
+            </div>
+            <div class="scoreText">
+              <h3>매수 관찰 · 조건부 진입</h3>
+              <p>추세와 수급은 우호적이지만, 이벤트 리스크와 장 마감 변동성을 반영해 즉시 시장가 대신 지정가 주문 후보만 생성합니다.</p>
+              <div style="margin-top: 9px;">
+                <span class="riskPill">리스크 중간</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="orderTicket">
+            <div class="sectionTitle" style="padding:0;border:0;background:transparent;min-height:20px;">
+              <span>OrderIntent 미리보기</span>
+              <span>미전송</span>
+            </div>
+            <div class="ticketGrid">
+              <div class="field"><span>방향</span><strong class="up">매수</strong></div>
+              <div class="field"><span>유형</span><strong>지정가</strong></div>
+              <div class="field"><span>수량</span><strong>12</strong></div>
+              <div class="field"><span>지정가</span><strong>$181.80</strong></div>
+              <div class="field"><span>손절</span><strong>$176.10</strong></div>
+              <div class="field"><span>유효시간</span><strong>20분</strong></div>
+            </div>
+            <div class="ticketActions">
+              <button class="primaryButton">모의 주문</button>
+              <button class="ghostButton">계획 저장</button>
+            </div>
+          </div>
+
+          <div class="guardList">
+            <div class="sectionTitle"><span>안전 게이트</span><span>차단 우선</span></div>
+            <div class="guardRow">
+              <span class="statusDot"></span>
+              <span><strong>RiskCheck 통과</strong><span>포지션 크기, 집중도, 손절 거리가 정책 범위 안입니다.</span></span>
+              <span class="tag green">정상</span>
+            </div>
+            <div class="guardRow">
+              <span class="statusDot red"></span>
+              <span><strong>실거래 비활성</strong><span>ENABLE_LIVE_TRADING=false. 실거래 전송은 계속 차단됩니다.</span></span>
+              <span class="tag red">차단</span>
+            </div>
+            <div class="guardRow">
+              <span class="statusDot amber"></span>
+              <span><strong>매크로 이벤트 구간</strong><span>40분 뒤 CPI 발표. 자동화 신뢰도를 낮춥니다.</span></span>
+              <span class="tag amber">경고</span>
+            </div>
+            <div class="guardRow">
+              <span class="statusDot"></span>
+              <span><strong>인증 정보 상태</strong><span>Toss 인증 정보는 Keychain에 있으나, 오늘 브로커 상태는 아직 미확인입니다.</span></span>
+              <span class="tag blue">확인</span>
+            </div>
+            <div class="guardRow">
+              <span class="statusDot"></span>
+              <span><strong>감사 로그 준비됨</strong><span>Intent, 시세 스냅샷, 리스크 결과, 사용자 행동이 저장됩니다.</span></span>
+              <span class="tag green">정상</span>
+            </div>
+          </div>
+
+          <div class="automationQueue">
+            <div class="sectionTitle" style="padding:0;border:0;background:transparent;min-height:24px;">
+              <span>자동화 큐</span>
+              <span>실거래 일시중지</span>
+            </div>
+            <div class="queueItem"><span class="tag green">모의</span><span>눌림 후 NVDA 계획 실행</span><span>02:11</span></div>
+            <div class="queueItem"><span class="tag amber">알림</span><span>손절선 이탈 시 TSLA 축소</span><span>대기중</span></div>
+            <div class="queueItem"><span class="tag blue">브리핑</span><span>장마감 리포트 생성</span><span>16:05</span></div>
+          </div>
+        </aside>
+
+        <section class="tape" aria-label="이벤트 테이프">
+          <div class="tapePane">
+            <div class="sectionTitle"><span>이벤트 테이프</span><span>실시간</span></div>
+            <div class="tapeRow"><time>14:22</time><p><strong>AI 설비투자 헤드라인</strong><br>NVDA 영향 점수가 0.58에서 0.72로 상승했습니다.</p><span class="tag amber">뉴스</span></div>
+            <div class="tapeRow"><time>14:18</time><p><strong>시그널 업데이트</strong><br>HMA 기울기와 OBV 다이버전스가 확인됐습니다.</p><span class="tag green">시그널</span></div>
+            <div class="tapeRow"><time>14:09</time><p><strong>리스크 정책</strong><br>최대 추가 수량이 12주로 제한됐습니다.</p><span class="tag blue">리스크</span></div>
+            <div class="tapeRow"><time>13:55</time><p><strong>모의 체결</strong><br>AMD 테스트 주문이 지정가에 체결됐습니다.</p><span class="tag violet">모의</span></div>
+          </div>
+
+          <div class="tapePane">
+            <div class="sectionTitle"><span>알림 매트릭스</span><span>규칙</span></div>
+            <div class="tapeRow"><time>ARM</time><p><strong>거래량 급증</strong><br>평균의 2.4배, 스캐너 규칙에 일치했습니다.</p><span class="tag green">켜짐</span></div>
+            <div class="tapeRow"><time>TSLA</time><p><strong>손절선 근접</strong><br>현재가가 리스크 라인보다 0.8% 위에 있습니다.</p><span class="tag red">긴급</span></div>
+            <div class="tapeRow"><time>AAPL</time><p><strong>실적 발표 구간</strong><br>발표 전 자동 추가매수를 금지합니다.</p><span class="tag amber">보호</span></div>
+          </div>
+
+          <div class="tapePane">
+            <div class="sectionTitle"><span>섹터 열지도</span><span>1D</span></div>
+            <div class="miniHeatmap">
+              <div class="heatCell">NVDA</div>
+              <div class="heatCell">AMD</div>
+              <div class="heatCell red">TSLA</div>
+              <div class="heatCell">MSFT</div>
+              <div class="heatCell flat">SPY</div>
+              <div class="heatCell">AVGO</div>
+              <div class="heatCell red">META</div>
+              <div class="heatCell">AAPL</div>
+              <div class="heatCell flat">QQQ</div>
+              <div class="heatCell">PLTR</div>
+            </div>
+          </div>
+
+          <div class="tapePane">
+            <div class="sectionTitle"><span>세션 노트</span><span>로컬</span></div>
+            <div class="tapeRow"><time>계획</time><p><strong>핵심 가설</strong><br>AI 리더 모멘텀은 유효하지만, 과도하게 뻗은 캔들은 추격하지 않습니다.</p><span class="tag blue">노트</span></div>
+            <div class="tapeRow"><time>규칙</time><p><strong>수동 해제 금지</strong><br>게이트가 OFF인 동안 실거래 전송은 금지됩니다.</p><span class="tag red">잠금</span></div>
+          </div>
+        </section>
+      </div>
+    </section>
+
+    <section class="backlog" aria-label="추천 거래 시스템 추가 기능">
+      <div class="backlogHead">
+        <div>
+          <h2>구현 범위: P0-P1은 v1 대상, P2는 후순위</h2>
+          <p>P0/P1 기능은 위 탭 구조 안에 녹였습니다. P2는 화면 밖 보조 기능으로 두고, 핵심 거래 플로우가 안정된 뒤 붙이는 편이 낫습니다.</p>
+        </div>
+        <span class="safePill">P1까지 포함</span>
+      </div>
+
+      <div class="featureGrid">
+        <article class="feature">
+          <span class="priority p0">P0</span>
+          <h3>OrderIntent 감사 로그</h3>
+          <p>주문 후보 생성 이유, 시세 스냅샷, 뉴스 근거, RiskCheck 결과, 사용자 클릭을 모두 저장합니다. 사고 분석과 자동매매 디버깅에 필수입니다.</p>
+        </article>
+        <article class="feature">
+          <span class="priority p0">P0</span>
+          <h3>리스크 시나리오 패널</h3>
+          <p>포트폴리오 전체가 금리, 지수, 섹터, 환율 충격을 받았을 때 손실 추정치를 보여줍니다. 단일 종목 신호보다 중요한 계좌 단위 방어 장치입니다.</p>
+        </article>
+        <article class="feature">
+          <span class="priority p0">P0</span>
+          <h3>관심목록 단위 알림</h3>
+          <p>종목마다 알림을 따로 만들지 않고 관심목록 전체에 동일 조건을 걸 수 있게 합니다. 돌파, 거래량, 뉴스 중요도, 보유 리스크에 특히 유용합니다.</p>
+        </article>
+        <article class="feature">
+          <span class="priority">P1</span>
+          <h3>뉴스 신뢰도 점수</h3>
+          <p>공식 공시, 기업 보도자료, 검증된 뉴스, 일반 RSS를 등급화합니다. 알림 피로도를 줄이고 자동매매 입력값 품질을 관리합니다.</p>
+        </article>
+        <article class="feature">
+          <span class="priority">P1</span>
+          <h3>주문 전 체크리스트</h3>
+          <p>실적 발표, 경제지표, 장 마감 임박, 스프레드 확대, 과도한 ATR 같은 조건을 주문 버튼 앞에서 강제로 확인합니다.</p>
+        </article>
+        <article class="feature">
+          <span class="priority">P1</span>
+          <h3>리플레이 모드</h3>
+          <p>과거 뉴스와 캔들, 신호를 시간순으로 재생해 전략이 왜 매수 또는 차단됐는지 검토합니다. 백테스트와 실제 운영 사이를 이어줍니다.</p>
+        </article>
+        <article class="feature">
+          <span class="priority">P1</span>
+          <h3>포지션 플레이북</h3>
+          <p>진입 전 목표가, 손절, 추가매수 조건, 축소 조건을 저장합니다. 감정적 클릭을 줄이고 자동 워커가 같은 규칙을 재사용할 수 있습니다.</p>
+        </article>
+        <article class="feature">
+          <span class="priority p2">P2</span>
+          <h3>오디오 Squawk 모드</h3>
+          <p>중요 알림만 짧은 음성으로 읽어주는 모드입니다. 화면을 계속 보지 않아도 뉴스와 보유종목 리스크를 놓치지 않게 합니다.</p>
+        </article>
+      </div>
+    </section>
+
+    <p class="mobileNote">
+      macOS 앱에서는 이 화면을 기본 데스크톱 워크스페이스로 두고, 메뉴바 미니뷰에는 Sidecar 상태, 긴급 알림, 모의/실거래 게이트, 긴급 중지만 노출하는 구성이 적합합니다.
+      모바일 대응은 보조 목표이며, 좁은 화면에서는 관심목록 → 판단 패널 → 이벤트 테이프 → 차트 순서로 접는 것이 좋습니다.
+    </p>
+  </main>
+  <script>
+    const tabButtons = Array.from(document.querySelectorAll("[data-tab]"));
+    const tabPanels = Array.from(document.querySelectorAll("[data-tab-panel]"));
+
+    function activateTab(tabName) {
+      tabButtons.forEach((button) => {
+        const isActive = button.dataset.tab === tabName;
+        button.classList.toggle("active", isActive);
+        button.setAttribute("aria-selected", String(isActive));
+      });
+
+      tabPanels.forEach((panel) => {
+        panel.classList.toggle("active", panel.dataset.tabPanel === tabName);
+      });
+    }
+
+    tabButtons.forEach((button) => {
+      button.addEventListener("click", () => activateTab(button.dataset.tab));
+    });
+  </script>
+</body>
+</html>
