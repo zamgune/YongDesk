@@ -1,8 +1,24 @@
-# StockAnalysis
+# YongStockDesk
 
-StockAnalysis는 관심종목, 포트폴리오 관리, 단건 차트 분석, 데일리 시장 브리핑을 한 화면에서 다루는 트레이딩 신호 워크벤치입니다.
+YongStockDesk는 관심종목, 포트폴리오 관리, 단건 차트 분석, 데일리 시장 브리핑과 자동화 전략 설계를 한곳에서 다루는 macOS 트레이딩 워크벤치입니다.
 
 이 앱은 자동 매수/매도 지시가 아니라 의사결정 보조 도구입니다. 최종 진입 여부는 가격 움직임, 거래량, 시장 상태, 개인 리스크 한도를 함께 보고 판단해야 합니다.
+
+이 저장소는 기존 StockAnalysis에서 분리한 최신 앱 소스의 기준 저장소입니다. 현재 배포 호환성을 위해 앱 번들 이름 `StockAnalysis.app`, Swift 제품명, 번들 ID, Keychain 서비스와 App Support 경로는 유지합니다. 전체 YongStockDesk 리브랜딩과 기존 사용자 데이터 이전은 별도 단계에서 진행합니다.
+
+## macOS App
+
+SwiftUI 앱은 `apps/macos/StockAnalysisMac`, 로컬 TypeScript sidecar와 패키징 도구는 `scripts/`에 있습니다. 앱은 sidecar가 사용하는 `src/` 도메인·유스케이스와 함께 빌드되므로 이 저장소 전체가 배포 소스의 기준입니다.
+
+```bash
+yarn install --frozen-lockfile
+yarn mac:test
+yarn mac:app
+yarn mac:verify
+yarn mac:verify:launch
+```
+
+상세한 로컬 실행, Toss 연결과 배포 절차는 [macOS 네이티브 앱 안내](docs/macos-native.md)를 참고합니다.
 
 ## Main Features
 
@@ -17,8 +33,8 @@ StockAnalysis는 관심종목, 포트폴리오 관리, 단건 차트 분석, 데
 ## Getting Started
 
 ```bash
-npm install
-npm run dev
+yarn install --frozen-lockfile
+yarn dev
 ```
 
 브라우저에서 [http://localhost:3000](http://localhost:3000)을 엽니다.
@@ -26,26 +42,26 @@ npm run dev
 검증 명령:
 
 ```bash
-npm run lint
-npm run build
+yarn lint
+yarn build
 ```
 
 현재 테스트 스크립트:
 
 ```bash
-npm run test:crypto-buy
-npm run test:community-pain
-npm run test:market-briefing
-npm run test:portfolio-daily-action
-npm run test:signal-reliability
-npm run test:symbol-search
-npm run test:trading
+yarn test:crypto-buy
+yarn test:community-pain
+yarn test:market-briefing
+yarn test:portfolio-daily-action
+yarn test:signal-reliability
+yarn test:symbol-search
+yarn test:trading
 ```
 
 종목 마스터 캐시 갱신:
 
 ```bash
-npm run refresh:symbol-master
+yarn refresh:symbol-master
 ```
 
 ## Core API
@@ -132,13 +148,13 @@ warnings: 정규장 확인 필요 안내
 기본 실행:
 
 ```bash
-npm run backtest:crypto-buy -- --symbols BTC,ETH,SOL --tf 1d --start 2024-01-01 --mode both --cost all
+yarn backtest:crypto-buy --symbols BTC,ETH,SOL --tf 1d --start 2024-01-01 --mode both --cost all
 ```
 
 결과 파일 저장:
 
 ```bash
-npm run backtest:crypto-buy -- --symbols BTC --tf 4h --start 2026-02-01 --mode A --cost normal --out ./artifacts/crypto-buy
+yarn backtest:crypto-buy --symbols BTC --tf 4h --start 2026-02-01 --mode A --cost normal --out ./artifacts/crypto-buy
 ```
 
 ## Documentation
