@@ -430,7 +430,7 @@ private struct BeginnerSidebar: View {
                     .foregroundStyle(BeginnerPalette.green)
                 if !compact {
                     VStack(alignment: .leading, spacing: 1) {
-                        Text("YongStockDesk")
+                        Text("Yong'Desk")
                             .font(.system(size: 14, weight: .bold))
                         Text("시장 판단을 한눈에")
                             .font(.system(size: 10))

@@ -230,6 +230,8 @@ test("mac app plist uses the package version and a numeric build number", () => 
   const buildNumber = normalizeMacBuildNumber("42");
   const plist = buildMacInfoPlist({ version: packageVersion, buildNumber });
 
+  assert.match(plist, /<key>CFBundleDisplayName<\/key>\s*<string>Yong'Desk<\/string>/);
+  assert.match(plist, /<key>CFBundleIconFile<\/key>\s*<string>YongDesk\.icns<\/string>/);
   assert.match(plist, new RegExp(`<key>CFBundleShortVersionString</key>\\s*<string>${packageVersion.replaceAll(".", "\\.")}</string>`));
   assert.match(plist, /<key>CFBundleVersion<\/key>\s*<string>42<\/string>/);
 });
