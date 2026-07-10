@@ -1,4 +1,5 @@
-import type { LoopGridPlan, LoopGridState } from "@/domain/automation";
+import type { AutomationOrderSizing, LoopGridPlan, LoopGridState } from "@/domain/automation";
+import { resolveOrderSizing } from "./resolve-order-sizing.ts";
 
 export type LoopGridBuyTrigger = {
   side: "buy";
@@ -34,15 +35,11 @@ export type EvaluateLoopGridInput = {
   maxPositionValue: number;
   /** 기준가 대비 이 하락률을 넘으면 신규 매수만 중단합니다. */
   maxLossPct: number;
+  orderSizing?: AutomationOrderSizing;
   now: string;
   /** 코인처럼 소수 수량을 허용할 때 true. */
   fractionalQuantity?: boolean;
 };
-
-const stepQuantity = (notional: number, price: number, fractional = false) =>
-  fractional
-    ? Math.floor((notional / price) * 100_000_000) / 100_000_000
-    : Math.max(1, Math.floor(notional / price));
 
 const minutesBetween = (fromIso: string, toIso: string) => {
   const from = new Date(fromIso).getTime();
@@ -69,6 +66,7 @@ export const evaluateLoopGrid = ({
   maxDailySells,
   maxPositionValue,
   maxLossPct,
+  orderSizing,
   now,
   fractionalQuantity = false,
 }: EvaluateLoopGridInput): LoopGridEvaluation => {
@@ -87,14 +85,6 @@ export const evaluateLoopGrid = ({
   }
   if (plan.buyDropPct <= 0 || plan.sellRisePct <= 0) {
     blockers.push("순환매매 매수/매도 퍼센트는 0보다 커야 합니다.");
-    return { buy: null, sell: null, blockers };
-  }
-  if (plan.notional <= 0) {
-    blockers.push("순환매매 1회 매수 금액이 필요합니다.");
-    return { buy: null, sell: null, blockers };
-  }
-  if (plan.notional > maxPositionValue) {
-    blockers.push("1회 매수 금액이 최대 보유 금액을 초과합니다.");
     return { buy: null, sell: null, blockers };
   }
   if (
@@ -134,6 +124,20 @@ export const evaluateLoopGrid = ({
   }
 
   const buyLevel = loopBuyLevel(anchorPrice, plan.buyDropPct);
+  const sizing = resolveOrderSizing({
+    orderSizing,
+    legacyNotional: plan.notional,
+    price: buyLevel,
+    fractionalQuantity,
+  });
+  if (sizing.quantity <= 0 || sizing.notional <= 0) {
+    blockers.push("순환매매 1회 매수 금액이 필요합니다.");
+    return { buy: null, sell: null, blockers };
+  }
+  if (sizing.notional > maxPositionValue) {
+    blockers.push("1회 매수 금액이 최대 보유 금액을 초과합니다.");
+    return { buy: null, sell: null, blockers };
+  }
   if (marketPrice > buyLevel) {
     return { buy: null, sell: null, blockers };
   }
@@ -151,8 +155,8 @@ export const evaluateLoopGrid = ({
       side: "buy",
       buyLevel,
       anchorPrice,
-      quantity: stepQuantity(plan.notional, buyLevel, fractionalQuantity),
-      notional: plan.notional,
+      quantity: sizing.quantity,
+      notional: sizing.notional,
       reason: `순환매수 발동 (기준가 ${Math.round(anchorPrice)} −${plan.buyDropPct}% = ${Math.round(buyLevel)}, 현재가 ${Math.round(marketPrice)})`,
     },
     sell: null,

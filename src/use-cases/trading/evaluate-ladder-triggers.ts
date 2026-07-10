@@ -1,4 +1,5 @@
 import type { AutomationStrategyConfig } from "@/domain/automation";
+import { resolveOrderSizing } from "./resolve-order-sizing.ts";
 
 /**
  * 순환분할식 사다리 자동매매의 "트리거 평가" 순수 함수.
@@ -55,10 +56,9 @@ export type EvaluateLadderInput = {
   dailySells: number;
   /** 청산 기준 진입가. 보유 평단(holdings)을 우선 사용하고, 없으면 config.currentPrice */
   entryPrice?: number | null;
+  /** 이전 손절 청산 실패 후 가격이 회복돼도 전량 청산을 재시도합니다. */
+  stopLossPending?: boolean;
 };
-
-const stepQuantity = (notional: number, price: number) =>
-  Math.max(1, Math.floor(notional / price));
 
 /**
  * exitRules(익절/손절률)를 현재가 진입 기준으로 환산해 청산 신호를 판단합니다.
@@ -100,6 +100,7 @@ export const evaluateLadderTriggers = ({
   dailyBuys,
   dailySells,
   entryPrice,
+  stopLossPending = false,
 }: EvaluateLadderInput): LadderEvaluation => {
   const triggers: LadderTrigger[] = [];
   const skipped: LadderSkip[] = [];
@@ -114,7 +115,34 @@ export const evaluateLadderTriggers = ({
     return { triggers, skipped, blockers, exitSignal: null };
   }
 
-  const exitSignal = evaluateExit(config, marketPrice, entryPrice);
+  const resolvedEntryPrice = entryPrice && Number.isFinite(entryPrice) && entryPrice > 0
+    ? entryPrice
+    : config.currentPrice;
+  const evaluatedExitSignal = evaluateExit(config, marketPrice, entryPrice);
+  const exitSignal = stopLossPending && Number.isFinite(resolvedEntryPrice) && resolvedEntryPrice > 0
+    ? {
+      kind: "stop-loss" as const,
+      level: resolvedEntryPrice * (1 - config.exitRules.stopLossPct / 100),
+      reason: `손절 청산 재시도 (진입가 ${Math.round(resolvedEntryPrice)} 기준)`,
+    }
+    : evaluatedExitSignal;
+
+  // 손절은 같은 tick의 일반 매수·익절보다 우선합니다. 손절선에 닿은
+  // 순간에는 노출을 더 늘리거나 다른 청산 신호를 함께 만들지 않고, worker가
+  // 보유분 전량 청산만 시도하도록 합니다. 청산이 막히면 다음 cycle에서
+  // 동일한 stop-loss 신호를 재평가할 수 있습니다.
+  if (exitSignal?.kind === "stop-loss") {
+    return { triggers, skipped, blockers, exitSignal };
+  }
+
+  // maxLossPct는 손절(exitRules.stopLossPct)과 별개인 추가매수 중단선입니다.
+  // 현재가가 기준가를 이탈하면 신규 매수만 건너뛰고, 이미 보유한 포지션의
+  // 매도 신호는 계속 평가합니다.
+  const currentDropPct = config.currentPrice > 0
+    ? ((config.currentPrice - marketPrice) / config.currentPrice) * 100
+    : 0;
+  const buyStoppedByLossLimit = Number.isFinite(config.riskLimits.maxLossPct) &&
+    config.riskLimits.maxLossPct > 0 && currentDropPct > config.riskLimits.maxLossPct;
 
   // 틱 내 누적 카운터/포지션 가치 (이번 틱에서 새로 발동되는 분 포함)
   let buys = dailyBuys;
@@ -137,17 +165,31 @@ export const evaluateLadderTriggers = ({
       continue;
     }
 
+    // 리스크 한도도 실제 주문 수량 기준으로 계산합니다. 특히 고정 수량 주식
+    // 전략은 과거 차수 notional이 크게 남아 있어도 1~2주 주문만 생성하므로,
+    // legacy 금액을 그대로 더하면 정상 주문을 잘못 차단하게 됩니다.
+    const sizing = resolveOrderSizing({
+      orderSizing: config.orderSizing,
+      legacyNotional: step.notional,
+      price: step.price,
+      fractionalQuantity: config.market === "CRYPTO",
+    });
+
     if (step.side === "buy") {
+      if (buyStoppedByLossLimit) {
+        skipped.push({ stepId: step.id, side: "buy", reason: `추가매수 중단선(${config.riskLimits.maxLossPct}%) 초과` });
+        continue;
+      }
       if (buys >= config.riskLimits.maxDailyBuys) {
         skipped.push({ stepId: step.id, side: "buy", reason: "일일 최대 매수 횟수 초과" });
         continue;
       }
-      if (committedNotional + step.notional > config.riskLimits.maxPositionValue) {
+      if (committedNotional + sizing.notional > config.riskLimits.maxPositionValue) {
         skipped.push({ stepId: step.id, side: "buy", reason: "최대 보유 금액 한도 초과" });
         continue;
       }
       buys += 1;
-      committedNotional += step.notional;
+      committedNotional += sizing.notional;
     } else {
       if (sells >= config.riskLimits.maxDailySells) {
         skipped.push({ stepId: step.id, side: "sell", reason: "일일 최대 매도 횟수 초과" });
@@ -161,8 +203,8 @@ export const evaluateLadderTriggers = ({
       stepId: step.id,
       side: step.side,
       limitPrice: step.price,
-      quantity: stepQuantity(step.notional, step.price),
-      notional: step.notional,
+      quantity: sizing.quantity,
+      notional: sizing.notional,
       reason:
         step.condition ||
         `${step.side === "buy" ? "매수" : "매도"} 사다리 ${step.price} 도달 (현재가 ${marketPrice})`,

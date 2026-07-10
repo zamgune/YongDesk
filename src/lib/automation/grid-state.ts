@@ -143,3 +143,16 @@ export const closeGridLot = async (
   store.lots[key] = (store.lots[key] ?? []).filter((lot) => lot.lotId !== lotId);
   await writeStore(store);
 };
+
+export const clearGridLots = async (
+  userId: string,
+  strategyId: string,
+): Promise<void> => {
+  if (shouldUseSupabaseStore()) {
+    await saveGridLotsSupabase(userId, strategyId, []);
+    return;
+  }
+  const store = await readStore();
+  store.lots[keyOf(userId, strategyId)] = [];
+  await writeStore(store);
+};

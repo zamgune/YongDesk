@@ -27,14 +27,36 @@ export type LocalNewsEvent = {
   dedupeKey: string;
 };
 
+export type OfficialNewsSourceError = {
+  sourceId: string;
+  message: string;
+};
+
+export type OfficialNewsPollResult = {
+  generatedAt: string;
+  newEvents: LocalNewsEvent[];
+  events: LocalNewsEvent[];
+  errors: OfficialNewsSourceError[];
+  alertCandidates: LocalNewsEvent[];
+};
+
 type NewsStore = {
   seen: Record<string, string>;
   events: LocalNewsEvent[];
 };
 
+type NewsSourceBackoffState = {
+  consecutiveFailures: number;
+  retryAt: number;
+};
+
 const NEWS_STORE_PATH = stockAnalysisStoragePath("news", "events.json");
 const MAX_STORED_EVENTS = 300;
 const DEFAULT_NEWS_FETCH_TIMEOUT_MS = 4_000;
+const DEFAULT_NEWS_BACKOFF_BASE_MS = 2 * 60_000;
+const DEFAULT_NEWS_BACKOFF_MAX_MS = 30 * 60_000;
+const newsSourceBackoff = new Map<string, NewsSourceBackoffState>();
+let officialNewsPollInFlight: Promise<OfficialNewsPollResult> | null = null;
 
 export const DEFAULT_OFFICIAL_NEWS_SOURCES: OfficialNewsSource[] = [
   {
@@ -184,7 +206,7 @@ const writeNewsStore = async (store: NewsStore) => {
 
 export const fetchOfficialNewsEvents = async (
   sources = DEFAULT_OFFICIAL_NEWS_SOURCES,
-): Promise<{ events: LocalNewsEvent[]; errors: Array<{ sourceId: string; message: string }> }> => {
+): Promise<{ events: LocalNewsEvent[]; errors: OfficialNewsSourceError[] }> => {
   const timeoutMs = Number(process.env.STOCK_ANALYSIS_NEWS_FETCH_TIMEOUT_MS ?? DEFAULT_NEWS_FETCH_TIMEOUT_MS);
   const effectiveTimeoutMs = Number.isFinite(timeoutMs) && timeoutMs > 0
     ? timeoutMs
@@ -197,7 +219,7 @@ export const fetchOfficialNewsEvents = async (
         signal: controller.signal,
         headers: {
           Accept: "application/rss+xml, application/xml, text/xml;q=0.9, */*;q=0.8",
-          "User-Agent": "StockAnalysisMac/0.1 official-rss-reader",
+          "User-Agent": "YongStockDesk official-rss-reader",
         },
       });
       if (!response.ok) {
@@ -225,12 +247,62 @@ export const fetchOfficialNewsEvents = async (
   };
 };
 
-export const pollOfficialNews = async () => {
+const positiveEnvironmentMillis = (name: string, fallback: number) => {
+  const value = Number(process.env[name] ?? fallback);
+  return Number.isFinite(value) && value > 0 ? value : fallback;
+};
+
+const newsBackoffDelay = (consecutiveFailures: number) => {
+  const baseMs = positiveEnvironmentMillis(
+    "STOCK_ANALYSIS_NEWS_BACKOFF_BASE_MS",
+    DEFAULT_NEWS_BACKOFF_BASE_MS,
+  );
+  const configuredMaxMs = positiveEnvironmentMillis(
+    "STOCK_ANALYSIS_NEWS_BACKOFF_MAX_MS",
+    DEFAULT_NEWS_BACKOFF_MAX_MS,
+  );
+  const maxMs = Math.max(baseMs, configuredMaxMs);
+  const exponent = Math.min(Math.max(consecutiveFailures - 1, 0), 20);
+  return Math.min(maxMs, baseMs * (2 ** exponent));
+};
+
+const runOfficialNewsPoll = async (): Promise<OfficialNewsPollResult> => {
+  const enabledSources = DEFAULT_OFFICIAL_NEWS_SOURCES.filter((source) => source.enabled);
+  const startedAt = Date.now();
+  const deferredSources = enabledSources.filter((source) =>
+    (newsSourceBackoff.get(source.id)?.retryAt ?? 0) > startedAt,
+  );
+  const eligibleSources = enabledSources.filter((source) =>
+    (newsSourceBackoff.get(source.id)?.retryAt ?? 0) <= startedAt,
+  );
+  const deferredErrors: OfficialNewsSourceError[] = deferredSources.map((source) => {
+    const state = newsSourceBackoff.get(source.id)!;
+    return {
+      sourceId: source.id,
+      message: `RSS fetch backoff until ${new Date(state.retryAt).toISOString()} after ${state.consecutiveFailures} consecutive failure(s)`,
+    };
+  });
   const [{ events, errors }, store] = await Promise.all([
-    fetchOfficialNewsEvents(),
+    eligibleSources.length
+      ? fetchOfficialNewsEvents(eligibleSources)
+      : Promise.resolve({ events: [] as LocalNewsEvent[], errors: [] as OfficialNewsSourceError[] }),
     readNewsStore(),
   ]);
-  const now = new Date().toISOString();
+  const completedAt = Date.now();
+  const failedSourceIds = new Set(errors.map((error) => error.sourceId));
+  for (const source of eligibleSources) {
+    if (!failedSourceIds.has(source.id)) {
+      newsSourceBackoff.delete(source.id);
+      continue;
+    }
+    const consecutiveFailures = (newsSourceBackoff.get(source.id)?.consecutiveFailures ?? 0) + 1;
+    newsSourceBackoff.set(source.id, {
+      consecutiveFailures,
+      retryAt: completedAt + newsBackoffDelay(consecutiveFailures),
+    });
+  }
+
+  const now = new Date(completedAt).toISOString();
   const sorted = events.toSorted((left, right) =>
     (Date.parse(right.publishedAt ?? "") || 0) - (Date.parse(left.publishedAt ?? "") || 0),
   );
@@ -247,7 +319,20 @@ export const pollOfficialNews = async () => {
     generatedAt: now,
     newEvents,
     events: nextEvents,
-    errors,
+    errors: [...errors, ...deferredErrors],
     alertCandidates: newEvents.filter((event) => event.importance !== "low"),
   };
+};
+
+export const pollOfficialNews = (): Promise<OfficialNewsPollResult> => {
+  if (officialNewsPollInFlight) {
+    return officialNewsPollInFlight;
+  }
+  const pending = runOfficialNewsPoll().finally(() => {
+    if (officialNewsPollInFlight === pending) {
+      officialNewsPollInFlight = null;
+    }
+  });
+  officialNewsPollInFlight = pending;
+  return pending;
 };

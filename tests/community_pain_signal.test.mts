@@ -11,10 +11,18 @@ import {
   parsePaxnetComments,
   parsePaxnetItems,
 } from "../src/lib/community-pain/adapters/paxnet.mts";
+import { redditAdapter } from "../src/lib/community-pain/adapters/reddit.mts";
 import { redactSensitiveUrl } from "../src/lib/community-pain/adapters/shared.mts";
-import { normalizeItems } from "../src/lib/community-pain/normalize.mts";
+import {
+  buildQueryTerms,
+  normalizeCommunitySymbol,
+  normalizeItems,
+} from "../src/lib/community-pain/normalize.mts";
 import { scoreCommunityPain } from "../src/lib/community-pain/scoring.mts";
-import type { CommunityPainSourceResult } from "../src/lib/community-pain/types.mts";
+import type {
+  CommunityPainSourceResult,
+  SourceFetchContext,
+} from "../src/lib/community-pain/types.mts";
 
 const createSource = (titles): CommunityPainSourceResult => ({
   id: "paxnet",
@@ -60,6 +68,13 @@ const createSourceFromItems = (items): CommunityPainSourceResult => ({
   items: normalizeItems(items, ["005930", "삼성전자", "삼전"]),
 });
 
+test("crypto community symbols normalize to the base asset", () => {
+  for (const symbol of ["KRW-BTC", "BTC-USD", "BTCUSDT"]) {
+    assert.equal(normalizeCommunitySymbol(symbol, "CRYPTO"), "BTC");
+    assert.deepEqual(buildQueryTerms(symbol, "CRYPTO"), ["BTC"]);
+  }
+});
+
 test("paxnet parser extracts createdAt from data-date-format", () => {
   const items = parsePaxnetItems(
     `
@@ -90,6 +105,66 @@ test("community source URLs redact API tokens", () => {
   );
   assert.ok(!redacted?.includes("secret-token"));
   assert.ok(!redacted?.includes("another-secret"));
+});
+
+test("reddit reports partial comment failures and lowers confidence", async () => {
+  const previousClientId = process.env.REDDIT_CLIENT_ID;
+  const previousClientSecret = process.env.REDDIT_CLIENT_SECRET;
+  const originalFetch = globalThis.fetch;
+  const nowTimestamp = Date.now();
+  process.env.REDDIT_CLIENT_ID = `test-client-${nowTimestamp}`;
+  process.env.REDDIT_CLIENT_SECRET = "test-secret";
+  const responses = [
+    Response.json({ access_token: "test-token", expires_in: 3600 }),
+    Response.json({
+      data: {
+        children: [{
+          data: {
+            subreddit: "stocks",
+            id: "post-1",
+            title: "NVDA investors discuss the latest move",
+            selftext: "NVDA outlook",
+            permalink: "/r/stocks/comments/post-1/nvda/",
+            num_comments: 2,
+            score: 5,
+            created_utc: nowTimestamp / 1_000,
+          },
+        }],
+      },
+    }),
+    Response.json({ error: "rate limited" }, { status: 429 }),
+  ];
+  globalThis.fetch = (async () => {
+    const response = responses.shift();
+    if (!response) throw new Error("unexpected Reddit test request");
+    return response;
+  }) as typeof fetch;
+  const context: SourceFetchContext = {
+    symbol: "NVDA",
+    canonicalSymbol: "NVDA",
+    market: "US",
+    queryTerms: ["NVDA"],
+    includeBroad: false,
+    includeSpikeSources: false,
+    limit: 60,
+    lookbackHours: 24,
+    collectionWindowHours: 72,
+    nowTimestamp,
+    sinceTimestamp: nowTimestamp - 72 * 60 * 60 * 1_000,
+    primarySinceTimestamp: nowTimestamp - 24 * 60 * 60 * 1_000,
+  };
+  try {
+    const result = await redditAdapter.fetchItems(context);
+    assert.equal(result.status, "ok", result.reason);
+    assert.equal(result.confidenceWeight, 0.36);
+    assert.match(result.reason ?? "", /댓글 1\/1건 수집에 실패/);
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (previousClientId === undefined) delete process.env.REDDIT_CLIENT_ID;
+    else process.env.REDDIT_CLIENT_ID = previousClientId;
+    if (previousClientSecret === undefined) delete process.env.REDDIT_CLIENT_SECRET;
+    else process.env.REDDIT_CLIENT_SECRET = previousClientSecret;
+  }
 });
 
 test("paxnet parser extracts detail body and comments", () => {

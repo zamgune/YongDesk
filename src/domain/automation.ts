@@ -11,6 +11,10 @@ export type AutomationPreset =
 export type AutomationMarket = "US" | "KR" | "CRYPTO";
 export type AutomationExecutionVenue = "toss" | "upbit" | "bithumb";
 
+export type AutomationOrderSizing =
+  | { mode: "quantity"; quantity: number }
+  | { mode: "notional"; notional: number };
+
 export type AutomationStrategyStatus = "draft" | "enabled" | "disabled";
 
 export type LadderStep = {
@@ -123,6 +127,8 @@ export type AutomationStrategyConfig = {
   status: AutomationStrategyStatus;
   /** 동작 모드. 미지정 시 "ladder"(하위호환) */
   mode?: AutomationMode;
+  /** 새 전략의 1회 주문 크기. 미지정 전략은 기존 차수별 notional 계산을 유지한다. */
+  orderSizing?: AutomationOrderSizing;
   supportPrice: number;
   resistancePrice: number;
   currentPrice: number;

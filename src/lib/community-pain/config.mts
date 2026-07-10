@@ -22,7 +22,7 @@ export const COMMUNITY_SOURCE_CONFIGS: Record<CommunitySourceId, CommunitySource
     policyStatus: "allowed",
     defaultEnabled: true,
     confidenceWeight: 0.72,
-    reason: "공개 JSON fallback을 사용하고, 설정이 있으면 공식 API로 확장할 수 있습니다.",
+    reason: "앱 Keychain 또는 REDDIT_CLIENT_ID·REDDIT_CLIENT_SECRET으로 공식 OAuth API를 사용할 때만 실행합니다.",
   },
   threads: {
     id: "threads",

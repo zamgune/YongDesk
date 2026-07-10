@@ -1,4 +1,5 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
 import type { AutomationStrategyConfig } from "../src/domain/automation.ts";
@@ -39,11 +40,14 @@ import {
   configureLocalAutomationScheduler,
   getLocalAutomationSchedulerState,
 } from "../src/lib/automation/local-scheduler.ts";
-import { getLiveTradingGate } from "../src/lib/automation/live-trading.ts";
+import { getLiveTradingGate as getConfiguredLiveTradingGate } from "../src/lib/automation/live-trading.ts";
 import {
   cryptoExchangeContract,
   getCryptoAccounts,
+  getCryptoOrderConstraints,
   getCryptoOrderChance,
+  getCryptoTicker,
+  getUpbitOrderbookInstrument,
   previewCryptoLimitOrder,
   type CryptoExchange,
 } from "../src/lib/crypto-exchange/client.ts";
@@ -98,6 +102,19 @@ import {
 } from "../src/lib/paper-trading/state-store.ts";
 import { pollOfficialNews } from "../src/lib/local-engine/news.ts";
 import {
+  createMarketWorkspaceFixtureDependencies,
+  handleMarketWorkspaceRequest,
+} from "../src/lib/local-engine/market-workspace.ts";
+import {
+  COMMUNITY_CACHE_MAX_ENTRIES,
+  COMMUNITY_CACHE_TTL_SECONDS,
+} from "../src/lib/community-pain/config.mts";
+import { getCommunityPain } from "../src/lib/community-pain/service.mts";
+import type {
+  CommunityPainResponse,
+  CommunitySourceId,
+} from "../src/lib/community-pain/types.mts";
+import {
   appendTerminalDashboardOperatorAction,
   buildTerminalDashboardSnapshot,
   saveTerminalDashboardPlaybook,
@@ -142,14 +159,51 @@ type AutomationDryRunEvaluation = {
   triggers: number;
   orders: AutomationWorkerTickResult["orders"];
   logs: AutomationWorkerTickResult["logs"];
+  strategyTransition?: AutomationWorkerTickResult["strategyTransition"];
   summary: Record<string, unknown>;
 };
 
 const ENGINE_NAME = "stock-analysis-local-engine";
+const ENGINE_VERSION = (() => {
+  try {
+    const parsed = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { version?: unknown };
+    return typeof parsed.version === "string" && parsed.version.trim() ? parsed.version.trim() : "development";
+  } catch {
+    return "development";
+  }
+})();
 const DEFAULT_PORT = 38771;
+const LOCAL_TOSS_LIVE_TRADING_SUPPORTED = false;
+const CRYPTO_LIVE_AUTOMATION_SUPPORTED = false;
+const CRYPTO_TICKER_MAX_AGE_MS = 60_000;
 const DEFAULT_SYMBOL_MARKETS: SymbolSearchMarket[] = ["US", "KOSPI", "KOSDAQ", "CRYPTO"];
+const COMMUNITY_SOURCE_IDS = new Set<CommunitySourceId>([
+  "paxnet",
+  "bobaedream",
+  "reddit",
+  "threads",
+  "blind",
+  "naver_finance",
+  "clien",
+]);
+const COMMUNITY_TRANSIENT_FAILURE_CACHE_TTL_SECONDS = 60;
+const localCommunityCache = new Map<string, { expiresAt: number; payload: CommunityPainResponse }>();
+const localCommunityInFlight = new Map<string, Promise<CommunityPainResponse>>();
 const localUserId = () => process.env.STOCK_ANALYSIS_LOCAL_USER_ID?.trim() || "local-macos-user";
 let localAutomationScheduler: LocalAutomationScheduler | null = null;
+
+const getLiveTradingGate = async (userId: string) => {
+  const gate = await getConfiguredLiveTradingGate(userId);
+  if (LOCAL_TOSS_LIVE_TRADING_SUPPORTED) {
+    return gate;
+  }
+  return {
+    ...gate,
+    effective: false,
+    status: 501,
+    reason: "1.0.0 데스크톱 배포판은 Toss 조회·사전검증·모의 자동화만 지원합니다. 결과 불명 주문 복구가 포함된 뒤 실거래를 엽니다.",
+  };
+};
 
 const parseSymbolMarkets = (value: string | null): SymbolSearchMarket[] => {
   if (!value) {
@@ -1058,6 +1112,13 @@ const runLocalPaperAutomationCycle = async (
       continue;
     }
 
+    const session = sessionForAutomationMarket(config.market);
+    const market = marketForAutomationConfig(config);
+    const account = nextState.accounts[session];
+    const otherPositions = nextState.positions.filter((position) => position.session !== session);
+    let sessionPositions = nextState.positions.filter((position) => position.session === session);
+    const paperSymbol = config.symbol.trim().toUpperCase();
+
     const tick = await runAutomationWorkerTick({
       userId,
       config: { ...config, status: "enabled" },
@@ -1066,24 +1127,25 @@ const runLocalPaperAutomationCycle = async (
       liveTradingEnabled: false,
       accountSeq: 0,
       today,
+      resolveExitQuantity: async (symbol) =>
+        sessionPositions.find((position) => position.symbol.trim().toUpperCase() === symbol.trim().toUpperCase())?.quantity ?? 0,
+      resolveEntryPrice: async (symbol) =>
+        sessionPositions.find((position) => position.symbol.trim().toUpperCase() === symbol.trim().toUpperCase())?.averagePrice ?? null,
+      resolveOpenOrderIds: async () => [],
     });
-    const session = sessionForAutomationMarket(config.market);
-    const market = marketForAutomationConfig(config);
-    const account = nextState.accounts[session];
-    const otherPositions = nextState.positions.filter((position) => position.session !== session);
-    let sessionPositions = nextState.positions.filter((position) => position.session === session);
     let cash = account.cash;
     let realizedPnl = account.realizedPnl;
     const runId = makePaperId("paper-run-auto");
     const paperOrders: PaperOrder[] = [];
     const paperExecutions: PaperExecution[] = [];
+    let stopLossFilled = false;
     const paperLogs = tick.logs.map((log) => ({
       id: makePaperId("paper-log-auto"),
       runId,
       session,
       source: "codex-automation" as const,
       market,
-      symbol: config.symbol.trim().toUpperCase(),
+      symbol: paperSymbol,
       level: log.level,
       message: log.stepId ? `${log.stepId}: ${log.message}` : log.message,
       strategyVersion: `automation-${config.preset}-${config.mode ?? "ladder"}`,
@@ -1119,7 +1181,7 @@ const runLocalPaperAutomationCycle = async (
         });
         continue;
       }
-      const symbol = config.symbol.trim().toUpperCase();
+      const symbol = paperSymbol;
       const existing = sessionPositions.find((position) => position.symbol.trim().toUpperCase() === symbol);
       const orderValue = order.quantity * price;
       let realizedOnExecution = 0;
@@ -1238,8 +1300,31 @@ const runLocalPaperAutomationCycle = async (
         realizedPnl: realizedOnExecution,
         executedAt: now,
       });
+      if (order.side === "sell" && order.stepId.endsWith("stop-loss")) {
+        stopLossFilled = true;
+      }
       submitted += 1;
       newFills += 1;
+    }
+
+    if (stopLossFilled) {
+      await upsertStrategyConfig(userId, {
+        ...toPersistableStrategyConfig(config),
+        status: "disabled",
+        lastSimulation: undefined,
+      });
+      paperLogs.push({
+        id: makePaperId("paper-log-auto"),
+        runId,
+        session,
+        source: "codex-automation",
+        market,
+        symbol: config.symbol.trim().toUpperCase(),
+        level: "warning",
+        message: `${config.name} 손절 청산 완료로 전략을 일시중지했습니다. 다시 시뮬레이션한 뒤 활성화하세요.`,
+        strategyVersion: `automation-${config.preset}-${config.mode ?? "ladder"}`,
+        createdAt: now,
+      });
     }
 
     const paperRun = {
@@ -1289,6 +1374,7 @@ const runLocalPaperAutomationCycle = async (
       triggers: tick.triggers,
       orders: tick.orders,
       logs: tick.logs,
+      strategyTransition: tick.strategyTransition,
       summary: strategyTickPreviewSummary(config, "current", marketPrice, tick, paperAutomationSafety),
     });
   }
@@ -1335,8 +1421,8 @@ const getCryptoLiveTradingGate = async (
     status,
     reason,
   });
-  if (!masterEnabled) {
-    return closed("전체 실거래 마스터 게이트가 꺼져 있습니다.");
+  if (!CRYPTO_LIVE_AUTOMATION_SUPPORTED) {
+    return closed("1.0.0에서는 코인 API 조회·사전검증·모의 자동화만 지원합니다. 체결 동기화가 포함된 후 실거래를 엽니다.", 501);
   }
   if (!cryptoMasterEnabled) {
     return closed("코인 실거래 게이트가 꺼져 있습니다.");
@@ -1629,9 +1715,9 @@ const runAutomation = async (request: Request) => {
       cryptoEnabled ? "stock" : "all",
     );
   const cryptoResult = cryptoEnabled
-    ? process.env.ENABLE_LIVE_TRADING === "true" && process.env.ENABLE_CRYPTO_LIVE_TRADING === "true"
+    ? CRYPTO_LIVE_AUTOMATION_SUPPORTED && process.env.ENABLE_CRYPTO_LIVE_TRADING === "true"
       ? await runCryptoLiveAutomationCycle(userId)
-      : await runLocalPaperAutomationCycle(userId, "paper-automation-crypto-live-gate-closed", "crypto")
+      : await runLocalPaperAutomationCycle(userId, "paper-automation-crypto-live-not-supported", "crypto")
     : null;
   const result = cryptoResult
     ? {
@@ -2203,8 +2289,8 @@ const localTossReadiness = async (request: Request) => {
     guidance: [
       ...report.guidance,
       ...(automationAccountSelected
-        ? ["자동거래 계좌가 선택되어 있습니다. 실거래 제출은 live gate와 RiskCheck를 계속 통과해야 합니다."]
-        : ["자동거래에 사용할 Toss BROKERAGE 계좌를 선택해야 전략 자동매매가 준비됩니다."]),
+        ? ["paper 자동화에 사용할 Toss 계좌가 선택되어 있습니다. 1.0.0 데스크톱은 실제 주문을 제출하지 않습니다."]
+        : ["Toss 계좌 기반 paper 사전검증을 사용하려면 BROKERAGE 계좌를 선택하세요. 분석과 일반 paper 자동화는 계좌 없이도 사용할 수 있습니다."]),
     ],
   });
 };
@@ -2233,8 +2319,8 @@ const localLiveTradingState = async () => {
     },
     readiness,
     guidance: [
-      "로컬 실거래는 앱의 운영자 게이트, 검증된 Toss credential, 사용자 live_trading 토글을 모두 통과해야 합니다.",
-      "ENABLE_LIVE_TRADING=false이면 이 토글을 켜도 주문 제출은 차단됩니다.",
+      "1.0.0 데스크톱 배포판은 Toss 조회·사전검증·모의 자동화 전용입니다.",
+      "실거래는 결과 불명 주문 복구와 재시작 멱등성 검증이 포함된 뒤 별도 버전에서 엽니다.",
       "IP address not allowed 오류가 나오면 Toss Open API 콘솔 허용 IP를 현재 공인 IP로 갱신하세요.",
     ],
   });
@@ -2248,6 +2334,12 @@ const updateLocalLiveTrading = async (request: Request) => {
   }
   const userId = localUserId();
   if (payload.enabled) {
+    if (!LOCAL_TOSS_LIVE_TRADING_SUPPORTED) {
+      return jsonResponse({
+        error: "1.0.0에서는 Toss 실거래를 활성화할 수 없습니다. 조회·사전검증·모의 자동화를 사용하세요.",
+        orderSubmissionAttempted: false,
+      }, { status: 501 });
+    }
     const credential = await getBrokerCredentialView(userId, "toss");
     if (credential?.status !== "verified") {
       return jsonResponse({
@@ -2496,6 +2588,7 @@ const toPersistableStrategyConfig = (
   preset: config.preset,
   status: config.status,
   mode: config.mode,
+  orderSizing: config.orderSizing,
   supportPrice: config.supportPrice,
   resistancePrice: config.resistancePrice,
   currentPrice: config.currentPrice,
@@ -3350,6 +3443,18 @@ const deleteCryptoCredential = async (exchange: CryptoExchange) => {
   return jsonResponse({ ok: true, exchange });
 };
 
+const cryptoQuoteFreshness = (timestamp: number) => {
+  const ageMs = Date.now() - timestamp;
+  const futureSkewMs = Math.max(0, -ageMs);
+  return {
+    timestamp: new Date(timestamp).toISOString(),
+    ageMs,
+    futureSkewMs,
+    fresh: ageMs >= -5_000 && ageMs <= CRYPTO_TICKER_MAX_AGE_MS,
+    maxAgeMs: CRYPTO_TICKER_MAX_AGE_MS,
+  };
+};
+
 const cryptoReadiness = async (exchange: CryptoExchange, market: string) => {
   const credential = await getBrokerCredentialView(localUserId(), exchange);
   const encrypted = await loadDecryptedCredentials(localUserId(), exchange);
@@ -3360,29 +3465,68 @@ const cryptoReadiness = async (exchange: CryptoExchange, market: string) => {
       market,
       ready: false,
       credential,
-      readonlyChecks: { accounts: false, orderChance: false },
+      readonlyChecks: { accounts: false, orderChance: false, ticker: false, orderConstraints: false },
       orderSubmissionAttempted: false,
       message: `${exchange} API 키를 먼저 검증해 저장하세요.`,
-    }, { status: 412 });
+    });
   }
   try {
     const credentials = { accessKey: encrypted.clientId, secretKey: encrypted.clientSecret };
-    const [accounts, chance] = await Promise.all([
+    const [accounts, chance, ticker, upbitInstrument] = await Promise.all([
       getCryptoAccounts(exchange, credentials),
       getCryptoOrderChance(exchange, credentials, market),
+      getCryptoTicker(exchange, market),
+      exchange === "upbit" ? getUpbitOrderbookInstrument(market) : Promise.resolve(null),
     ]);
+    const chanceAvailable = Object.keys(chance).length > 0;
+    const rawBidConstraints = getCryptoOrderConstraints(chance, "bid");
+    const rawAskConstraints = getCryptoOrderConstraints(chance, "ask");
+    const bidConstraints = exchange === "upbit"
+      ? { ...rawBidConstraints, priceUnit: upbitInstrument?.tickSize ?? null }
+      : rawBidConstraints;
+    const askConstraints = exchange === "upbit"
+      ? { ...rawAskConstraints, priceUnit: upbitInstrument?.tickSize ?? null }
+      : rawAskConstraints;
+    const quote = cryptoQuoteFreshness(ticker.timestamp);
+    const constraintsAvailable =
+      (bidConstraints.minTotal ?? 0) > 0 &&
+      (askConstraints.minTotal ?? 0) > 0 &&
+      (bidConstraints.priceUnit ?? askConstraints.priceUnit ?? 0) > 0 &&
+      bidConstraints.feeRate !== null &&
+      askConstraints.feeRate !== null;
+    const ready = chanceAvailable && constraintsAvailable && quote.fresh;
     return jsonResponse({
       generatedAt: new Date().toISOString(),
       exchange,
       market,
-      ready: true,
+      ready,
       credential,
-      readonlyChecks: { accounts: true, orderChance: true },
+      readonlyChecks: {
+        accounts: true,
+        orderChance: chanceAvailable,
+        ticker: quote.fresh,
+        orderConstraints: constraintsAvailable,
+      },
       accountCount: accounts.length,
       currencies: accounts.map((account) => account.currency).slice(0, 20),
-      chanceAvailable: Object.keys(chance).length > 0,
+      chanceAvailable,
+      ticker: {
+        market: ticker.market,
+        tradePrice: ticker.tradePrice,
+        ...quote,
+        lastTradeTimestamp: ticker.tradeTimestamp
+          ? new Date(ticker.tradeTimestamp).toISOString()
+          : null,
+      },
+      orderConstraints: { bid: bidConstraints, ask: askConstraints },
       orderSubmissionAttempted: false,
-      message: "계좌 잔고와 주문 가능 정보 조회가 주문 제출 없이 통과했습니다.",
+      message: ready
+        ? "계좌 잔고, 주문 가능 정보, 최소 주문금액, 현재가 신선도 조회가 주문 제출 없이 통과했습니다."
+        : !chanceAvailable
+          ? "거래소 주문 가능 정보가 비어 있어 준비 상태를 차단했습니다."
+          : !constraintsAvailable
+            ? "최소 주문금액·호가 단위·수수료 제약을 모두 확인하지 못해 준비 상태를 차단했습니다."
+            : "거래소 현재가가 오래되어 준비 상태를 차단했습니다.",
     });
   } catch (error) {
     return jsonResponse({
@@ -3391,7 +3535,7 @@ const cryptoReadiness = async (exchange: CryptoExchange, market: string) => {
       market,
       ready: false,
       credential,
-      readonlyChecks: { accounts: false, orderChance: false },
+      readonlyChecks: { accounts: false, orderChance: false, ticker: false, orderConstraints: false },
       orderSubmissionAttempted: false,
       message: errorMessage(error),
     }, { status: 502 });
@@ -3413,16 +3557,52 @@ const cryptoOrderPrecheck = async (exchange: CryptoExchange, request: Request) =
   }
   try {
     const credentials = { accessKey: encrypted.clientId, secretKey: encrypted.clientSecret };
-    const [accounts, chance] = await Promise.all([
+    const [accounts, chance, ticker, upbitInstrument] = await Promise.all([
       getCryptoAccounts(exchange, credentials),
       getCryptoOrderChance(exchange, credentials, market),
+      getCryptoTicker(exchange, market),
+      exchange === "upbit" ? getUpbitOrderbookInstrument(market) : Promise.resolve(null),
     ]);
     const [quoteCurrency, baseCurrency] = market.split("-");
     const quoteBalance = Number(accounts.find((account) => account.currency === quoteCurrency)?.balance ?? 0);
     const baseBalance = Number(accounts.find((account) => account.currency === baseCurrency)?.balance ?? 0);
     const estimatedValue = volume * price;
     const blockers: string[] = [];
-    if (side === "bid" && estimatedValue > quoteBalance) {
+    const chanceAvailable = Object.keys(chance).length > 0;
+    const rawConstraints = getCryptoOrderConstraints(chance, side);
+    const constraints = exchange === "upbit"
+      ? { ...rawConstraints, priceUnit: upbitInstrument?.tickSize ?? null }
+      : rawConstraints;
+    const quote = cryptoQuoteFreshness(ticker.timestamp);
+    if (!chanceAvailable) {
+      blockers.push(`${exchange} 주문 가능 정보가 비어 있습니다.`);
+    }
+    if (!quote.fresh) {
+      blockers.push(quote.futureSkewMs > 5_000
+        ? `현재가 시각이 로컬 시계보다 ${Math.round(quote.futureSkewMs / 1_000)}초 미래라 검증할 수 없습니다.`
+        : `현재가가 ${Math.round(quote.ageMs / 1_000)}초 전에 갱신되어 신선도 제한을 초과했습니다.`);
+    }
+    if (constraints.minTotal === null || constraints.minTotal <= 0) {
+      blockers.push("거래소 최소 주문금액을 확인하지 못했습니다.");
+    } else if (estimatedValue < constraints.minTotal) {
+      blockers.push(`최소 주문금액 ${constraints.minTotal.toLocaleString("ko-KR")} KRW보다 작습니다.`);
+    }
+    if (constraints.maxTotal !== null && constraints.maxTotal > 0 && estimatedValue > constraints.maxTotal) {
+      blockers.push(`최대 주문금액 ${constraints.maxTotal.toLocaleString("ko-KR")} KRW를 초과했습니다.`);
+    }
+    if (constraints.priceUnit === null || constraints.priceUnit <= 0) {
+      blockers.push("거래소 호가 단위를 확인하지 못했습니다.");
+    } else {
+      const unitRatio = price / constraints.priceUnit;
+      if (Math.abs(unitRatio - Math.round(unitRatio)) > 1e-8) {
+        blockers.push(`지정가는 호가 단위 ${constraints.priceUnit.toLocaleString("ko-KR")} KRW에 맞아야 합니다.`);
+      }
+    }
+    if (constraints.feeRate === null || constraints.feeRate < 0) {
+      blockers.push("거래소 수수료율을 확인하지 못했습니다.");
+    }
+    const estimatedBuyCost = estimatedValue * (1 + Math.max(constraints.feeRate ?? 0, 0));
+    if (side === "bid" && estimatedBuyCost > quoteBalance) {
       blockers.push(`${quoteCurrency} 주문 가능 잔고가 부족합니다.`);
     }
     if (side === "ask" && volume > baseBalance) {
@@ -3444,10 +3624,20 @@ const cryptoOrderPrecheck = async (exchange: CryptoExchange, request: Request) =
       blockers,
       balances: { quoteCurrency, quoteBalance, baseCurrency, baseBalance },
       estimatedValue,
-      orderChanceVerified: Object.keys(chance).length > 0,
+      estimatedBuyCost,
+      orderChanceVerified: chanceAvailable,
+      orderConstraints: constraints,
+      ticker: {
+        market: ticker.market,
+        tradePrice: ticker.tradePrice,
+        ...quote,
+        lastTradeTimestamp: ticker.tradeTimestamp
+          ? new Date(ticker.tradeTimestamp).toISOString()
+          : null,
+      },
       orderPreview,
       orderSubmissionAttempted: false,
-    }, { status: blockers.length ? 422 : 200 });
+    });
   } catch (error) {
     return jsonResponse({
       error: `${exchange} 주문 사전검증 실패: ${errorMessage(error)}`,
@@ -3603,8 +3793,10 @@ const strategyExportConfig = (config: AutomationStrategyConfig) => ({
   name: config.name,
   symbol: config.symbol,
   market: config.market,
+  executionVenue: config.executionVenue,
   preset: config.preset,
   mode: config.mode ?? "ladder",
+  orderSizing: config.orderSizing,
   supportPrice: config.supportPrice,
   resistancePrice: config.resistancePrice,
   currentPrice: config.currentPrice,
@@ -3621,7 +3813,7 @@ const exportLocalStrategyConfigs = async () => {
   await cleanupInternalSelfTestStrategies(localUserId());
   const configs = await listStrategyConfigs(localUserId());
   return jsonResponse({
-    schemaVersion: 1,
+    schemaVersion: 2,
     exportedAt: new Date().toISOString(),
     source: "StockAnalysis macOS local-engine",
     configCount: configs.length,
@@ -3638,6 +3830,10 @@ const exportLocalStrategyConfigs = async () => {
 const importLocalStrategyConfigs = async (request: Request) => {
   await ensureLocalAutomationAccess();
   const payload = await readJsonBody(request);
+  const schemaVersion = Number(payload.schemaVersion ?? 1);
+  if (schemaVersion !== 1 && schemaVersion !== 2) {
+    return jsonResponse({ error: `지원하지 않는 전략 백업 schemaVersion입니다: ${schemaVersion}` }, { status: 400 });
+  }
   const rawConfigs = Array.isArray(payload.configs) ? payload.configs : [];
   if (rawConfigs.length === 0) {
     return jsonResponse({ error: "가져올 전략 configs 배열이 필요합니다." }, { status: 400 });
@@ -3649,6 +3845,7 @@ const importLocalStrategyConfigs = async (request: Request) => {
     const parsed = {
       ...parseStrategyConfigPayload({
         ...row,
+        orderSizing: schemaVersion === 1 ? undefined : row.orderSizing,
         id: `imported-${crypto.randomUUID()}`,
         status: "draft",
         lastSimulation: undefined,
@@ -3672,6 +3869,7 @@ const importLocalStrategyConfigs = async (request: Request) => {
   }
   return jsonResponse({
     ok: true,
+    schemaVersion,
     imported: imported.length,
     skipped: Math.max(rawConfigs.length - imported.length, 0),
     status: "draft",
@@ -3834,6 +4032,91 @@ const callRoute = async (request: Request, pathname: string) => {
   throw new Error(`Unsupported route: ${pathname}`);
 };
 
+const parseCommunityBoolean = (value: string | null) =>
+  value === "1" || value?.toLowerCase() === "true";
+
+const parseCommunitySources = (value: string | null): CommunitySourceId[] | undefined => {
+  if (!value) {
+    return undefined;
+  }
+  const sources = value
+    .split(",")
+    .map((source) => source.trim() as CommunitySourceId)
+    .filter((source) => COMMUNITY_SOURCE_IDS.has(source));
+  return sources.length > 0 ? sources : undefined;
+};
+
+const sweepLocalCommunityCache = (now: number) => {
+  for (const [key, value] of localCommunityCache.entries()) {
+    if (value.expiresAt <= now || localCommunityCache.size > COMMUNITY_CACHE_MAX_ENTRIES) {
+      localCommunityCache.delete(key);
+    }
+  }
+};
+
+const localCommunityPainResponse = async (url: URL, encodedSymbol: string) => {
+  const symbol = decodeURIComponent(encodedSymbol).trim();
+  if (!symbol || symbol.length > 32) {
+    return jsonResponse({ error: "유효한 종목 코드가 필요합니다." }, { status: 400 });
+  }
+  const market = (url.searchParams.get("market") || "US").trim().toUpperCase();
+  if (!/^[A-Z0-9_-]{2,12}$/.test(market)) {
+    return jsonResponse({ error: "유효한 market 값이 필요합니다." }, { status: 400 });
+  }
+  const includeBroad = parseCommunityBoolean(url.searchParams.get("broad"));
+  const includeSpikeSources = parseCommunityBoolean(url.searchParams.get("spike"));
+  const forceRefresh = parseCommunityBoolean(url.searchParams.get("refresh"));
+  const requestedSources = parseCommunitySources(url.searchParams.get("sources"));
+  const requestedLimit = Number(url.searchParams.get("limit") ?? 60);
+  const limit = Number.isFinite(requestedLimit)
+    ? Math.min(Math.max(Math.round(requestedLimit), 20), 250)
+    : 60;
+  const cacheKey = JSON.stringify({
+    symbol: symbol.toUpperCase(),
+    market,
+    includeBroad,
+    includeSpikeSources,
+    requestedSources,
+    limit,
+  });
+  const now = Date.now();
+  sweepLocalCommunityCache(now);
+  const cached = localCommunityCache.get(cacheKey);
+  if (!forceRefresh && cached && cached.expiresAt > now) {
+    return jsonResponse(cached.payload);
+  }
+  try {
+    let pending = localCommunityInFlight.get(cacheKey);
+    if (!pending) {
+      pending = getCommunityPain({
+        symbol,
+        market,
+        includeBroad,
+        includeSpikeSources,
+        requestedSources,
+        limit,
+      });
+      localCommunityInFlight.set(cacheKey, pending);
+    }
+    const payload = await pending;
+    const hasTransientFailure = payload.sourceStats.some((source) =>
+      source.status === "error" || source.timedOut
+    );
+    const ttlSeconds = hasTransientFailure
+      ? COMMUNITY_TRANSIENT_FAILURE_CACHE_TTL_SECONDS
+      : COMMUNITY_CACHE_TTL_SECONDS;
+    localCommunityCache.set(cacheKey, {
+      expiresAt: Date.now() + ttlSeconds * 1_000,
+      payload,
+    });
+    return jsonResponse(payload);
+  } catch {
+    return jsonResponse({ error: "커뮤니티 민심 데이터를 계산하지 못했습니다." }, { status: 500 });
+  } finally {
+    localCommunityInFlight.delete(cacheKey);
+  }
+};
+
 export const handleLocalEngineRequest = async (request: Request): Promise<Response> => {
   const url = new URL(request.url);
   try {
@@ -3842,7 +4125,7 @@ export const handleLocalEngineRequest = async (request: Request): Promise<Respon
       return jsonResponse({
         ok: true,
         engine: ENGINE_NAME,
-        version: "0.1.0",
+        version: ENGINE_VERSION,
         generatedAt: new Date().toISOString(),
         storageRoot: process.env.STOCK_ANALYSIS_STORAGE_ROOT ?? null,
         localUserId: localUserId(),
@@ -3865,6 +4148,14 @@ export const handleLocalEngineRequest = async (request: Request): Promise<Respon
     }
     if (request.method === "GET" && url.pathname === "/api/local/self-test") {
       return localSelfTest();
+    }
+    if (request.method === "GET" && url.pathname === "/api/local/analysis/workspace") {
+      return handleMarketWorkspaceRequest(request, {
+        userId: localUserId(),
+        dependencies: process.env.STOCK_ANALYSIS_MARKET_FIXTURE_MODE === "1"
+          ? createMarketWorkspaceFixtureDependencies()
+          : undefined,
+      });
     }
     if (request.method === "GET" && url.pathname === "/api/paper-trading/state") {
       return getPaperTradingStateResponse();
@@ -4001,6 +4292,10 @@ export const handleLocalEngineRequest = async (request: Request): Promise<Respon
         ...result,
         events: result.events.slice(0, limit),
       });
+    }
+    const communityPainMatch = url.pathname.match(/^\/api\/community-pain\/([^/]+)$/);
+    if (request.method === "GET" && communityPainMatch?.[1]) {
+      return localCommunityPainResponse(url, communityPainMatch[1]);
     }
     if (request.method === "GET" && url.pathname === "/api/dashboard/terminal") {
       return jsonResponse(await buildTerminalDashboardSnapshot({

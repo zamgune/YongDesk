@@ -105,7 +105,10 @@ export type CommunityPainSourceResult = {
 export type CommunityPainSourceStats = {
   id: CommunitySourceId;
   label: string;
+  policyStatus: SourcePolicyStatus;
   status: SourceRunStatus;
+  confidenceWeight: number;
+  reason?: string;
   candidateCount: number;
   recentItemCount: number;
   itemCount: number;

@@ -7,8 +7,11 @@
 1. [이어서 개발하기](continuation-guide.md) — 저장소, 실행 환경, 안전 경계와 다음 우선순위
 2. [현재 기능](features.md) — 실제 구현, 외부 설정, 시안과 후속 작업의 상태
 3. [macOS 네이티브 앱](macos-native.md) — SwiftUI, sidecar, 패키징과 배포 구조
-4. [기능 확장 가이드](feature-extension-guide.md) — 새 기능을 추가할 때 지켜야 할 계층과 검증 순서
-5. [전략 V2](../STRATEGY_V2.md) — 분석 지표와 신호 로직의 기준 계약
+4. [데스크톱 실 API 인수 QA](desktop-live-api-qa.md) — 결정론적 readiness와 Toss·Upbit 실 조회 인수 절차
+5. [기능 확장 가이드](feature-extension-guide.md) — 새 기능을 추가할 때 지켜야 할 계층과 검증 순서
+6. [전략 V2](../STRATEGY_V2.md) — 분석 지표와 신호 로직의 기준 계약
+
+현재 배포 범위와 제한은 [v1.0.0 릴리스 안내](releases/v1.0.0.md)를 기준으로 확인한다.
 
 ## 제품·기능 명세
 
@@ -20,11 +23,12 @@
 
 ## UX 시안
 
+- [초보자 중심 macOS v2 시안](ux-prototypes/macos-native/beginner-first-v2.html)
 - [초보자 중심 macOS 시안](ux-prototypes/macos-native/beginner-first.html)
 - [기존 macOS 터미널 시안](ux-prototypes/macos-native/terminal-dense-detail.html)
 - [Toss 차트 트레이딩 시안](ux-prototypes/toss-chart-trading/index.html)
 
-HTML 시안은 사용자 흐름을 검토하기 위한 독립 프로토타입이다. SwiftUI, sidecar 또는 실제 주문 엔진에 자동 반영되지 않는다.
+HTML 시안은 사용자 흐름을 검토하기 위한 독립 프로토타입이다. v2 정보 구조는 현재 Beginner-first SwiftUI에 적용됐지만 HTML 자체가 런타임은 아니며, 문장형 전략 조립기 같은 시안 기능은 별도 구현 전까지 제공 기능으로 보지 않는다.
 
 ## 전략·분석 참고자료
 

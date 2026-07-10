@@ -184,7 +184,10 @@ export const paxnetAdapter: CommunitySourceAdapter = {
     try {
       const items: RawCommunityItem[] = [];
       let lastUrl = url;
-      for (let page = 1; page <= PAXNET_MAX_PAGES; page += 1) {
+      const pageLimit = Math.min(PAXNET_MAX_PAGES, Math.max(2, Math.ceil(context.limit / 15)));
+      const detailLimit = Math.min(PAXNET_MAX_DETAIL_FETCHES, Math.max(6, Math.ceil(context.limit / 4)));
+      const commentPostLimit = Math.min(PAXNET_MAX_COMMENT_POSTS, Math.max(3, Math.ceil(detailLimit / 2)));
+      for (let page = 1; page <= pageLimit; page += 1) {
         lastUrl = buildListUrl(context.canonicalSymbol, page);
         const pageItems = parsePaxnetItems(await fetchHtml(lastUrl), lastUrl);
         items.push(...pageItems);
@@ -202,11 +205,11 @@ export const paxnetAdapter: CommunitySourceAdapter = {
       const detailCandidates = items
         .filter((item) => !item.createdAt || !isOlderThanWindow(item.createdAt, context))
         .sort((left, right) => (right.commentCount ?? 0) - (left.commentCount ?? 0))
-        .slice(0, PAXNET_MAX_DETAIL_FETCHES);
+        .slice(0, detailLimit);
       const commentCandidateIds = new Set(
         detailCandidates
           .filter((item) => (item.commentCount ?? 0) > 0)
-          .slice(0, PAXNET_MAX_COMMENT_POSTS)
+          .slice(0, commentPostLimit)
           .map((item) => item.id),
       );
       const detailBundles = await mapWithConcurrency(

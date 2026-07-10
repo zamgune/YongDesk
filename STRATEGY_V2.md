@@ -140,3 +140,15 @@ Effective risk management is enforced via specific Stop Levels displayed on the 
 | **Shooting Star** | Bearish Reversal | Small body bottom, long upper wick (>2x body). | Moderate (High at Res) |
 | **Bearish Engulfing** | Bearish Reversal | Red body engulfs previous Green body. | High |
 | **Evening Star** | Bearish Reversal | Big Green -> Doji -> Big Red. | High (Strong Top) |
+
+## 7. Beginner-first 자동화 계약 (macOS 1.0)
+
+전략 설정은 `초안 저장 → 조건 확인 → paper 시뮬레이션 → 활성화` 순서를 지킨다. 데스크톱 앱은 실제 broker 제출을 하지 않으며, 자동화 탭은 `status == enabled` 전략만 단일 원본으로 표시한다.
+
+- 주식은 `orderSizing: { mode: "quantity", quantity }`로 고정 주식 수를 사용한다.
+- 코인은 `orderSizing: { mode: "notional", notional }`로 고정 원화 주문금액을 사용하고, 실행가격 기준 수량을 최대 8자리까지 계산한다. 거래소 최소금액·정밀도는 precheck에서 확인한다.
+- `orderSizing`이 없는 기존 전략은 차수별 `notional` 수량 계산을 유지한다. 전략 백업은 schema v2를 사용하며 v1 가져오기는 금액 기준 draft로 변환하고 시뮬레이션을 폐기한다.
+- 저장된 비균등 grid 차수는 사용자가 차수 수·첫 하락폭·차수 간격을 바꾸기 전까지 원본 배열을 보존한다.
+- `현재가 새로고침`은 최근 확인 가격만 바꾸고 기준가는 바꾸지 않는다. 기준가 변경은 `현재가 적용` 또는 수동 입력으로만 가능하며 기존 시뮬레이션을 무효화한다.
+- 추가매수 중단선은 신규 매수만 막는다. 손절은 ladder의 보유 평단, grid의 열린 lot 가중평단, loop의 실제 진입가를 기준으로 보유분 전량 paper 청산한다.
+- 손절 청산이 실패하거나 live 차단에 걸리면 worker state에 `stop-loss-pending`을 남겨 가격이 회복돼도 신규 진입·익절을 만들지 않고 다음 cycle에 청산을 재시도한다. paper 청산이 완료되면 전략을 disabled로 바꾸고 시뮬레이션을 제거한다.

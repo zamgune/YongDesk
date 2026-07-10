@@ -4,20 +4,71 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+type WindowSize = {
+  width: number;
+  height: number;
+};
+
+type Frame = {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+};
+
+type AXAction = "exists" | "enabled" | "frame" | "press";
+
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const appRootArgument = process.argv.slice(2).find((argument) => !argument.startsWith("--"));
+const argumentsList = process.argv.slice(2);
+const appRootArgument = argumentsList.find((argument) => !argument.startsWith("--"));
 const appRoot = resolve(appRootArgument ?? join(repoRoot, "dist", "macos", "StockAnalysis.app"));
 const appExecutable = join(appRoot, "Contents", "MacOS", "StockAnalysisMac");
+const bundledNodeExecutable = join(appRoot, "Contents", "Resources", "node", "bin", "node");
 const bundleIdentifier = "com.stockanalysis.mac";
-const verifyReleaseChecksumCopy = !process.argv.includes("--installed-copy");
+const fixtureMode = true;
+const identifiersUsed = new Set<string>();
+const pressedTargets: string[] = [];
 
-const run = (command: string, args: string[], options: { allowFailure?: boolean } = {}) => {
+const sleep = (milliseconds: number) => {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds);
+};
+
+const parseWindowSize = (value: string): WindowSize => {
+  const match = /^(\d{3,5})x(\d{3,5})$/i.exec(value.trim());
+  if (!match) {
+    throw new Error(`Invalid --window-size value: ${value}. Use WIDTHxHEIGHT, for example 1024x720.`);
+  }
+  const width = Number(match[1]);
+  const height = Number(match[2]);
+  if (width < 1024 || height < 720) {
+    throw new Error(`Window size ${width}x${height} is below the supported 1024x720 minimum.`);
+  }
+  return { width, height };
+};
+
+const windowSizeArgument = argumentsList.find((argument) => argument.startsWith("--window-size="));
+const requestedWindowSizes = windowSizeArgument
+  ? [parseWindowSize(windowSizeArgument.slice("--window-size=".length))]
+  : [
+      { width: 1440, height: 900 },
+      { width: 1024, height: 720 },
+    ];
+
+const run = (
+  command: string,
+  args: string[],
+  options: { allowFailure?: boolean; timeoutMs?: number } = {},
+) => {
   const result = spawnSync(command, args, {
     cwd: repoRoot,
     encoding: "utf8",
     stdio: "pipe",
+    timeout: options.timeoutMs ?? 120_000,
   });
-  const output = `${result.stdout ?? ""}${result.stderr ?? ""}`.trim();
+  const output = `${result.stdout ?? ""}${result.stderr ?? ""}${result.error?.message ?? ""}`.trim();
+  if (result.error && !options.allowFailure) {
+    throw result.error;
+  }
   if (result.status !== 0 && !options.allowFailure) {
     throw new Error(output || `${command} ${args.join(" ")} failed`);
   }
@@ -25,7 +76,7 @@ const run = (command: string, args: string[], options: { allowFailure?: boolean 
 };
 
 const osascript = (lines: string[], options: { allowFailure?: boolean } = {}) =>
-  run("osascript", lines.flatMap((line) => ["-e", line]), options);
+  run("osascript", lines.flatMap((line) => ["-e", line]), { ...options, timeoutMs: 60_000 });
 
 const appleScriptString = (value: string) =>
   `"${value.replace(/\\/g, "\\\\").replace(/"/g, "\\\"")}"`;
@@ -33,410 +84,687 @@ const appleScriptString = (value: string) =>
 const processExists = () =>
   osascript([
     "tell application \"System Events\"",
-    `  return exists (first process whose bundle identifier is \"${bundleIdentifier}\")`,
+    `  return exists (first process whose bundle identifier is "${bundleIdentifier}")`,
     "end tell",
   ], { allowFailure: true }).output === "true";
 
-const waitForWindow = () => {
+const appSidecarPids = () => {
+  const candidates = run("pgrep", ["-f", "scripts/local_engine.mts"], { allowFailure: true }).output
+    .split(/\s+/)
+    .map(Number)
+    .filter((pid) => Number.isInteger(pid) && pid > 1);
+  return candidates.filter((pid) => {
+    const command = run("ps", ["-p", String(pid), "-o", "command="], { allowFailure: true }).output;
+    return command.includes(bundledNodeExecutable) && command.includes("scripts/local_engine.mts");
+  });
+};
+
+const terminateAppSidecars = () => {
+  for (const pid of appSidecarPids()) {
+    try {
+      process.kill(pid, "SIGTERM");
+    } catch {
+      // The process may have exited between discovery and termination.
+    }
+  }
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < 2_000 && appSidecarPids().length > 0) {
+    sleep(100);
+  }
+  for (const pid of appSidecarPids()) {
+    try {
+      process.kill(pid, "SIGKILL");
+    } catch {
+      // The process may have exited between discovery and forced termination.
+    }
+  }
+};
+
+const waitForWindow = (timeoutMs = 30_000) => {
   const result = osascript([
     "tell application \"System Events\"",
     "  set startedAt to current date",
-    "  repeat while ((current date) - startedAt) < 20",
-    `    if exists (first process whose bundle identifier is \"${bundleIdentifier}\") then`,
-    `      tell (first process whose bundle identifier is \"${bundleIdentifier}\")`,
+    `  repeat while ((current date) - startedAt) < ${Math.ceil(timeoutMs / 1_000)}`,
+    `    if exists (first process whose bundle identifier is "${bundleIdentifier}") then`,
+    `      tell (first process whose bundle identifier is "${bundleIdentifier}")`,
     "        if exists window 1 then return \"ready\"",
     "      end tell",
     "    end if",
     "    delay 0.25",
     "  end repeat",
     "end tell",
-    "error \"StockAnalysis window did not appear\"",
-  ]);
-  return result.output === "ready";
-};
-
-const windowContents = () =>
-  osascript([
-    "tell application \"System Events\"",
-    `  tell (first process whose bundle identifier is \"${bundleIdentifier}\")`,
-    "    return entire contents of window 1",
-    "  end tell",
-    "end tell",
-  ]).output;
-
-const openMenuBarExtra = () => {
-  osascript([
-    "tell application \"System Events\"",
-    `  tell (first process whose bundle identifier is \"${bundleIdentifier}\")`,
-    "    click menu bar item 1 of menu bar 2",
-    "  end tell",
-    "end tell",
-  ]);
-};
-
-const closeMenuBarExtra = () => {
-  osascript([
-    "tell application \"System Events\"",
-    `  tell (first process whose bundle identifier is \"${bundleIdentifier}\")`,
-    "    click menu bar item 1 of menu bar 2",
-    "  end tell",
-    "  delay 0.25",
-    "  key code 53",
-    "end tell",
+    "error \"YongStockDesk window did not appear\"",
   ], { allowFailure: true });
+  if (!result.ok || result.output !== "ready") {
+    const permissionHint = /assistive access|not authorized|보조 접근|권한/i.test(result.output)
+      ? " Grant Accessibility permission to the terminal/Codex process in System Settings > Privacy & Security > Accessibility."
+      : "";
+    throw new Error(`${result.output || "YongStockDesk window did not appear."}${permissionHint}`);
+  }
 };
 
-const menuBarExtraTexts = () =>
-  osascript([
+const recordIdentifier = (query: string) => {
+  if (query.startsWith("beginner-")) {
+    identifiersUsed.add(query);
+  }
+};
+
+const axActionScript = (query: string, action: AXAction, role?: string) => {
+  const escapedQuery = appleScriptString(query);
+  const escapedRole = appleScriptString(role ?? "");
+  const actionLines: string[] = [];
+  switch (action) {
+  case "exists":
+    actionLines.push("          return \"true\"");
+    break;
+  case "enabled":
+    actionLines.push(
+      "          try",
+      "            return (enabled of candidate as text)",
+      "          on error",
+      "            return \"false\"",
+      "          end try",
+    );
+    break;
+  case "frame":
+    actionLines.push(
+      "          try",
+      "            set candidatePosition to position of candidate",
+      "            set candidateSize to size of candidate",
+      "            return ((item 1 of candidatePosition as integer) as text) & \"|\" & ((item 2 of candidatePosition as integer) as text) & \"|\" & ((item 1 of candidateSize as integer) as text) & \"|\" & ((item 2 of candidateSize as integer) as text)",
+      "          on error errorMessage",
+      "            error \"Could not read AX frame for \" & targetQuery & \": \" & errorMessage",
+      "          end try",
+    );
+    break;
+  case "press":
+    actionLines.push(
+      "          try",
+      "            if enabled of candidate is false then error \"matched element is disabled\"",
+      "            perform action \"AXPress\" of candidate",
+      "            return \"pressed\"",
+      "          end try",
+      "          try",
+      "            if enabled of candidate is false then error \"matched element is disabled\"",
+      "            click candidate",
+      "            return \"pressed\"",
+      "          end try",
+    );
+    break;
+  }
+
+  return [
+    `set targetQuery to ${escapedQuery}`,
+    `set requiredRole to ${escapedRole}`,
     "tell application \"System Events\"",
-    `  tell (first process whose bundle identifier is \"${bundleIdentifier}\")`,
-    "    set output to {}",
-    "    if exists window 1 then",
-    "      tell group 1 of window 1",
-    "        repeat with textItem in static texts",
+    `  if not (exists (first process whose bundle identifier is "${bundleIdentifier}")) then error "YongStockDesk process not found"`,
+    `  tell (first process whose bundle identifier is "${bundleIdentifier}")`,
+    "    repeat with matchMode in {\"identifier\", \"name\"}",
+    "      set matchModeValue to contents of matchMode as text",
+    "      repeat with candidateWindow in windows",
+    "        set candidates to {candidateWindow}",
+    "        try",
+    "          set candidates to candidates & (entire contents of candidateWindow)",
+    "        end try",
+    "        repeat with candidate in candidates",
+    "          set candidateIdentifier to \"\"",
+    "          set candidateName to \"\"",
+    "          set candidateDescription to \"\"",
+    "          set candidateRole to \"\"",
     "          try",
-    "            set end of output to (value of textItem as text)",
+    "            set candidateIdentifier to value of attribute \"AXIdentifier\" of candidate as text",
     "          end try",
+    "          try",
+    "            set candidateName to name of candidate as text",
+    "          end try",
+    "          try",
+    "            set candidateDescription to description of candidate as text",
+    "          end try",
+    "          try",
+    "            set candidateRole to role of candidate as text",
+    "          end try",
+    "          set identifierMatched to matchModeValue is \"identifier\" and candidateIdentifier is targetQuery",
+    "          set nameMatched to matchModeValue is \"name\" and (candidateName is targetQuery or candidateDescription is targetQuery)",
+    "          set roleMatched to requiredRole is \"\" or candidateRole is requiredRole",
+    "          if (identifierMatched or nameMatched) and roleMatched then",
+    ...actionLines,
+    "          end if",
     "        end repeat",
-    "      end tell",
-    "    end if",
-    "    return output as text",
+    "      end repeat",
+    "    end repeat",
     "  end tell",
     "end tell",
-  ]).output;
-
-const sheetWindowScript = (body: string[]) => [
-  "tell application \"System Events\"",
-  `  tell (first process whose bundle identifier is \"${bundleIdentifier}\")`,
-  "    set targetWindow to missing value",
-  "    repeat with candidate in windows",
-  "      if exists sheet 1 of candidate then",
-  "        set targetWindow to candidate",
-  "        exit repeat",
-  "      end if",
-  "    end repeat",
-  "    if targetWindow is missing value then error \"StockAnalysis sheet not found\"",
-  ...body,
-  "  end tell",
-  "end tell",
-];
-
-const sheetTexts = () =>
-  osascript(sheetWindowScript([
-    "    return entire contents of sheet 1 of targetWindow",
-  ])).output;
-
-const clickMenuBarExtraButton = (index: number) => {
-  osascript([
-    "tell application \"System Events\"",
-    `  tell (first process whose bundle identifier is \"${bundleIdentifier}\")`,
-    `    click button ${index} of group 1 of window 1`,
-    "  end tell",
-    "end tell",
-  ]);
+    action === "exists" || action === "enabled" ? "return \"false\"" : `error "AX element not found: ${query.replace(/"/g, "\\\"")}"`,
+  ];
 };
 
-const clickWindowButton = (index: number) => {
-  osascript([
-    "tell application \"System Events\"",
-    `  tell (first process whose bundle identifier is \"${bundleIdentifier}\")`,
-    `    click button ${index} of group 1 of window 1`,
-    "  end tell",
-    "end tell",
-  ]);
+const axAction = (query: string, action: AXAction, role?: string, allowFailure = false) => {
+  recordIdentifier(query);
+  return osascript(axActionScript(query, action, role), { allowFailure });
 };
 
-const typeIntoSymbolSearch = (query: string) => {
+const axExists = (query: string, role?: string) =>
+  axAction(query, "exists", role, true).output === "true";
+
+const axEnabled = (query: string, role?: string) =>
+  axAction(query, "enabled", role, true).output === "true";
+
+const parseFrame = (output: string, context: string): Frame => {
+  const values = output.split("|").map(Number);
+  if (values.length !== 4 || values.some((value) => !Number.isFinite(value))) {
+    throw new Error(`Invalid AX frame for ${context}: ${output}`);
+  }
+  return { x: values[0], y: values[1], width: values[2], height: values[3] };
+};
+
+const axFrame = (query: string, role?: string) => {
+  const result = axAction(query, "frame", role, true);
+  if (!result.ok) {
+    throw new Error(result.output || `Could not read AX frame for ${query}`);
+  }
+  return parseFrame(result.output, query);
+};
+
+const fullAXContents = () =>
+  osascript([
+    "set outputText to \"\"",
+    "tell application \"System Events\"",
+    `  if not (exists (first process whose bundle identifier is "${bundleIdentifier}")) then return outputText`,
+    `  tell (first process whose bundle identifier is "${bundleIdentifier}")`,
+    "    repeat with candidateWindow in windows",
+    "      set candidates to {candidateWindow}",
+    "      try",
+    "        set candidates to candidates & (entire contents of candidateWindow)",
+    "      end try",
+    "      repeat with candidate in candidates",
+    "        set candidateIdentifier to \"\"",
+    "        set candidateName to \"\"",
+    "        set candidateDescription to \"\"",
+    "        set candidateValue to \"\"",
+    "        set candidateRole to \"\"",
+    "        try",
+    "          set candidateIdentifier to value of attribute \"AXIdentifier\" of candidate as text",
+    "        end try",
+    "        try",
+    "          set candidateName to name of candidate as text",
+    "        end try",
+    "        try",
+    "          set candidateDescription to description of candidate as text",
+    "        end try",
+    "        try",
+    "          set candidateRole to role of candidate as text",
+    "        end try",
+    "        try",
+    "          if candidateRole is \"AXStaticText\" or candidateRole is \"AXTextField\" or candidateRole is \"AXButton\" then set candidateValue to value of candidate as text",
+    "        end try",
+    "        if candidateIdentifier is not \"\" or candidateName is not \"\" or candidateDescription is not \"\" or candidateValue is not \"\" then",
+    "          set outputText to outputText & candidateRole & \"|id=\" & candidateIdentifier & \"|name=\" & candidateName & \"|description=\" & candidateDescription & \"|value=\" & candidateValue & linefeed",
+    "        end if",
+    "      end repeat",
+    "    end repeat",
+    "  end tell",
+    "end tell",
+    "return outputText",
+  ], { allowFailure: true }).output;
+
+const axTextContains = (text: string) =>
+  osascript([
+    `set targetText to ${appleScriptString(text)}`,
+    "tell application \"System Events\"",
+    `  if not (exists (first process whose bundle identifier is "${bundleIdentifier}")) then return false`,
+    `  tell (first process whose bundle identifier is "${bundleIdentifier}")`,
+    "    repeat with candidateWindow in windows",
+    "      set candidates to {candidateWindow}",
+    "      try",
+    "        set candidates to candidates & (entire contents of candidateWindow)",
+    "      end try",
+    "      repeat with candidate in candidates",
+    "        set candidateIdentifier to \"\"",
+    "        set candidateName to \"\"",
+    "        set candidateDescription to \"\"",
+    "        set candidateValue to \"\"",
+    "        set candidateRole to \"\"",
+    "        try",
+    "          set candidateIdentifier to value of attribute \"AXIdentifier\" of candidate as text",
+    "        end try",
+    "        try",
+    "          set candidateName to name of candidate as text",
+    "        end try",
+    "        try",
+    "          set candidateDescription to description of candidate as text",
+    "        end try",
+    "        try",
+    "          set candidateRole to role of candidate as text",
+    "        end try",
+    "        try",
+    "          if candidateRole is \"AXStaticText\" or candidateRole is \"AXTextField\" or candidateRole is \"AXButton\" then set candidateValue to value of candidate as text",
+    "        end try",
+    "        if candidateIdentifier contains targetText or candidateName contains targetText or candidateDescription contains targetText or candidateValue contains targetText then return true",
+    "      end repeat",
+    "    end repeat",
+    "  end tell",
+    "end tell",
+    "return false",
+  ], { allowFailure: true }).output === "true";
+
+const interactiveControlNames = () =>
+  osascript([
+    "set outputText to \"\"",
+    "tell application \"System Events\"",
+    `  tell (first process whose bundle identifier is "${bundleIdentifier}")`,
+    "    repeat with candidateWindow in windows",
+    "      set candidates to entire contents of candidateWindow",
+    "      repeat with candidate in candidates",
+    "        set candidateRole to \"\"",
+    "        set candidateName to \"\"",
+    "        try",
+    "          set candidateRole to role of candidate as text",
+    "        end try",
+    "        try",
+    "          set candidateName to name of candidate as text",
+    "        end try",
+    "        if candidateRole is \"AXButton\" or candidateRole is \"AXMenuItem\" or candidateRole is \"AXRadioButton\" then",
+    "          set outputText to outputText & candidateRole & \"|\" & candidateName & linefeed",
+    "        end if",
+    "      end repeat",
+    "    end repeat",
+    "  end tell",
+    "end tell",
+    "return outputText",
+  ], { allowFailure: true }).output;
+
+const waitForAX = (query: string, timeoutMs = 20_000, role?: string) => {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    if (axExists(query, role)) return;
+    sleep(250);
+  }
+  const lastContents = fullAXContents();
+  throw new Error(`AX element not found: ${query}\n\nLast AX contents:\n${lastContents.slice(0, 24_000)}`);
+};
+
+const waitForAXAbsent = (query: string, timeoutMs = 10_000, role?: string) => {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    if (!axExists(query, role)) return;
+    sleep(250);
+  }
+  throw new Error(`AX element remained visible: ${query}`);
+};
+
+const waitForAXEnabled = (query: string, timeoutMs = 30_000, role?: string) => {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    if (axEnabled(query, role)) return;
+    sleep(250);
+  }
+  throw new Error(`AX element did not become enabled: ${query}\n\n${fullAXContents().slice(0, 16_000)}`);
+};
+
+const clickAX = (query: string, role?: string) => {
+  const startedAt = Date.now();
+  let lastOutput = "";
+  while (Date.now() - startedAt < 20_000) {
+    const result = axAction(query, "press", role, true);
+    lastOutput = result.output;
+    if (result.ok && result.output === "pressed") {
+      pressedTargets.push(query);
+      return;
+    }
+    sleep(250);
+  }
+  throw new Error(`${lastOutput || `Could not press ${query}`}\n\n${fullAXContents().slice(0, 24_000)}`);
+};
+
+const waitForText = (text: string, timeoutMs = 30_000) => {
+  const startedAt = Date.now();
+  let lastContents = "";
+  while (Date.now() - startedAt < timeoutMs) {
+    if (axTextContains(text)) return;
+    sleep(500);
+  }
+  lastContents = fullAXContents();
+  throw new Error(`Visible AX text not found: ${text}\n\nLast AX contents:\n${lastContents.slice(0, 24_000)}`);
+};
+
+const waitForTextAbsent = (text: string, timeoutMs = 10_000) => {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    if (!axTextContains(text)) return;
+    sleep(500);
+  }
+  throw new Error(`Visible AX text remained present: ${text}`);
+};
+
+const pressEscape = () => {
   const result = osascript([
     "tell application \"System Events\"",
     `  tell (first process whose bundle identifier is "${bundleIdentifier}")`,
     "    set frontmost to true",
-    "    set focused of text field 1 of group 1 of window 1 to true",
-    "    delay 0.15",
-    "    keystroke \"a\" using command down",
-    `    keystroke ${appleScriptString(query)}`,
-    "    delay 0.5",
+    "    key code 53",
     "  end tell",
     "end tell",
   ], { allowFailure: true });
   if (!result.ok) {
-    throw new Error(result.output || "Could not type into symbol search field.");
+    throw new Error(result.output || "Could not dismiss the presented UI with Escape.");
   }
 };
 
-const waitForSymbolSuggestion = (timeoutMs = 20_000) => {
-  const startedAt = Date.now();
-  while (Date.now() - startedAt < timeoutMs) {
-    const contents = windowContents();
-    if (contents.includes("pop over 1 of text field 1") && contents.includes("button 1 of UI element 1 of scroll area 1")) return;
-    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 250);
+const setScrollPosition = (identifier: string, value: number) => {
+  const result = osascript([
+    `set targetIdentifier to ${appleScriptString(identifier)}`,
+    `set targetValue to ${Math.min(1, Math.max(0, value))}`,
+    "tell application \"System Events\"",
+    `  tell (first process whose bundle identifier is "${bundleIdentifier}")`,
+    "    repeat with candidateWindow in windows",
+    "      set candidates to entire contents of candidateWindow",
+    "      repeat with candidate in candidates",
+    "        set candidateIdentifier to \"\"",
+    "        try",
+    "          set candidateIdentifier to value of attribute \"AXIdentifier\" of candidate as text",
+    "        end try",
+    "        if candidateIdentifier is targetIdentifier then",
+    "          try",
+    "            set value of scroll bar 1 of candidate to targetValue",
+    "            return \"scrolled\"",
+    "          on error errorMessage",
+    "            error \"Could not set scroll position: \" & errorMessage",
+    "          end try",
+    "        end if",
+    "      end repeat",
+    "    end repeat",
+    "  end tell",
+    "end tell",
+    `error "Scroll area not found: ${identifier.replace(/"/g, "\\\"")}"`,
+  ], { allowFailure: true });
+  if (!result.ok || result.output !== "scrolled") {
+    throw new Error(result.output || `Could not scroll ${identifier}.`);
   }
-  throw new Error("Symbol search suggestion did not appear.");
+  sleep(500);
 };
 
-const openSymbolSuggestionWithRetry = (query: string, attempts = 3) => {
-  let lastError: unknown;
-  for (let attempt = 1; attempt <= attempts; attempt += 1) {
-    typeIntoSymbolSearch(query);
-    try {
-      waitForSymbolSuggestion();
-      return;
-    } catch (error) {
-      lastError = error;
-      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 750);
-    }
-  }
-  throw lastError instanceof Error ? lastError : new Error("Symbol search suggestion did not appear after retry.");
-};
-
-const clickFirstSymbolSuggestion = () => {
+const sheetExists = () =>
   osascript([
     "tell application \"System Events\"",
     `  tell (first process whose bundle identifier is "${bundleIdentifier}")`,
-    "    set frontmost to true",
-    "    key code 36",
-    "  end tell",
-    "end tell",
-  ]);
-};
-
-const waitForSymbolSearchValue = (expected: string, timeoutMs = 20_000) => {
-  const startedAt = Date.now();
-  while (Date.now() - startedAt < timeoutMs) {
-    const result = osascript([
-      "tell application \"System Events\"",
-      `  tell (first process whose bundle identifier is "${bundleIdentifier}")`,
-      "    return value of text field 1 of group 1 of window 1",
-      "  end tell",
-      "end tell",
-    ], { allowFailure: true });
-    if (result.output === expected) return;
-    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 250);
-  }
-  throw new Error(`Symbol search field did not become: ${expected}`);
-};
-
-const windowButtonEnabled = (index: number) =>
-  osascript([
-    "tell application \"System Events\"",
-    `  tell (first process whose bundle identifier is \"${bundleIdentifier}\")`,
-    `    return enabled of button ${index} of group 1 of window 1`,
-    "  end tell",
-    "end tell",
-  ]).output === "true";
-
-const clickWindowScrollButton = (scrollAreaIndex: number, buttonIndex: number) => {
-  osascript([
-    "tell application \"System Events\"",
-    `  tell (first process whose bundle identifier is \"${bundleIdentifier}\")`,
-    `    click button ${buttonIndex} of scroll area ${scrollAreaIndex} of group 1 of window 1`,
-    "  end tell",
-    "end tell",
-  ]);
-};
-
-const windowScrollButtonEnabled = (scrollAreaIndex: number, buttonIndex: number) =>
-  osascript([
-    "tell application \"System Events\"",
-    `  tell (first process whose bundle identifier is \"${bundleIdentifier}\")`,
-    `    return enabled of button ${buttonIndex} of scroll area ${scrollAreaIndex} of group 1 of window 1`,
-    "  end tell",
-    "end tell",
-  ]).output === "true";
-
-const clickSheetButton = (index: number) => {
-  osascript(sheetWindowScript([
-    `    click button ${index} of group 1 of sheet 1 of targetWindow`,
-  ]));
-};
-
-const clickConfirmationButton = (index: number) => {
-  osascript(sheetWindowScript([
-    `    click button ${index} of sheet 1 of targetWindow`,
-  ]));
-};
-
-const sheetButtonEnabled = (index: number) =>
-  osascript(sheetWindowScript([
-    `    return enabled of button ${index} of group 1 of sheet 1 of targetWindow`,
-  ])).output === "true";
-
-const sheetTextFieldValue = (index: number) =>
-  osascript(sheetWindowScript([
-    `    return value of text field ${index} of group 1 of sheet 1 of targetWindow`,
-  ]), { allowFailure: true }).output;
-
-const typeIntoTossCredentialFields = (clientId: string, clientSecret: string) => {
-  const result = osascript(sheetWindowScript([
-    "    set frontmost to true",
-    "    tell group 1 of sheet 1 of targetWindow",
-    "      set focused of text field 1 to true",
-    "    delay 0.15",
-    "    keystroke \"a\" using command down",
-    `    keystroke ${appleScriptString(clientId)}`,
-    "    delay 0.15",
-    "      set focused of text field 2 to true",
-    "    delay 0.15",
-    "    keystroke \"a\" using command down",
-    `    keystroke ${appleScriptString(clientSecret)}`,
-    "    delay 0.25",
-    "    end tell",
-  ]), { allowFailure: true });
-  if (!result.ok) {
-    throw new Error(result.output || "Could not type Toss credentials into sheet.");
-  }
-};
-
-const clickSheetScrollButton = (index: number) => {
-  osascript(sheetWindowScript([
-    `    click button ${index} of scroll area 1 of group 1 of sheet 1 of targetWindow`,
-  ]));
-};
-
-const clickReleaseChecksumButton = () => {
-  const countOutput = osascript(sheetWindowScript([
-    "    tell scroll area 1 of group 1 of sheet 1 of targetWindow",
-    "      return count of buttons",
-    "    end tell",
-  ])).output;
-  const buttonCount = Number(countOutput);
-  if (!Number.isInteger(buttonCount) || buttonCount <= 0) {
-    throw new Error(`Invalid release sheet button count: ${countOutput}`);
-  }
-  osascript(["set the clipboard to \"\""], { allowFailure: true });
-  for (let index = buttonCount; index >= 1; index -= 1) {
-    osascript(sheetWindowScript([
-      `    click button ${index} of scroll area 1 of group 1 of sheet 1 of targetWindow`,
-    ]), { allowFailure: true });
-    const checksum = run("pbpaste", []).output.trim();
-    if (/^[a-f0-9]{64}$/i.test(checksum)) {
-      return checksum;
-    }
-  }
-  throw new Error(`Release checksum button not found among ${buttonCount} sheet buttons.`);
-};
-
-const clickStrategySaveButton = () => {
-  osascript(sheetWindowScript([
-    "    click button 2 of scroll area 1 of group 1 of sheet 1 of targetWindow",
-  ]));
-};
-
-const clickStrategyCardButton = (index: number) => {
-  osascript(sheetWindowScript([
-    "    set actionGroup to missing value",
-    "    repeat with candidate in UI elements of scroll area 2 of group 1 of sheet 1 of targetWindow",
-    "      try",
-    "        if (count of buttons of candidate) = 6 and actionGroup is missing value then set actionGroup to candidate",
-    "      end try",
+    "    repeat with candidateWindow in windows",
+    "      if exists sheet 1 of candidateWindow then return true",
     "    end repeat",
-    "    if actionGroup is missing value then",
-    "      repeat with candidate in UI elements of scroll area 2 of group 1 of sheet 1 of targetWindow",
-    "        try",
-    "          if (count of buttons of candidate) >= 5 and actionGroup is missing value then set actionGroup to candidate",
-    "        end try",
-    "      end repeat",
-    "    end if",
-    "    if actionGroup is missing value then error \"strategy action group not found\"",
-    `    if ${index} > (count of buttons of actionGroup) then error "strategy action button ${index} not found"`,
-    `    if enabled of button ${index} of actionGroup is false then error "strategy action button ${index} is disabled"`,
-    `    click button ${index} of actionGroup`,
-  ]));
-};
+    "    return false",
+    "  end tell",
+    "end tell",
+  ], { allowFailure: true }).output === "true";
 
-const waitForStrategyCardButtonEnabled = (index: number, timeoutMs = 10_000) => {
+const waitForNoSheet = (timeoutMs = 15_000) => {
   const startedAt = Date.now();
   while (Date.now() - startedAt < timeoutMs) {
-    const result = osascript(sheetWindowScript([
-      "    set actionGroup to missing value",
-      "    repeat with candidate in UI elements of scroll area 2 of group 1 of sheet 1 of targetWindow",
-      "      try",
-      "        if (count of buttons of candidate) = 6 and actionGroup is missing value then set actionGroup to candidate",
-      "      end try",
-      "    end repeat",
-      "    if actionGroup is missing value then return false",
-      `    if ${index} > (count of buttons of actionGroup) then return false`,
-      `    return enabled of button ${index} of actionGroup`,
-    ]), { allowFailure: true });
-    if (result.output === "true") {
-      return;
-    }
-    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 250);
+    if (!sheetExists()) return;
+    sleep(250);
   }
-  throw new Error(`Strategy card button ${index} did not become enabled`);
+  throw new Error(`A presented sheet did not close.\n\n${fullAXContents().slice(0, 16_000)}`);
 };
 
-const waitForWindowText = (label: string, timeoutMs = 15_000) => {
+const waitForSheet = (timeoutMs = 15_000) => {
   const startedAt = Date.now();
-  let lastContents = "";
   while (Date.now() - startedAt < timeoutMs) {
-    lastContents = windowContents();
-    if (lastContents.includes(label)) {
-      return;
-    }
-    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 250);
+    if (sheetExists()) return;
+    sleep(250);
   }
-  throw new Error(`Window text not found: ${label}\n\nLast contents:\n${lastContents.slice(0, 20_000)}`);
+  throw new Error(`A settings sheet did not appear.\n\n${fullAXContents().slice(0, 16_000)}`);
 };
 
-const waitForSheetText = (label: string, timeoutMs = 10_000) => {
-  const startedAt = Date.now();
-  let lastContents = "";
-  while (Date.now() - startedAt < timeoutMs) {
-    const result = osascript(sheetWindowScript([
-      "    return entire contents of sheet 1 of targetWindow",
-    ]), { allowFailure: true });
-    lastContents = result.output;
-    if (lastContents.includes(label)) {
-      return;
-    }
-    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 250);
+const dismissSheet = (uniqueText?: string) => {
+  pressEscape();
+  const escapeStartedAt = Date.now();
+  while (Date.now() - escapeStartedAt < 3_000) {
+    if (!sheetExists() && (!uniqueText || !axTextContains(uniqueText))) return;
+    sleep(200);
   }
-  throw new Error(`Sheet text not found: ${label}\n\nLast contents:\n${lastContents.slice(0, 2000)}`);
+  if (axExists("닫기", "AXButton")) {
+    clickAX("닫기", "AXButton");
+  } else if (axExists("취소", "AXButton")) {
+    clickAX("취소", "AXButton");
+  }
+  waitForNoSheet();
+  if (uniqueText) {
+    waitForTextAbsent(uniqueText);
+  }
 };
 
-const waitForSheetButtonEnabled = (index: number, timeoutMs = 10_000) => {
-  const startedAt = Date.now();
-  while (Date.now() - startedAt < timeoutMs) {
-    const result = osascript(sheetWindowScript([
-      `    return enabled of button ${index} of group 1 of sheet 1 of targetWindow`,
-    ]), { allowFailure: true });
-    if (result.output === "true") {
-      return;
-    }
-    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 250);
-  }
-  const debug = osascript(sheetWindowScript([
-    "    tell group 1 of sheet 1 of targetWindow",
-    "      set buttonStates to {}",
-    "      repeat with buttonIndex from 1 to count of buttons",
-    "        try",
-    "          set end of buttonStates to ((buttonIndex as text) & \":\" & (enabled of button buttonIndex as text))",
-    "        end try",
-    "      end repeat",
-    "      set fieldValues to {}",
-    "      repeat with fieldIndex from 1 to count of text fields",
-    "        try",
-    "          set end of fieldValues to ((fieldIndex as text) & \":\" & (value of text field fieldIndex as text))",
-    "        end try",
-    "      end repeat",
-    "      return \"buttons=\" & (buttonStates as text) & \" fields=\" & (fieldValues as text)",
-    "    end tell",
-  ]), { allowFailure: true }).output;
-  throw new Error(`Sheet button ${index} did not become enabled\n${debug}`);
+const windowFrame = (): Frame => {
+  const result = osascript([
+    "tell application \"System Events\"",
+    `  tell (first process whose bundle identifier is "${bundleIdentifier}")`,
+    "    set windowPosition to position of window 1",
+    "    set windowSize to size of window 1",
+    "    return ((item 1 of windowPosition as integer) as text) & \"|\" & ((item 2 of windowPosition as integer) as text) & \"|\" & ((item 1 of windowSize as integer) as text) & \"|\" & ((item 2 of windowSize as integer) as text)",
+    "  end tell",
+    "end tell",
+  ]);
+  return parseFrame(result.output, "window 1");
 };
 
-const waitForMenuBarExtraText = (label: string, timeoutMs = 10_000) => {
-  const startedAt = Date.now();
-  let lastContents = "";
-  while (Date.now() - startedAt < timeoutMs) {
-    lastContents = menuBarExtraTexts();
-    if (lastContents.includes(label)) {
-      return;
-    }
-    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 250);
+const setAndVerifyWindowSize = (size: WindowSize) => {
+  osascript([
+    "tell application \"System Events\"",
+    `  tell (first process whose bundle identifier is "${bundleIdentifier}")`,
+    "    set position of window 1 to {20, 40}",
+    `    set size of window 1 to {${size.width}, ${size.height}}`,
+    "    set frontmost to true",
+    "  end tell",
+    "end tell",
+  ]);
+  sleep(500);
+  const actual = windowFrame();
+  const chromeTolerance = 4;
+  const minimumContentHeightChrome = size.height === 720
+    && actual.height >= size.height
+    && actual.height <= size.height + 40;
+  if (
+    Math.abs(actual.width - size.width) > chromeTolerance
+    || (Math.abs(actual.height - size.height) > chromeTolerance && !minimumContentHeightChrome)
+  ) {
+    throw new Error(`Window size mismatch: requested ${size.width}x${size.height}, actual ${actual.width}x${actual.height}.`);
   }
-  throw new Error(`Menu bar extra text not found: ${label}\n\nLast contents:\n${lastContents.slice(0, 2000)}`);
+  return actual;
+};
+
+const assertInsideWindow = (query: string, window: Frame) => {
+  const frame = axFrame(query);
+  const tolerance = 4;
+  const right = frame.x + frame.width;
+  const bottom = frame.y + frame.height;
+  const windowRight = window.x + window.width;
+  const windowBottom = window.y + window.height;
+  if (frame.width <= 0 || frame.height <= 0
+      || frame.x < window.x - tolerance
+      || frame.y < window.y - tolerance
+      || right > windowRight + tolerance
+      || bottom > windowBottom + tolerance) {
+    throw new Error(`AX element ${query} is clipped at ${frame.x},${frame.y},${frame.width},${frame.height} within window ${window.x},${window.y},${window.width},${window.height}.`);
+  }
+};
+
+const verifyWorkspaceLayout = (size: WindowSize) => {
+  const actual = setAndVerifyWindowSize(size);
+  const destinations = [
+    ["beginner-nav-chart", "beginner-chart-workspace"],
+    ["beginner-nav-assets", "beginner-assets-workspace"],
+    ["beginner-nav-strategy", "beginner-strategy-workspace"],
+    ["beginner-nav-automation", "beginner-automation-workspace"],
+    ["beginner-nav-settings", "beginner-settings-workspace"],
+  ] as const;
+  const workspaceFrames: Record<string, Frame> = {};
+
+  for (const [navigationIdentifier, workspaceIdentifier] of destinations) {
+    clickAX(navigationIdentifier);
+    waitForAX(workspaceIdentifier);
+    assertInsideWindow(navigationIdentifier, actual);
+    assertInsideWindow(workspaceIdentifier, actual);
+    workspaceFrames[workspaceIdentifier] = axFrame(workspaceIdentifier);
+    if (navigationIdentifier === "beginner-nav-strategy") {
+      waitForText("처음 만드는 자동매매");
+      waitForAX("beginner-strategy-preview-card");
+    }
+  }
+
+  clickAX("beginner-nav-chart");
+  waitForAX("beginner-chart-workspace");
+  waitForAX("beginner-symbol-search");
+  waitForAX("beginner-analyze-button");
+  assertInsideWindow("beginner-symbol-search", actual);
+  assertInsideWindow("beginner-analyze-button", actual);
+
+  return {
+    requested: `${size.width}x${size.height}`,
+    actual: `${actual.width}x${actual.height}`,
+    frame: actual,
+    workspaceFrames,
+  };
+};
+
+const verifyStrategyWorkflowOrder = () => {
+  const labels = ["1. 초안 저장", "2. 현재 조건 확인", "3. 모의 시뮬레이션", "4. 전략 활성화"];
+  labels.forEach((label) => waitForAX(label));
+  const frames = labels.map((label) => axFrame(label));
+  const horizontalOrder = frames.every((frame, index) => index === 0 || frame.x > frames[index - 1].x);
+  if (!horizontalOrder) {
+    throw new Error(`Strategy workflow is not ordered left-to-right as 초안 저장 → 조건 확인 → 시뮬레이션 → 활성화: ${JSON.stringify(frames)}`);
+  }
+};
+
+const assertNoBrokerSubmitControl = () => {
+  const controls = interactiveControlNames();
+  const prohibited = controls.split("\n").find((line) =>
+    /(?:실제|실계좌|broker).*(?:주문|제출)|(?:주문|제출).*(?:실제|실계좌|broker)/i.test(line)
+    && !/(?:없음|차단|금지)/.test(line));
+  if (prohibited) {
+    throw new Error(`A broker/live-submit control is exposed in PAPER ONLY UI: ${prohibited}`);
+  }
+  if (pressedTargets.includes("beginner-paper-order-submit")) {
+    throw new Error("UI smoke must never press the paper-order submit control.");
+  }
+};
+
+const verifyCoreFlow = () => {
+  waitForAX("beginner-onboarding", 30_000);
+  waitForText("PAPER ONLY");
+  waitForText("삼성전자 예제");
+  waitForText("실제 주문 버튼은 제공하지 않습니다");
+  waitForAX("beginner-onboarding-example");
+  clickAX("beginner-onboarding-example");
+  waitForAXAbsent("beginner-onboarding", 30_000);
+
+  waitForAX("beginner-chart-workspace", 30_000);
+  waitForAX("beginner-symbol-search");
+  waitForAX("beginner-analyze-button");
+  waitForAXEnabled("beginner-analyze-button", 60_000);
+  waitForText("삼성전자", 60_000);
+  waitForText("테스트 fixture 데이터입니다", 60_000);
+  waitForText("일봉 차트", 60_000);
+  waitForText("FIXTURE", 60_000);
+  waitForText("KRW", 60_000);
+  waitForText("2026", 60_000);
+
+  waitForAX("beginner-analysis-tab-analysis");
+  clickAX("beginner-analysis-tab-analysis");
+  waitForAX("beginner-horizon-picker");
+  const horizons = [
+    ["단타", "beginner-horizon-day"],
+    ["스윙", "beginner-horizon-swing"],
+    ["장투", "beginner-horizon-longTerm"],
+  ] as const;
+  for (const [horizonName, horizonIdentifier] of horizons) {
+    clickAX(horizonName);
+    waitForAX(horizonIdentifier);
+    setScrollPosition("beginner-chart-workspace", 1);
+    waitForText("손절·무효화", 8_000);
+    waitForText("1차 익절", 8_000);
+    waitForText("2차 익절", 8_000);
+    setScrollPosition("beginner-chart-workspace", 0);
+  }
+
+  clickAX("beginner-analysis-tab-signals");
+  waitForAX("beginner-signal-panel");
+  clickAX("beginner-analysis-tab-newsSentiment");
+  waitForAX("beginner-news-sentiment-panel");
+  waitForText("뉴스와 종목 민심");
+  clickAX("beginner-analysis-tab-analysis");
+
+  clickAX("beginner-open-paper-order");
+  waitForAX("beginner-paper-order-drawer");
+  waitForText("PAPER ONLY");
+  waitForText("실제 주문 없음");
+  waitForText("기존 OrderIntent · RiskCheck");
+  waitForAX("beginner-paper-order-close");
+  waitForAX("beginner-paper-order-submit");
+  assertNoBrokerSubmitControl();
+  clickAX("beginner-paper-order-close");
+  waitForAXAbsent("beginner-paper-order-drawer");
+
+  clickAX("beginner-nav-assets");
+  waitForAX("beginner-assets-workspace");
+  waitForText("내 자산");
+  waitForText("통화가 다른 계좌는 합산하지 않고");
+
+  clickAX("beginner-nav-strategy");
+  waitForAX("beginner-strategy-workspace");
+  waitForText("처음 만드는 자동매매", 30_000);
+  waitForText("매매 문장으로 전략 만들기", 30_000);
+  assertNoBrokerSubmitControl();
+  verifyStrategyWorkflowOrder();
+  for (const identifier of [
+    "beginner-strategy-name",
+    "beginner-strategy-refresh-quote",
+    "beginner-strategy-apply-quote",
+    "beginner-strategy-quantity",
+    "beginner-strategy-rung-count",
+    "beginner-strategy-first-drop",
+    "beginner-strategy-rung-gap",
+    "beginner-strategy-take-profit",
+    "beginner-strategy-stop-loss",
+    "beginner-strategy-save",
+    "beginner-strategy-preview",
+    "beginner-strategy-simulate",
+    "beginner-strategy-enable",
+  ]) {
+    waitForAX(identifier, 30_000);
+  }
+
+  clickAX("beginner-nav-automation");
+  waitForAX("beginner-automation-workspace");
+  waitForText("PAPER ONLY");
+  waitForText("실행 제어");
+  assertNoBrokerSubmitControl();
+
+  clickAX("beginner-nav-settings");
+  waitForAX("beginner-settings-workspace");
+  waitForAX("beginner-settings-kill-switch");
+  if (!axEnabled("beginner-settings-kill-switch")) {
+    throw new Error("The settings kill switch must be reachable and enabled.");
+  }
+
+  clickAX("beginner-settings-api");
+  waitForText("연결할 API 선택");
+  waitForText("API 연결은 선택 사항입니다");
+  waitForText("Toss 주식 API");
+  waitForText("Upbit·Bithumb 코인 API");
+  pressEscape();
+  waitForTextAbsent("연결할 API 선택");
+
+  clickAX("beginner-settings-self-test");
+  waitForText("핵심 버튼 경로를 주문 제출 없이 점검합니다", 30_000);
+  dismissSheet("핵심 버튼 경로를 주문 제출 없이 점검합니다");
+
+  clickAX("beginner-settings-log");
+  waitForText("로컬 엔진 시작, health check", 30_000);
+  dismissSheet("로컬 엔진 시작, health check");
+
+  clickAX("beginner-settings-distribution");
+  waitForSheet();
+  dismissSheet();
+
+  assertNoBrokerSubmitControl();
 };
 
 const main = () => {
@@ -451,19 +779,20 @@ const main = () => {
   }
 
   if (processExists()) {
-    osascript([
-      `tell application id \"${bundleIdentifier}\" to quit`,
-    ], { allowFailure: true });
-    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1_500);
+    osascript([`tell application id "${bundleIdentifier}" to quit`], { allowFailure: true });
+    sleep(1_500);
   }
   run("pkill", ["-x", "StockAnalysisMac"], { allowFailure: true });
-  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 500);
-  const appSupportRoot = mkdtempSync(join(tmpdir(), "stockanalysis-macos-ui-"));
+  terminateAppSidecars();
+  sleep(500);
+
+  const appSupportRoot = mkdtempSync(join(tmpdir(), "yongstockdesk-macos-ui-"));
   let appProcess: ChildProcess | null = spawn(appExecutable, {
     cwd: repoRoot,
     env: {
       ...process.env,
       STOCK_ANALYSIS_MAC_APP_SUPPORT_ROOT: appSupportRoot,
+      STOCK_ANALYSIS_MARKET_FIXTURE_MODE: "1",
       STOCK_ANALYSIS_EGRESS_IP_OVERRIDE: "198.51.100.42",
       STOCK_ANALYSIS_UI_SMOKE_REJECT_TOSS_CREDENTIALS: "1",
     },
@@ -472,308 +801,82 @@ const main = () => {
 
   try {
     waitForWindow();
-    waitForWindowText("StockAnalysis Terminal");
-    waitForWindowText("시장 인텔리전스");
-    waitForWindowText("판단 패널");
-    waitForWindowText("Sidecar 정상", 30_000);
+    setAndVerifyWindowSize(requestedWindowSizes[0]);
+    verifyCoreFlow();
+    const windowSizes = requestedWindowSizes.map(verifyWorkspaceLayout);
+    assertNoBrokerSubmitControl();
 
-    openSymbolSuggestionWithRetry("NVDA");
-    clickFirstSymbolSuggestion();
-    waitForSymbolSearchValue("엔비디아 · NVIDIA Corporation · NVDA");
-
-    openMenuBarExtra();
-    waitForMenuBarExtraText("Sidecar 정상", 20_000);
-    waitForMenuBarExtraText("실거래 게이트 OFF", 20_000);
-    clickMenuBarExtraButton(3);
-    waitForMenuBarExtraText("news refreshed", 30_000);
-    closeMenuBarExtra();
-    waitForWindowText("StockAnalysis Terminal");
-
-    clickWindowButton(11);
-    waitForSheetText("코인 거래소 연결", 20_000);
-    waitForSheetText("Upbit·Bithumb 연결을 점검", 20_000);
-    waitForSheetText("코인 자동거래 게이트", 20_000);
-    waitForSheetText("paper 자동화 전용", 20_000);
-    waitForSheetText("이 두 점검 버튼은 실제 주문을 생성하지 않습니다", 20_000);
-    clickSheetButton(1);
-
-    clickWindowButton(3);
-    waitForWindowText("상태 갱신 요약", 30_000);
-    clickWindowButton(4);
-    waitForWindowText("뉴스/RSS 갱신 요약", 30_000);
-    clickWindowButton(1);
-    waitForWindowText("분석 요약", 45_000);
-    clickWindowButton(2);
-    waitForWindowText("시장 브리핑 요약", 60_000);
-
-    clickWindowButton(19);
-    waitForWindowText("OrderIntent 계획을 플레이북에 저장했습니다", 30_000);
-    clickWindowButton(20);
-    waitForWindowText("전략 초안", 30_000);
-    clickWindowButton(18);
-    waitForWindowText("모의 주문 실행 요약", 30_000);
-    clickWindowButton(21);
-    waitForSheetText("모의 계좌 초기화", 20_000);
-    waitForSheetText("실거래 broker 주문은 제출하지 않습니다", 20_000);
-    clickConfirmationButton(1);
-    waitForWindowText("모의 계좌를 초기화했습니다", 30_000);
-    waitForWindowText("US $10000.00", 30_000);
-
-    clickWindowButton(5);
-    waitForSheetText("첫 실행 설정");
-    waitForSheetText("Toss API 키");
-    clickSheetButton(3);
-    waitForSheetText("Toss API 연결", 20_000);
-    waitForSheetText("등록된 Toss API 키가 없습니다.", 20_000);
-    clickSheetButton(3);
-    clickWindowButton(5);
-    waitForSheetText("첫 실행 설정");
-    clickSheetButton(4);
-    waitForSheetText("자동매매 전략", 20_000);
-    waitForSheetText("순환분할", 20_000);
-    clickSheetButton(2);
-    clickWindowButton(5);
-    waitForSheetText("첫 실행 설정");
-    clickSheetButton(5);
-    waitForSheetText("앱 점검", 20_000);
-    clickSheetButton(2);
-    clickWindowButton(5);
-    waitForSheetText("첫 실행 설정");
-    clickSheetButton(6);
-    waitForSheetText("앱 배포", 20_000);
-    waitForSheetText("새 Mac 설치 후 점검", 20_000);
-    clickSheetButton(1);
-
-    clickWindowButton(14);
-    waitForWindowText("주문·리스크");
-    waitForWindowText("OrderIntent 감사 로그");
-    clickWindowScrollButton(2, 1);
-    waitForWindowText("주문·리스크 운영 리포트를 클립보드에 복사했습니다", 20_000);
-    const orderRiskReport = run("pbpaste", []).output;
-    if (!orderRiskReport.includes("주문·리스크 운영 리포트") || !orderRiskReport.includes("broker 주문 제출 기록이 아닙니다")) {
-      throw new Error("Order risk report should include order readiness context and no-submit wording.");
+    const requiredIdentifiers = [
+      "beginner-onboarding",
+      "beginner-onboarding-example",
+      "beginner-nav-chart",
+      "beginner-nav-assets",
+      "beginner-nav-strategy",
+      "beginner-nav-automation",
+      "beginner-nav-settings",
+      "beginner-symbol-search",
+      "beginner-analyze-button",
+      "beginner-chart-workspace",
+      "beginner-analysis-tab-analysis",
+      "beginner-analysis-tab-signals",
+      "beginner-analysis-tab-newsSentiment",
+      "beginner-horizon-picker",
+      "beginner-horizon-day",
+      "beginner-horizon-swing",
+      "beginner-horizon-longTerm",
+      "beginner-open-paper-order",
+      "beginner-paper-order-drawer",
+      "beginner-paper-order-close",
+      "beginner-strategy-name",
+      "beginner-strategy-save",
+      "beginner-strategy-preview",
+      "beginner-strategy-simulate",
+      "beginner-strategy-enable",
+      "beginner-strategy-preview-card",
+      "beginner-automation-workspace",
+      "beginner-settings-workspace",
+      "beginner-settings-api",
+      "beginner-settings-self-test",
+      "beginner-settings-log",
+      "beginner-settings-distribution",
+    ];
+    const unverifiedIdentifiers = requiredIdentifiers.filter((identifier) => !identifiersUsed.has(identifier));
+    if (unverifiedIdentifiers.length > 0) {
+      throw new Error(`Required accessibility identifiers were not exercised: ${unverifiedIdentifiers.join(", ")}`);
     }
-    clickWindowScrollButton(2, 3);
-    waitForWindowText("자동화 점검 요약", 30_000);
-    waitForWindowText("주문 제출 없음", 30_000);
-    clickWindowScrollButton(2, 4);
-    waitForWindowText("체결 동기화 요약", 30_000);
-    waitForWindowText("이 동기화는 주문 제출을 수행하지 않습니다", 30_000);
-    clickWindowScrollButton(2, 5);
-    waitForWindowText("실계좌 보유 조회 요약", 30_000);
-    waitForWindowText("Toss credential 미연동", 30_000);
-    clickWindowScrollButton(2, 6);
-    waitForWindowText("주문 전 사전검증 실패", 30_000);
-    clickWindowScrollButton(2, 2);
-    waitForWindowText("모의 주문 실행 요약", 30_000);
-
-    clickWindowButton(15);
-    waitForWindowText("뉴스·알림");
-    clickWindowScrollButton(2, 1);
-    waitForWindowText("뉴스·알림 갱신 요약", 30_000);
-
-    clickWindowButton(16);
-    waitForWindowText("리플레이");
-    clickWindowScrollButton(2, 1);
-    waitForWindowText("리플레이 갱신 요약", 30_000);
-
-    clickWindowButton(17);
-    waitForWindowText("플레이북");
-    clickWindowScrollButton(2, 1);
-    waitForWindowText("플레이북을 저장했습니다", 30_000);
-
-    clickWindowButton(6);
-    waitForSheetText("Toss API 연결");
-    const tossTexts = sheetTexts();
-    if (!tossTexts.includes("등록된 Toss API 키가 없습니다.") || !tossTexts.includes("실거래 게이트 OFF")) {
-      throw new Error("Toss sheet did not expose the expected no-credential safety state.");
-    }
-    if (sheetTextFieldValue(1) !== "" || sheetTextFieldValue(2) !== "") {
-      throw new Error("Toss credential fields should open empty in isolated UI verification storage.");
-    }
-    if (sheetButtonEnabled(5) || sheetButtonEnabled(6) || sheetButtonEnabled(7)) {
-      throw new Error("Toss restore/save/delete buttons should be disabled before credential input.");
-    }
-    waitForSheetText("Toss 운영 준비", 20_000);
-    typeIntoTossCredentialFields("ui-smoke-client-id", "ui-smoke-client-secret");
-    waitForSheetButtonEnabled(6, 20_000);
-    clickSheetButton(6);
-    waitForSheetText("Toss 등록 실패: 토스 검증 실패: UI smoke credential rejection", 20_000);
-    waitForSheetText("credential 필요", 20_000);
-    if (sheetButtonEnabled(6) || sheetButtonEnabled(7)) {
-      throw new Error("Toss save/delete buttons should return to a blocked state after rejected credentials.");
-    }
-    clickSheetScrollButton(1);
-    waitForSheetText("IP 확인", 20_000);
-    waitForSheetText("198.51.100.42", 20_000);
-    clickSheetScrollButton(2);
-    waitForSheetText("복사한 IP를 Toss 개발자 콘솔", 20_000);
-    const copiedPublicIP = run("pbpaste", []).output;
-    if (copiedPublicIP.trim() !== "198.51.100.42") {
-      throw new Error("Public IP copy button should copy the checked Toss allowlist IP.");
-    }
-    clickSheetButton(2);
-    waitForSheetText("민감정보 없는 Toss 운영 리포트를 클립보드에 복사했습니다", 20_000);
-    const tossReport = run("pbpaste", []).output;
-    if (!tossReport.includes("Toss") || tossReport.includes("clientSecret")) {
-      throw new Error("Toss operation report should be useful and must not expose secret field names.");
-    }
-    clickSheetButton(4);
-    waitForSheetText("등록된 Toss API 키가 없습니다.", 20_000);
-    waitForSheetText("Toss 운영 준비", 20_000);
-    clickSheetScrollButton(3);
-    waitForSheetText("credential 필요", 20_000);
-    waitForSheetText("주문 호출 없음", 20_000);
-    clickSheetButton(3);
-
-    clickWindowButton(7);
-    waitForSheetText("자동매매 전략");
-    waitForSheetText("순환분할");
-    waitForSheetText("전략 작성");
-    clickSheetButton(1);
-    waitForSheetText("자동거래 전략 운영 리포트를 클립보드에 복사했습니다", 20_000);
-    const strategyReport = run("pbpaste", []).output;
-    if (!strategyReport.includes("전략 운영 리포트") || !strategyReport.includes("live gate")) {
-      throw new Error("Strategy operation report should include strategy readiness and live gate context.");
-    }
-    clickStrategySaveButton();
-    waitForSheetText("초안을 저장했습니다", 20_000);
-    waitForSheetText("전략 관리", 20_000);
-    clickSheetButton(3);
-    waitForSheetText("백업 JSON을 클립보드에 복사했습니다", 20_000);
-    clickSheetButton(4);
-    waitForSheetText("초안으로 가져왔습니다", 20_000);
-    clickStrategyCardButton(2);
-    waitForSheetText("전략 tick 점검 요약", 20_000);
-    waitForSheetText("시나리오: 현재 기준가", 20_000);
-    waitForSheetText("실거래 게이트: 차단", 20_000);
-    clickStrategyCardButton(3);
-    waitForSheetText("시나리오: 다음 매수선 발동가", 20_000);
-    waitForSheetText("주문 후보", 20_000);
-    clickStrategyCardButton(4);
-    waitForSheetText("전략 시뮬레이션을 통과했습니다", 30_000);
-    waitForSheetText("실제 주문은 제출되지 않습니다", 30_000);
-    waitForStrategyCardButtonEnabled(5, 20_000);
-    clickStrategyCardButton(5);
-    waitForSheetText("전략을 활성화했습니다", 30_000);
-    waitForSheetText("1 활성", 30_000);
-    waitForSheetText("실거래 제출 차단", 30_000);
-    waitForSheetText("검증 완료된 Toss API 키가 없습니다.", 30_000);
-    clickSheetButton(2);
-
-    clickWindowButton(14);
-    waitForWindowText("주문·리스크");
-    clickWindowScrollButton(2, 7);
-    waitForSheetText("자동화 1회 실행", 20_000);
-    waitForSheetText("현재 실거래 게이트 OFF 상태", 20_000);
-    waitForSheetText("OrderIntent, RiskCheck, Toss credential, 선택 계좌, kill switch", 20_000);
-    clickConfirmationButton(2);
-    waitForWindowText("자동화 1회 실행 요약", 30_000);
-    waitForWindowText("상태: 실행 완료", 30_000);
-    clickWindowScrollButton(2, 8);
-    waitForSheetText("연속 자동 실행 시작", 20_000);
-    waitForSheetText("실제 주문이 제출될 수 있으므로", 20_000);
-    clickConfirmationButton(1);
-    waitForWindowText("연속 자동 실행 ON", 20_000);
-    clickWindowScrollButton(2, 8);
-    waitForWindowText("연속 자동 실행 OFF", 20_000);
-
-    clickWindowButton(8);
-    waitForSheetText("앱 점검");
-    clickSheetButton(3);
-    waitForSheetText("실패 0", 20_000);
-    waitForSheetButtonEnabled(1, 20_000);
-    clickSheetButton(1);
-    waitForSheetText("앱 점검 리포트를 클립보드에 복사했습니다", 20_000);
-    const selfTestReport = run("pbpaste", []).output;
-    if (!selfTestReport.includes("StockAnalysis 앱 점검 리포트") || !selfTestReport.includes("실패 0")) {
-      throw new Error("Self-test report should include the app readiness summary.");
-    }
-    clickSheetButton(2);
-
-    clickWindowButton(9);
-    waitForSheetText("앱 배포");
-    waitForSheetText("새 Mac 설치 후 점검", 20_000);
-    clickSheetButton(2);
-    waitForSheetText("릴리즈 아티팩트", 20_000);
-    waitForSheetText("SHA-256", 20_000);
-    if (verifyReleaseChecksumCopy) {
-      const releaseChecksum = clickReleaseChecksumButton();
-      if (!/^[a-f0-9]{64}$/i.test(releaseChecksum)) {
-        throw new Error("Release checksum copy should put a SHA-256 hex digest on the clipboard.");
-      }
-    }
-    clickSheetButton(3);
-    waitForSheetText("실패 0", 30_000);
-    waitForSheetButtonEnabled(4, 20_000);
-    clickSheetButton(4);
-    waitForSheetText("설치 점검 리포트를 클립보드에 복사했습니다", 20_000);
-    clickSheetButton(1);
-
-    clickWindowButton(10);
-    waitForSheetText("Sidecar 로그");
-    clickSheetButton(2);
-    waitForSheetText("local-engine", 20_000);
-    clickSheetButton(1);
-
-    clickWindowButton(12);
-    waitForWindowText("static text 긴급 중지", 20_000);
-    if (windowButtonEnabled(18)) {
-      throw new Error("Paper order button should be disabled while kill switch is engaged.");
-    }
-    clickWindowButton(14);
-    waitForWindowText("주문·리스크");
-    if (windowScrollButtonEnabled(2, 2) || windowScrollButtonEnabled(2, 7)) {
-      throw new Error("Order risk paper/automation buttons should be disabled while kill switch is engaged.");
-    }
-    clickWindowButton(12);
-    waitForWindowText("static text 실거래 게이트 OFF", 20_000);
 
     console.log(JSON.stringify({
       ok: true,
       appRoot,
+      fixtureMode,
+      noBrokerSubmit: true,
+      identifiersUsed: [...identifiersUsed].sort(),
+      windowSizes,
       checks: {
-        launchedWindow: true,
-        sidecarVisible: true,
-        koreanSymbolSearch: true,
-        cryptoExchangeSheet: true,
-        menuBarExtra: true,
-        topCommandButtons: true,
-        decisionPanelButtons: true,
-        paperResetConfirmation: true,
-        firstRunSetup: true,
-        firstRunSetupActions: true,
-        workspaceTabs: true,
-        orderRiskButtons: true,
-        orderRiskReportCopy: true,
-        orderSyncButton: true,
-        newsReplayPlaybookButtons: true,
-        tossSheetNoCredentialState: true,
-        publicIpCheckButton: true,
-        publicIpCopyButton: true,
-        tossCredentialControls: true,
-        tossReadinessButton: true,
-        strategyDraftCreation: true,
-        strategyReportCopy: true,
-        strategyBackupImport: true,
-        strategyCardActions: true,
-        automationRunConfirmation: true,
-        continuousAutomationScheduler: true,
-        selfTestSheet: true,
-        selfTestReportCopy: true,
-        distributionInstallReadiness: true,
-        releaseChecksumCopy: verifyReleaseChecksumCopy ? true : undefined,
-        sidecarLogSheet: true,
-        killSwitchToggle: true,
-        killSwitchButtonGuards: true,
+        beginnerFirstOnboarding: true,
+        samsungFixtureAnalysis: true,
+        sourceCurrencyTimeframeVisible: true,
+        horizonPlans: true,
+        signalAndNewsSentimentTabs: true,
+        paperOrderDrawerNoSubmit: true,
+        assetsWorkspace: true,
+        strategyWorkflowOrder: true,
+        strategyWorkspaceSmoke: true,
+        automationPaperOnly: true,
+        killSwitchReachable: true,
+        settingsApiReachable: true,
+        selfTestReachable: true,
+        sidecarLogReachable: true,
+        distributionReachable: true,
+        responsiveWindowSizes: true,
       },
     }, null, 2));
   } finally {
-    osascript([
-      `tell application id \"${bundleIdentifier}\" to quit`,
-    ], { allowFailure: true });
+    osascript([`tell application id "${bundleIdentifier}" to quit`], { allowFailure: true });
     appProcess?.kill("SIGTERM");
     appProcess = null;
+    sleep(500);
+    terminateAppSidecars();
     rmSync(appSupportRoot, { recursive: true, force: true });
   }
 };

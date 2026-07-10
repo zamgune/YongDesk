@@ -7,14 +7,16 @@ public struct AppSettings: Codable, Equatable, Sendable {
     public var workerPaused: Bool
     public var liveTradingOperatorEnabled: Bool
     public var cryptoLiveTradingOperatorEnabled: Bool
+    public var hasCompletedOnboarding: Bool
 
     public init(
         enginePort: Int = 38_771,
         repositoryPath: String = FileManager.default.currentDirectoryPath,
-        alertsEnabled: Bool = true,
+        alertsEnabled: Bool = false,
         workerPaused: Bool = false,
         liveTradingOperatorEnabled: Bool = false,
-        cryptoLiveTradingOperatorEnabled: Bool = false
+        cryptoLiveTradingOperatorEnabled: Bool = false,
+        hasCompletedOnboarding: Bool = false
     ) {
         self.enginePort = enginePort
         self.repositoryPath = repositoryPath
@@ -22,6 +24,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         self.workerPaused = workerPaused
         self.liveTradingOperatorEnabled = liveTradingOperatorEnabled
         self.cryptoLiveTradingOperatorEnabled = cryptoLiveTradingOperatorEnabled
+        self.hasCompletedOnboarding = hasCompletedOnboarding
     }
 
     enum CodingKeys: String, CodingKey {
@@ -31,16 +34,18 @@ public struct AppSettings: Codable, Equatable, Sendable {
         case workerPaused
         case liveTradingOperatorEnabled
         case cryptoLiveTradingOperatorEnabled
+        case hasCompletedOnboarding
     }
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         self.enginePort = try container.decodeIfPresent(Int.self, forKey: .enginePort) ?? 38_771
         self.repositoryPath = try container.decodeIfPresent(String.self, forKey: .repositoryPath) ?? FileManager.default.currentDirectoryPath
-        self.alertsEnabled = try container.decodeIfPresent(Bool.self, forKey: .alertsEnabled) ?? true
+        self.alertsEnabled = try container.decodeIfPresent(Bool.self, forKey: .alertsEnabled) ?? false
         self.workerPaused = try container.decodeIfPresent(Bool.self, forKey: .workerPaused) ?? false
         self.liveTradingOperatorEnabled = try container.decodeIfPresent(Bool.self, forKey: .liveTradingOperatorEnabled) ?? false
         self.cryptoLiveTradingOperatorEnabled = try container.decodeIfPresent(Bool.self, forKey: .cryptoLiveTradingOperatorEnabled) ?? false
+        self.hasCompletedOnboarding = try container.decodeIfPresent(Bool.self, forKey: .hasCompletedOnboarding) ?? false
     }
 }
 
@@ -54,6 +59,428 @@ public struct EngineHealth: Codable, Equatable, Sendable {
     public let pid: Int?
     public let workingDirectory: String?
     public let sidecarBuildId: String?
+}
+
+public enum AnalysisTimeframe: Codable, Equatable, Hashable, Sendable {
+    case oneHour
+    case fourHours
+    case oneDay
+    case oneWeek
+    case unknown(String)
+
+    public var rawValue: String {
+        switch self {
+        case .oneHour: "1h"
+        case .fourHours: "4h"
+        case .oneDay: "1d"
+        case .oneWeek: "1wk"
+        case let .unknown(value): value
+        }
+    }
+
+    public init(from decoder: Decoder) throws {
+        let value = try decoder.singleValueContainer().decode(String.self)
+        self = switch value.lowercased() {
+        case "1h": .oneHour
+        case "4h": .fourHours
+        case "1d": .oneDay
+        case "1wk": .oneWeek
+        default: .unknown(value)
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(rawValue)
+    }
+}
+
+public enum AnalysisAssetClass: Codable, Equatable, Hashable, Sendable {
+    case stock
+    case crypto
+    case unknown(String)
+
+    public var rawValue: String {
+        switch self {
+        case .stock: "stock"
+        case .crypto: "crypto"
+        case let .unknown(value): value
+        }
+    }
+
+    public init(from decoder: Decoder) throws {
+        let value = try decoder.singleValueContainer().decode(String.self)
+        self = switch value.lowercased() {
+        case "stock": .stock
+        case "crypto": .crypto
+        default: .unknown(value)
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(rawValue)
+    }
+}
+
+public enum AnalysisMarket: Codable, Equatable, Hashable, Sendable {
+    case kr
+    case us
+    case crypto
+    case kospi
+    case kosdaq
+    case upbit
+    case unknown(String)
+
+    public var rawValue: String {
+        switch self {
+        case .kr: "KR"
+        case .us: "US"
+        case .crypto: "CRYPTO"
+        case .kospi: "KOSPI"
+        case .kosdaq: "KOSDAQ"
+        case .upbit: "UPBIT"
+        case let .unknown(value): value
+        }
+    }
+
+    public init(from decoder: Decoder) throws {
+        let value = try decoder.singleValueContainer().decode(String.self)
+        self = switch value.uppercased() {
+        case "KR": .kr
+        case "US": .us
+        case "CRYPTO": .crypto
+        case "KOSPI": .kospi
+        case "KOSDAQ": .kosdaq
+        case "UPBIT": .upbit
+        default: .unknown(value)
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(rawValue)
+    }
+}
+
+public enum AnalysisDataSource: Codable, Equatable, Hashable, Sendable {
+    case auto
+    case toss
+    case upbit
+    case yahoo
+    case fixture
+    case unknown(String)
+
+    public var rawValue: String {
+        switch self {
+        case .auto: "auto"
+        case .toss: "toss"
+        case .upbit: "upbit"
+        case .yahoo: "yahoo"
+        case .fixture: "fixture"
+        case let .unknown(value): value
+        }
+    }
+
+    public init(from decoder: Decoder) throws {
+        let value = try decoder.singleValueContainer().decode(String.self)
+        self = switch value.lowercased() {
+        case "auto": .auto
+        case "toss", "toss-open-api": .toss
+        case "upbit", "upbit-public-rest": .upbit
+        case "yahoo", "yahoo-finance": .yahoo
+        case "fixture", "fixture-data": .fixture
+        default: .unknown(value)
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(rawValue)
+    }
+}
+
+public struct WorkspaceAnalysis: Codable, Equatable, Sendable {
+    public let symbol: String
+    public let assetClass: AnalysisAssetClass
+    public let market: AnalysisMarket?
+    public let currency: String?
+    public let dataSource: AnalysisDataSource?
+    public let quoteAt: String?
+    public let generatedAt: String?
+    public let stale: Bool?
+    public let analyses: WorkspaceTimeframeAnalyses?
+    public let horizonPlans: [AnalysisHorizonPlan]
+    public let warnings: [String]
+    public let orderSubmissionAttempted: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case symbol
+        case assetClass
+        case market
+        case currency
+        case dataSource
+        case quoteAt
+        case generatedAt
+        case stale
+        case analyses
+        case horizonPlans
+        case warnings
+        case orderSubmissionAttempted
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        symbol = try container.decode(String.self, forKey: .symbol)
+        assetClass = try container.decode(AnalysisAssetClass.self, forKey: .assetClass)
+        market = try container.decodeIfPresent(AnalysisMarket.self, forKey: .market)
+        currency = try container.decodeIfPresent(String.self, forKey: .currency)
+        dataSource = try container.decodeIfPresent(AnalysisDataSource.self, forKey: .dataSource)
+        quoteAt = try container.decodeIfPresent(String.self, forKey: .quoteAt)
+        generatedAt = try container.decodeIfPresent(String.self, forKey: .generatedAt)
+        stale = try container.decodeIfPresent(Bool.self, forKey: .stale)
+        analyses = try container.decodeIfPresent(WorkspaceTimeframeAnalyses.self, forKey: .analyses)
+        horizonPlans = try container.decodeIfPresent([AnalysisHorizonPlan].self, forKey: .horizonPlans) ?? []
+        warnings = try container.decodeIfPresent([String].self, forKey: .warnings) ?? []
+        orderSubmissionAttempted = try container.decode(Bool.self, forKey: .orderSubmissionAttempted)
+    }
+}
+
+public struct WorkspaceTimeframeAnalyses: Codable, Equatable, Sendable {
+    public let oneHour: WorkspaceTimeframeAnalysis?
+    public let fourHour: WorkspaceTimeframeAnalysis?
+    public let daily: WorkspaceTimeframeAnalysis?
+    public let weekly: WorkspaceTimeframeAnalysis?
+}
+
+public struct WorkspaceTimeframeAnalysis: Codable, Equatable, Sendable {
+    public let symbol: String?
+    public let market: AnalysisMarket?
+    public let currency: String?
+    public let dataSource: AnalysisDataSource?
+    public let timeframe: AnalysisTimeframe?
+    public let quoteAt: String?
+    public let generatedAt: String?
+    public let latestClose: Double?
+    public let stale: Bool?
+    public let analysisBasis: WorkspaceAnalysisBasis?
+
+    enum CodingKeys: String, CodingKey {
+        case symbol
+        case market
+        case currency
+        case dataSource
+        case timeframe
+        case quoteAt
+        case generatedAt
+        case latestClose
+        case currentPrice
+        case price
+        case stale
+        case analysisBasis
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        symbol = try container.decodeIfPresent(String.self, forKey: .symbol)
+        market = try container.decodeIfPresent(AnalysisMarket.self, forKey: .market)
+        currency = try container.decodeIfPresent(String.self, forKey: .currency)
+        dataSource = try container.decodeIfPresent(AnalysisDataSource.self, forKey: .dataSource)
+        timeframe = try container.decodeIfPresent(AnalysisTimeframe.self, forKey: .timeframe)
+        quoteAt = try container.decodeIfPresent(String.self, forKey: .quoteAt)
+        generatedAt = try container.decodeIfPresent(String.self, forKey: .generatedAt)
+        latestClose = try container.decodeIfPresent(Double.self, forKey: .latestClose)
+            ?? container.decodeIfPresent(Double.self, forKey: .currentPrice)
+            ?? container.decodeIfPresent(Double.self, forKey: .price)
+        stale = try container.decodeIfPresent(Bool.self, forKey: .stale)
+        analysisBasis = try container.decodeIfPresent(WorkspaceAnalysisBasis.self, forKey: .analysisBasis)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encodeIfPresent(symbol, forKey: .symbol)
+        try container.encodeIfPresent(market, forKey: .market)
+        try container.encodeIfPresent(currency, forKey: .currency)
+        try container.encodeIfPresent(dataSource, forKey: .dataSource)
+        try container.encodeIfPresent(timeframe, forKey: .timeframe)
+        try container.encodeIfPresent(quoteAt, forKey: .quoteAt)
+        try container.encodeIfPresent(generatedAt, forKey: .generatedAt)
+        try container.encodeIfPresent(latestClose, forKey: .latestClose)
+        try container.encodeIfPresent(stale, forKey: .stale)
+        try container.encodeIfPresent(analysisBasis, forKey: .analysisBasis)
+    }
+}
+
+public struct WorkspaceAnalysisBasis: Codable, Equatable, Sendable {
+    public let atr14: Double?
+    public let sma20: Double?
+    public let sma200: Double?
+    public let ema200: Double?
+    public let tenMonthAverage: Double?
+    public let hma20: Double?
+    public let hma50: Double?
+    public let adx14: Double?
+    public let choppiness14: Double?
+    public let volumeRatio20: Double?
+    public let recentLow20: Double?
+    public let recentHigh20: Double?
+    public let chandelierLong: Double?
+    public let weeklySma20: Double?
+    public let weeklySma60: Double?
+    public let weeklyTrend: String?
+    public let trendUp: Bool?
+    public let closedCandleCount: Int?
+}
+
+public enum AnalysisHoldingHorizon: Codable, Equatable, Hashable, Sendable {
+    case day
+    case swing
+    case long
+    case unknown(String)
+
+    public var rawValue: String {
+        switch self {
+        case .day: "day"
+        case .swing: "swing"
+        case .long: "long"
+        case let .unknown(value): value
+        }
+    }
+
+    public init(from decoder: Decoder) throws {
+        let value = try decoder.singleValueContainer().decode(String.self)
+        self = switch value.lowercased() {
+        case "day": .day
+        case "swing": .swing
+        case "long": .long
+        default: .unknown(value)
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(rawValue)
+    }
+}
+
+public enum AnalysisHorizonPlanStatus: Codable, Equatable, Hashable, Sendable {
+    case actionable
+    case wait
+    case unavailable
+    case unknown(String)
+
+    public var rawValue: String {
+        switch self {
+        case .actionable: "actionable"
+        case .wait: "wait"
+        case .unavailable: "unavailable"
+        case let .unknown(value): value
+        }
+    }
+
+    public init(from decoder: Decoder) throws {
+        let value = try decoder.singleValueContainer().decode(String.self)
+        self = switch value.lowercased() {
+        case "actionable": .actionable
+        case "wait": .wait
+        case "unavailable": .unavailable
+        default: .unknown(value)
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(rawValue)
+    }
+}
+
+public struct AnalysisHorizonPlan: Codable, Equatable, Sendable {
+    public let horizon: AnalysisHoldingHorizon
+    public let status: AnalysisHorizonPlanStatus
+    public let entryPrice: Double?
+    public let stop: AnalysisHorizonStop?
+    public let takeProfits: [AnalysisTakeProfit]
+    public let trailingExit: AnalysisTrailingExit?
+    public let riskPerShare: Double?
+    public let stopPct: Double?
+    public let rewardRisk: Double?
+    public let basis: AnalysisHorizonBasis?
+    public let formulaSteps: [String]
+    public let reasons: [String]
+    public let blockers: [String]
+
+    enum CodingKeys: String, CodingKey {
+        case horizon
+        case status
+        case entryPrice
+        case stop
+        case takeProfits
+        case trailingExit
+        case riskPerShare
+        case stopPct
+        case rewardRisk
+        case basis
+        case formulaSteps
+        case reasons
+        case blockers
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        horizon = try container.decode(AnalysisHoldingHorizon.self, forKey: .horizon)
+        status = try container.decode(AnalysisHorizonPlanStatus.self, forKey: .status)
+        entryPrice = try container.decodeIfPresent(Double.self, forKey: .entryPrice)
+        stop = try container.decodeIfPresent(AnalysisHorizonStop.self, forKey: .stop)
+        takeProfits = try container.decodeIfPresent([AnalysisTakeProfit].self, forKey: .takeProfits) ?? []
+        trailingExit = try container.decodeIfPresent(AnalysisTrailingExit.self, forKey: .trailingExit)
+        riskPerShare = try container.decodeIfPresent(Double.self, forKey: .riskPerShare)
+        stopPct = try container.decodeIfPresent(Double.self, forKey: .stopPct)
+        rewardRisk = try container.decodeIfPresent(Double.self, forKey: .rewardRisk)
+        basis = try container.decodeIfPresent(AnalysisHorizonBasis.self, forKey: .basis)
+        formulaSteps = try container.decodeIfPresent([String].self, forKey: .formulaSteps) ?? []
+        reasons = try container.decodeIfPresent([String].self, forKey: .reasons) ?? []
+        blockers = try container.decodeIfPresent([String].self, forKey: .blockers) ?? []
+    }
+}
+
+public struct AnalysisHorizonStop: Codable, Equatable, Sendable {
+    public let price: Double?
+    public let trigger: String?
+    public let isBrokerStopEligible: Bool
+    public let reason: String?
+}
+
+public struct AnalysisTakeProfit: Codable, Equatable, Sendable {
+    public let price: Double?
+    public let allocationPct: Double?
+    public let basis: String?
+}
+
+public struct AnalysisTrailingExit: Codable, Equatable, Sendable {
+    public let price: Double?
+    public let allocationPct: Double?
+    public let basis: String?
+}
+
+public struct AnalysisHorizonBasis: Codable, Equatable, Sendable {
+    public let symbol: String?
+    public let market: AnalysisMarket?
+    public let currency: String?
+    public let dataSource: AnalysisDataSource?
+    public let quoteAt: String?
+    public let generatedAt: String?
+    public let timeframeLabel: String?
+    public let entryPrice: Double?
+    public let atr14: Double?
+    public let support: Double?
+    public let resistance: Double?
+    public let sma20: Double?
+    public let sma200: Double?
+    public let tenMonthAverage: Double?
+    public let weeklySma20: Double?
+    public let weeklySma60: Double?
+    public let chandelierLong: Double?
+    public let reliabilityGrade: String?
 }
 
 public struct LocalNewsEvent: Codable, Identifiable, Equatable, Sendable {
@@ -82,6 +509,78 @@ public struct NewsPollResponse: Codable, Equatable, Sendable {
 public struct NewsSourceError: Codable, Equatable, Sendable {
     public let sourceId: String
     public let message: String
+}
+
+public struct CommunitySentimentSnapshot: Codable, Equatable, Sendable {
+    public let symbol: String
+    public let canonicalSymbol: String
+    public let market: String
+    public let queryTerms: [String]
+    public let lookbackHours: Int
+    public let score: Int
+    public let painScore: Int
+    public let gajuaScore: Int
+    public let divisionScore: Int
+    public let sentimentRegime: String
+    public let level: String
+    public let confidence: Int
+    public let verdict: String
+    public let evidenceCount: Int
+    public let postCount: Int
+    public let commentCount: Int
+    public let replyCount: Int
+    public let signalItemCount: Int
+    public let collectionWindowHours: Int
+    public let lowEvidence: Bool
+    public let factors: [CommunitySentimentFactor]
+    public let gajuaFactors: [CommunitySentimentFactor]
+    public let sourceStats: [CommunitySentimentSourceStat]
+    public let snippets: [CommunitySentimentSnippet]
+    public let painSnippets: [CommunitySentimentSnippet]
+    public let gajuaSnippets: [CommunitySentimentSnippet]
+    public let generatedAt: String
+    public let cacheTtlSeconds: Int
+}
+
+public struct CommunitySentimentFactor: Codable, Identifiable, Equatable, Sendable {
+    public let key: String
+    public let label: String
+    public let score: Int
+    public let value: String
+    public let detail: String
+
+    public var id: String { key }
+}
+
+public struct CommunitySentimentSourceStat: Codable, Identifiable, Equatable, Sendable {
+    public let id: String
+    public let label: String
+    public let policyStatus: String?
+    public let status: String
+    public let confidenceWeight: Double?
+    public let reason: String?
+    public let candidateCount: Int
+    public let recentItemCount: Int
+    public let itemCount: Int
+    public let postCount: Int
+    public let commentItemCount: Int
+    public let replyCount: Int
+    public let oldestItemAt: String?
+    public let newestItemAt: String?
+    public let dateParseCoverage: Double
+    public let timedOut: Bool
+}
+
+public struct CommunitySentimentSnippet: Codable, Identifiable, Equatable, Sendable {
+    public let sourceId: String
+    public let sourceLabel: String
+    public let title: String
+    public let url: String
+    public let reason: String
+    public let engagement: Int
+    public let kind: String
+
+    public var id: String { "\(sourceId)|\(kind)|\(url)" }
 }
 
 public struct AutomationHealth: Codable, Equatable, Sendable {
@@ -518,6 +1017,27 @@ public struct CryptoCredentialResponse: Codable, Equatable, Sendable {
     public let orderSubmissionAttempted: Bool
 }
 
+public struct CryptoTickerView: Codable, Equatable, Sendable {
+    public let market: String
+    public let tradePrice: Double
+    public let timestamp: String
+    public let ageMs: Double
+    public let fresh: Bool
+    public let maxAgeMs: Double
+}
+
+public struct CryptoOrderConstraintView: Codable, Equatable, Sendable {
+    public let minTotal: Double?
+    public let maxTotal: Double?
+    public let priceUnit: Double?
+    public let feeRate: Double?
+}
+
+public struct CryptoOrderConstraintSetView: Codable, Equatable, Sendable {
+    public let bid: CryptoOrderConstraintView
+    public let ask: CryptoOrderConstraintView
+}
+
 public struct CryptoReadinessResponse: Codable, Equatable, Sendable {
     public let generatedAt: String
     public let exchange: String
@@ -528,6 +1048,8 @@ public struct CryptoReadinessResponse: Codable, Equatable, Sendable {
     public let accountCount: Int?
     public let currencies: [String]?
     public let chanceAvailable: Bool?
+    public let ticker: CryptoTickerView?
+    public let orderConstraints: CryptoOrderConstraintSetView?
     public let orderSubmissionAttempted: Bool
     public let message: String
 }
@@ -539,7 +1061,10 @@ public struct CryptoOrderPrecheckResponse: Codable, Equatable, Sendable {
     public let passed: Bool
     public let blockers: [String]
     public let estimatedValue: Double
+    public let estimatedBuyCost: Double?
     public let orderChanceVerified: Bool
+    public let orderConstraints: CryptoOrderConstraintView?
+    public let ticker: CryptoTickerView?
     public let orderSubmissionAttempted: Bool
 }
 
@@ -698,6 +1223,13 @@ public struct StrategyDraftInput: Equatable, Sendable {
     public let maxLossPct: Double
     public let cooldownMinutes: Int
     public let executionVenue: String
+    public let orderSizingMode: String?
+    public let quantity: Double?
+    public let rungGapPct: Double
+    public let stopLossPct: Double
+    public let priceAnchorSource: String
+    public let priceAnchorCapturedAt: String?
+    public let preservedGridRungs: [StrategyGridRungDraftInput]?
 
     public init(
         name: String,
@@ -713,7 +1245,14 @@ public struct StrategyDraftInput: Equatable, Sendable {
         maxDailyTrades: Int,
         maxLossPct: Double,
         cooldownMinutes: Int,
-        executionVenue: String = "toss"
+        executionVenue: String = "toss",
+        orderSizingMode: String? = nil,
+        quantity: Double? = nil,
+        rungGapPct: Double? = nil,
+        stopLossPct: Double = 0,
+        priceAnchorSource: String = "manual",
+        priceAnchorCapturedAt: String? = nil,
+        preservedGridRungs: [StrategyGridRungDraftInput]? = nil
     ) {
         self.name = name
         self.symbol = symbol
@@ -729,7 +1268,34 @@ public struct StrategyDraftInput: Equatable, Sendable {
         self.maxLossPct = maxLossPct
         self.cooldownMinutes = cooldownMinutes
         self.executionVenue = executionVenue
+        self.orderSizingMode = orderSizingMode
+        self.quantity = quantity
+        self.rungGapPct = rungGapPct ?? buyDropPct
+        self.stopLossPct = stopLossPct
+        self.priceAnchorSource = priceAnchorSource
+        self.priceAnchorCapturedAt = priceAnchorCapturedAt
+        self.preservedGridRungs = preservedGridRungs
     }
+}
+
+public struct StrategyGridRungDraftInput: Equatable, Sendable {
+    public let index: Int
+    public let buyDropPct: Double
+    public let sellRisePct: Double
+    public let notional: Double
+
+    public init(index: Int, buyDropPct: Double, sellRisePct: Double, notional: Double) {
+        self.index = index
+        self.buyDropPct = buyDropPct
+        self.sellRisePct = sellRisePct
+        self.notional = notional
+    }
+}
+
+public struct StrategyOrderSizingView: Codable, Equatable, Sendable {
+    public let mode: String
+    public let quantity: Double?
+    public let notional: Double?
 }
 
 public struct StrategyLastSimulationView: Codable, Equatable, Sendable {
@@ -804,6 +1370,7 @@ public struct StrategyConfigView: Codable, Identifiable, Equatable, Sendable {
     public let preset: String?
     public let status: String
     public let mode: String?
+    public let orderSizing: StrategyOrderSizingView?
     public let currentPrice: Double
     public let currentConfigHash: String?
     public let automationReadiness: StrategyAutomationReadinessView?
@@ -812,6 +1379,7 @@ public struct StrategyConfigView: Codable, Identifiable, Equatable, Sendable {
     public let loop: StrategyLoopView?
     public let priceAnchor: StrategyPriceAnchorView?
     public let riskLimits: StrategyRiskLimitsView?
+    public let exitRules: StrategyExitRulesView?
     public let updatedAt: String
 }
 
@@ -826,7 +1394,7 @@ public struct StrategyOrderIntentDraftView: Codable, Identifiable, Equatable, Se
     public let symbol: String
     public let side: String
     public let orderType: String
-    public let quantity: Int
+    public let quantity: Double
     public let notional: Double
     public let limitPrice: Double
     public let status: String
@@ -892,6 +1460,7 @@ public struct StrategyExportConfig: Codable, Equatable, Sendable {
     public let executionVenue: String?
     public let preset: String
     public let mode: String?
+    public let orderSizing: StrategyOrderSizingView?
     public let supportPrice: Double?
     public let resistancePrice: Double?
     public let currentPrice: Double

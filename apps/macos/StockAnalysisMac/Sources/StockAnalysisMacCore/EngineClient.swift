@@ -25,6 +25,42 @@ public struct EngineClient: Sendable {
         try await getJSON("/api/news/events?limit=\(limit)")
     }
 
+    public func communitySentiment(
+        symbol: String,
+        market: String,
+        includeBroad: Bool = false,
+        includeSpikeSources: Bool = false,
+        refresh: Bool = false,
+        sources: [String] = []
+    ) async throws -> CommunitySentimentSnapshot {
+        let normalizedSymbol = symbol.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedSymbol.isEmpty,
+              normalizedSymbol != ".",
+              normalizedSymbol != "..",
+              normalizedSymbol.range(of: #"^[A-Za-z0-9._-]{1,32}$"#, options: .regularExpression) != nil else {
+            throw URLError(.badURL)
+        }
+        var components = URLComponents()
+        components.path = "/api/community-pain/\(normalizedSymbol)"
+        var queryItems = [
+            URLQueryItem(name: "market", value: market),
+            URLQueryItem(name: "broad", value: includeBroad ? "1" : "0"),
+            URLQueryItem(name: "spike", value: includeSpikeSources ? "1" : "0"),
+        ]
+        if refresh {
+            queryItems.append(URLQueryItem(name: "refresh", value: "1"))
+        }
+        queryItems.append(URLQueryItem(name: "limit", value: "60"))
+        if !sources.isEmpty {
+            queryItems.append(URLQueryItem(name: "sources", value: sources.joined(separator: ",")))
+        }
+        components.queryItems = queryItems
+        guard let path = components.string else {
+            throw URLError(.badURL)
+        }
+        return try await getJSON(path, timeout: 45)
+    }
+
     public func localSelfTest() async throws -> LocalSelfTestResponse {
         try await getJSON("/api/local/self-test")
     }
@@ -262,19 +298,76 @@ public struct EngineClient: Sendable {
         return try decoder.decode(LocalOrderPrecheckResponse.self, from: data)
     }
 
+    public func analyze(
+        symbol: String,
+        timeframe: AnalysisTimeframe,
+        days: Int
+    ) async throws -> Data {
+        let normalizedSymbol = symbol.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedSymbol.isEmpty,
+              days > 0,
+              let encodedSymbol = percentEncodedPathSegment(normalizedSymbol) else {
+            throw URLError(.badURL)
+        }
+        var components = URLComponents()
+        components.percentEncodedPath = "/api/market/\(encodedSymbol)"
+        components.queryItems = [
+            URLQueryItem(name: "days", value: String(days)),
+            URLQueryItem(name: "tf", value: timeframe.rawValue),
+        ]
+        guard let path = components.string else {
+            throw URLError(.badURL)
+        }
+        return try await getData(path, timeout: 30)
+    }
+
     public func analyze(symbol: String) async throws -> Data {
-        try await getData(
-            "/api/market/\(symbol.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? symbol)?days=365&tf=1d",
-            timeout: 30
+        try await analyze(symbol: symbol, timeframe: .oneDay, days: 365)
+    }
+
+    public func workspaceAnalysis(
+        symbol: String,
+        assetClass: AnalysisAssetClass,
+        source: AnalysisDataSource = .auto
+    ) async throws -> WorkspaceAnalysis {
+        try decoder.decode(
+            WorkspaceAnalysis.self,
+            from: try await workspaceAnalysisData(
+                symbol: symbol,
+                assetClass: assetClass,
+                source: source
+            )
         )
+    }
+
+    public func workspaceAnalysisData(
+        symbol: String,
+        assetClass: AnalysisAssetClass,
+        source: AnalysisDataSource = .auto
+    ) async throws -> Data {
+        let normalizedSymbol = symbol.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedSymbol.isEmpty else {
+            throw URLError(.badURL)
+        }
+        var components = URLComponents()
+        components.path = "/api/local/analysis/workspace"
+        components.queryItems = [
+            URLQueryItem(name: "symbol", value: normalizedSymbol),
+            URLQueryItem(name: "assetClass", value: assetClass.rawValue),
+            URLQueryItem(name: "source", value: source.rawValue),
+        ]
+        guard let path = components.string else {
+            throw URLError(.badURL)
+        }
+        return try await getData(path, timeout: 60)
     }
 
     public func dailyBriefing(session: String) async throws -> Data {
         try await getData("/api/briefing/daily-market?session=\(session)&force=1", timeout: 45)
     }
 
-    private func getJSON<T: Decodable>(_ path: String) async throws -> T {
-        try decoder.decode(T.self, from: try await getData(path))
+    private func getJSON<T: Decodable>(_ path: String, timeout: TimeInterval? = nil) async throws -> T {
+        try decoder.decode(T.self, from: try await getData(path, timeout: timeout))
     }
 
     private func getData(_ path: String, timeout: TimeInterval? = nil) async throws -> Data {
@@ -313,6 +406,12 @@ public struct EngineClient: Sendable {
 
     private func url(_ path: String) -> URL {
         URL(string: path, relativeTo: baseURL)!.absoluteURL
+    }
+
+    private func percentEncodedPathSegment(_ value: String) -> String? {
+        var allowed = CharacterSet.urlPathAllowed
+        allowed.remove(charactersIn: "/%?#")
+        return value.addingPercentEncoding(withAllowedCharacters: allowed)
     }
 
     private func request(_ path: String, timeout: TimeInterval? = nil) -> URLRequest {
@@ -361,6 +460,7 @@ private struct StrategyPayload: Encodable {
     let executionVenue: String
     let preset: String
     let mode: String
+    let orderSizing: StrategyOrderSizingPayload?
     let status = "draft"
     let currentPrice: Double
     let supportPrice: Double
@@ -385,44 +485,88 @@ private struct StrategyPayload: Encodable {
             preset = "support-rebound"
         }
         mode = input.mode == "loop-grid" ? "loop-grid" : "percent-grid"
+        let safeQuantity = max(input.quantity ?? 0, 0)
+        let hasExplicitOrderSizing =
+            (input.orderSizingMode == "quantity" && safeQuantity > 0)
+            || (input.orderSizingMode == "notional" && input.notional > 0)
+        if input.orderSizingMode == "quantity", safeQuantity > 0 {
+            orderSizing = StrategyOrderSizingPayload(mode: "quantity", quantity: safeQuantity, notional: nil)
+        } else if input.orderSizingMode == "notional", input.notional > 0 {
+            orderSizing = StrategyOrderSizingPayload(mode: "notional", quantity: nil, notional: input.notional)
+        } else {
+            orderSizing = nil
+        }
         currentPrice = safeBasePrice
         supportPrice = safeBasePrice * 0.95
         resistancePrice = safeBasePrice * 1.05
-        priceAnchor = StrategyPriceAnchorPayload(source: "manual", price: safeBasePrice, capturedAt: nil)
+        priceAnchor = StrategyPriceAnchorPayload(
+            source: input.priceAnchorSource == "market" ? "market" : "manual",
+            price: safeBasePrice,
+            capturedAt: input.priceAnchorCapturedAt
+        )
+        let resolvedNotional: (Double) -> Double = { price in
+            if input.orderSizingMode == "quantity", safeQuantity > 0 {
+                return price * safeQuantity
+            }
+            return input.notional
+        }
+        let generatedRungs = (1...safeRungCount).map { index in
+            let buyDropPct = input.buyDropPct + input.rungGapPct * Double(index - 1)
+            let buyLevel = safeBasePrice * (1 - buyDropPct / 100)
+            return StrategyGridRungPayload(
+                index: index,
+                buyDropPct: buyDropPct,
+                sellRisePct: input.sellRisePct,
+                notional: resolvedNotional(buyLevel)
+            )
+        }
+        let rungPayloads = input.preservedGridRungs?.prefix(20).map { rung in
+            StrategyGridRungPayload(
+                index: rung.index,
+                buyDropPct: rung.buyDropPct,
+                sellRisePct: rung.sellRisePct,
+                notional: rung.notional
+            )
+        } ?? generatedRungs
         if mode == "loop-grid" {
             grid = nil
+            let buyLevel = safeBasePrice * (1 - input.buyDropPct / 100)
             loop = StrategyLoopPayload(
                 anchorPrice: safeBasePrice,
                 buyDropPct: input.buyDropPct,
                 sellRisePct: input.sellRisePct,
-                notional: input.notional,
+                notional: resolvedNotional(buyLevel),
                 cooldownMinutes: input.cooldownMinutes
             )
         } else {
             grid = StrategyGridPayload(
                 basePrice: safeBasePrice,
-                rungs: (1...safeRungCount).map { index in
-                    StrategyGridRungPayload(
-                        index: index,
-                        buyDropPct: input.buyDropPct * Double(index),
-                        sellRisePct: input.sellRisePct,
-                        notional: input.notional
-                    )
-                }
+                rungs: rungPayloads
             )
             loop = nil
+        }
+        let maximumPositionValue: Double
+        if mode == "loop-grid" {
+            let buyLevel = safeBasePrice * (1 - input.buyDropPct / 100)
+            maximumPositionValue = resolvedNotional(buyLevel)
+        } else {
+            maximumPositionValue = rungPayloads.reduce(0) { total, rung in
+                let buyLevel = safeBasePrice * (1 - rung.buyDropPct / 100)
+                let rungNotional = hasExplicitOrderSizing ? resolvedNotional(buyLevel) : rung.notional
+                return total + rungNotional
+            }
         }
         riskLimits = StrategyRiskLimitsPayload(
             maxDailyBuys: input.maxDailyTrades,
             maxDailySells: input.maxDailyTrades,
-            maxPositionValue: mode == "loop-grid" ? input.notional : input.notional * Double(safeRungCount),
+            maxPositionValue: maximumPositionValue,
             maxLossPct: input.maxLossPct,
             maxHoldHours: 24 * 365
         )
         exitRules = StrategyExitRulesPayload(
-            takeProfitPct: 0,
-            stopLossPct: 0,
-            rescueMode: "disable-only"
+            takeProfitPct: input.sellRisePct,
+            stopLossPct: input.stopLossPct,
+            rescueMode: input.stopLossPct > 0 ? "cancel-and-liquidate" : "disable-only"
         )
     }
 }
@@ -474,6 +618,12 @@ private struct StrategyPriceAnchorPayload: Encodable {
     let source: String
     let price: Double
     let capturedAt: String?
+}
+
+private struct StrategyOrderSizingPayload: Encodable {
+    let mode: String
+    let quantity: Double?
+    let notional: Double?
 }
 
 private struct StrategyGridPayload: Encodable {

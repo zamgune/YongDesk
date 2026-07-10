@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import test from "node:test";
 
 import {
+  buildCryptoQueryHashString,
   buildCryptoQueryString,
   cancelCryptoOrder,
   createCryptoLimitOrder,
@@ -9,7 +11,11 @@ import {
   createCryptoExchangeJwt,
   cryptoExchangeContract,
   getCryptoAccounts,
+  getCryptoOrderConstraints,
   getCryptoOrderChance,
+  getCryptoTicker,
+  getUpbitCandles,
+  getUpbitOrderbookInstrument,
   previewCryptoLimitOrder,
 } from "../src/lib/crypto-exchange/client.ts";
 
@@ -65,6 +71,112 @@ test("read-only account and order chance requests use official paths", async () 
   assert.match(String(new Headers(calls[0]?.init?.headers).get("Authorization")), /^Bearer /);
 });
 
+test("public ticker and order constraints expose fresh precheck inputs", async () => {
+  const calls: string[] = [];
+  const fetchImpl = (async (input: RequestInfo | URL) => {
+    calls.push(String(input));
+    return Response.json([{
+      market: "KRW-BTC",
+      trade_price: 101_000_000,
+      timestamp: 1_720_000_000_123,
+      trade_timestamp: 1_720_000_000_100,
+    }]);
+  }) as typeof fetch;
+  const ticker = await getCryptoTicker("bithumb", "KRW-BTC", fetchImpl);
+  assert.equal(calls[0], "https://api.bithumb.com/v1/ticker?markets=KRW-BTC");
+  assert.equal(ticker.tradePrice, 101_000_000);
+  assert.equal(ticker.tradeTimestamp, 1_720_000_000_100);
+
+  const constraints = getCryptoOrderConstraints({
+    bid_fee: "0.0005",
+    market: {
+      max_total: "1000000000",
+      bid: { min_total: "5000", price_unit: "1000" },
+    },
+  }, "bid");
+  assert.deepEqual(constraints, {
+    minTotal: 5000,
+    maxTotal: 1_000_000_000,
+    priceUnit: 1000,
+    feeRate: 0.0005,
+  });
+});
+
+test("Upbit orderbook instrument exposes the official tick size", async () => {
+  const calls: string[] = [];
+  const fetchImpl = (async (input: RequestInfo | URL) => {
+    calls.push(String(input));
+    return Response.json([{
+      market: "KRW-BTC",
+      quote_currency: "KRW",
+      tick_size: "1000",
+      supported_levels: ["0", "10000", "100000"],
+    }]);
+  }) as typeof fetch;
+  const instrument = await getUpbitOrderbookInstrument("KRW-BTC", fetchImpl);
+  assert.equal(calls[0], "https://api.upbit.com/v1/orderbook/instruments?markets=KRW-BTC");
+  assert.deepEqual(instrument, {
+    market: "KRW-BTC",
+    quoteCurrency: "KRW",
+    tickSize: 1000,
+    supportedLevels: [0, 10000, 100000],
+  });
+});
+
+test("Upbit candle client maps 60m and 240m REST candles in chronological order", async () => {
+  const calls: string[] = [];
+  const fixture = [
+    {
+      market: "KRW-BTC",
+      candle_date_time_utc: "2026-07-10T02:00:00",
+      opening_price: 151_000_000,
+      high_price: 152_000_000,
+      low_price: 150_500_000,
+      trade_price: 151_500_000,
+      candle_acc_trade_volume: 10,
+      candle_acc_trade_price: 1_515_000_000,
+    },
+    {
+      market: "KRW-BTC",
+      candle_date_time_utc: "2026-07-10T01:00:00",
+      opening_price: 150_000_000,
+      high_price: 151_500_000,
+      low_price: 149_500_000,
+      trade_price: 151_000_000,
+      candle_acc_trade_volume: 8,
+      candle_acc_trade_price: 1_204_000_000,
+    },
+  ];
+  const fetchImpl = (async (input: RequestInfo | URL) => {
+    calls.push(String(input));
+    return Response.json(fixture);
+  }) as typeof fetch;
+
+  const hourly = await getUpbitCandles("krw-btc", {
+    interval: "1h",
+    count: 500,
+    to: "2026-07-10T03:00:00Z",
+    nowMs: Date.parse("2026-07-10T03:30:00Z"),
+  }, fetchImpl);
+  const fourHourly = await getUpbitCandles("KRW-BTC", {
+    interval: "4h",
+    count: 2,
+    nowMs: Date.parse("2026-07-10T03:30:00Z"),
+  }, fetchImpl);
+
+  const firstUrl = new URL(calls[0] ?? "");
+  assert.equal(firstUrl.pathname, "/v1/candles/minutes/60");
+  assert.equal(firstUrl.searchParams.get("market"), "KRW-BTC");
+  assert.equal(firstUrl.searchParams.get("count"), "200");
+  assert.equal(firstUrl.searchParams.get("to"), "2026-07-10T03:00:00Z");
+  assert.ok(hourly[0]!.time < hourly[1]!.time);
+  assert.equal(hourly[0]?.close, 151_000_000);
+  assert.equal(hourly.every((candle) => candle.isClosed), true);
+
+  assert.equal(new URL(calls[1] ?? "").pathname, "/v1/candles/minutes/240");
+  assert.equal(fourHourly.every((candle) => candle.isClosed), false);
+});
+
 test("order preview never submits and follows exchange contract", () => {
   const preview = previewCryptoLimitOrder({
     exchange: "bithumb",
@@ -76,7 +188,14 @@ test("order preview never submits and follows exchange contract", () => {
   });
   assert.equal(preview.url, "https://api.bithumb.com/v2/orders");
   assert.equal(preview.orderSubmissionAttempted, false);
-  assert.equal(preview.body.ord_type, "limit");
+  assert.equal(preview.exchange, "bithumb");
+  if (preview.exchange !== "bithumb") {
+    assert.fail("Bithumb preview must use the Bithumb body contract");
+  }
+  assert.equal(preview.body.order_type, "limit");
+  assert.equal(preview.body.client_order_id, "test-order-1");
+  assert.equal("ord_type" in preview.body, false);
+  assert.equal("identifier" in preview.body, false);
   assert.equal(cryptoExchangeContract("upbit").createOrderPath, "/v1/orders");
 });
 
@@ -140,6 +259,46 @@ test("cancel requests use exchange-specific authenticated endpoints", async () =
   await cancelCryptoOrder("bithumb", credentials, "order-2", fetchImpl);
   assert.equal(calls[0]?.url, "https://api.upbit.com/v1/order?uuid=order-1");
   assert.equal(calls[0]?.init?.method, "DELETE");
-  assert.equal(calls[1]?.url, "https://api.bithumb.com/v2/order?uuid=order-2");
+  assert.equal(calls[1]?.url, "https://api.bithumb.com/v2/order?order_id=order-2");
   assert.equal(calls[1]?.init?.method, "DELETE");
+
+  for (const call of calls) {
+    const queryString = new URL(call.url).search.slice(1);
+    const authorization = new Headers(call.init?.headers).get("Authorization") ?? "";
+    const payloadPart = authorization.replace(/^Bearer\s+/, "").split(".")[1];
+    assert.ok(payloadPart);
+    const payload = decodeJwtPart(payloadPart);
+    const expectedQueryHash = createHash("sha512").update(queryString, "utf8").digest("hex");
+    assert.equal(payload.query_hash_alg, "SHA512");
+    assert.equal(payload.query_hash, expectedQueryHash);
+  }
+});
+
+test("Upbit hashes the raw query while encoding reserved characters on the wire", async () => {
+  const calls: Array<{ url: string; init?: RequestInit }> = [];
+  const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    calls.push({ url: String(input), init });
+    return Response.json({ uuid: "order/reserved ?value=1" });
+  }) as typeof fetch;
+  const brokerOrderId = "order/reserved ?value=1";
+  await cancelCryptoOrder("upbit", credentials, brokerOrderId, fetchImpl);
+
+  const call = calls[0];
+  assert.ok(call);
+  const wireQuery = new URL(call.url).search.slice(1);
+  assert.equal(wireQuery, "uuid=order%2Freserved%20%3Fvalue%3D1");
+  const authorization = new Headers(call.init?.headers).get("Authorization") ?? "";
+  const payloadPart = authorization.replace(/^Bearer\s+/, "").split(".")[1];
+  assert.ok(payloadPart);
+  const payload = decodeJwtPart(payloadPart);
+  const rawQuery = buildCryptoQueryHashString({ uuid: brokerOrderId });
+  assert.equal(rawQuery, "uuid=order/reserved ?value=1");
+  assert.equal(
+    payload.query_hash,
+    createHash("sha512").update(rawQuery, "utf8").digest("hex"),
+  );
+  assert.notEqual(
+    payload.query_hash,
+    createHash("sha512").update(wireQuery, "utf8").digest("hex"),
+  );
 });

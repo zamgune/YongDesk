@@ -63,39 +63,22 @@ export type AppLaunchEndpointChecks = {
 };
 
 export type UiSmokeChecks = {
-  launchedWindow?: boolean;
-  sidecarVisible?: boolean;
-  koreanSymbolSearch?: boolean;
-  cryptoExchangeSheet?: boolean;
-  menuBarExtra?: boolean;
-  topCommandButtons?: boolean;
-  decisionPanelButtons?: boolean;
-  paperResetConfirmation?: boolean;
-  firstRunSetup?: boolean;
-  firstRunSetupActions?: boolean;
-  workspaceTabs?: boolean;
-  orderRiskButtons?: boolean;
-  orderRiskReportCopy?: boolean;
-  orderSyncButton?: boolean;
-  newsReplayPlaybookButtons?: boolean;
-  tossSheetNoCredentialState?: boolean;
-  publicIpCheckButton?: boolean;
-  publicIpCopyButton?: boolean;
-  tossCredentialControls?: boolean;
-  tossReadinessButton?: boolean;
-  strategyDraftCreation?: boolean;
-  strategyReportCopy?: boolean;
-  strategyBackupImport?: boolean;
-  strategyCardActions?: boolean;
-  automationRunConfirmation?: boolean;
-  continuousAutomationScheduler?: boolean;
-  selfTestSheet?: boolean;
-  selfTestReportCopy?: boolean;
-  distributionInstallReadiness?: boolean;
-  releaseChecksumCopy?: boolean;
-  sidecarLogSheet?: boolean;
-  killSwitchToggle?: boolean;
-  killSwitchButtonGuards?: boolean;
+  beginnerFirstOnboarding?: boolean;
+  samsungFixtureAnalysis?: boolean;
+  sourceCurrencyTimeframeVisible?: boolean;
+  horizonPlans?: boolean;
+  signalAndNewsSentimentTabs?: boolean;
+  paperOrderDrawerNoSubmit?: boolean;
+  assetsWorkspace?: boolean;
+  strategyWorkflowOrder?: boolean;
+  strategyWorkspaceSmoke?: boolean;
+  automationPaperOnly?: boolean;
+  killSwitchReachable?: boolean;
+  settingsApiReachable?: boolean;
+  selfTestReachable?: boolean;
+  sidecarLogReachable?: boolean;
+  distributionReachable?: boolean;
+  responsiveWindowSizes?: boolean;
 };
 
 export type InstalledAppVerificationResult = {
@@ -282,38 +265,22 @@ const requiredAppLaunchEndpointChecks = [
 ] as const;
 
 const requiredUiSmokeChecks = [
-  "launchedWindow",
-  "sidecarVisible",
-  "koreanSymbolSearch",
-  "cryptoExchangeSheet",
-  "menuBarExtra",
-  "topCommandButtons",
-  "decisionPanelButtons",
-  "paperResetConfirmation",
-  "firstRunSetup",
-  "firstRunSetupActions",
-  "workspaceTabs",
-  "orderRiskButtons",
-  "orderRiskReportCopy",
-  "orderSyncButton",
-  "newsReplayPlaybookButtons",
-  "tossSheetNoCredentialState",
-  "publicIpCheckButton",
-  "publicIpCopyButton",
-  "tossCredentialControls",
-  "tossReadinessButton",
-  "strategyDraftCreation",
-  "strategyReportCopy",
-  "strategyBackupImport",
-  "strategyCardActions",
-  "automationRunConfirmation",
-  "continuousAutomationScheduler",
-  "selfTestSheet",
-  "selfTestReportCopy",
-  "distributionInstallReadiness",
-  "sidecarLogSheet",
-  "killSwitchToggle",
-  "killSwitchButtonGuards",
+  "beginnerFirstOnboarding",
+  "samsungFixtureAnalysis",
+  "sourceCurrencyTimeframeVisible",
+  "horizonPlans",
+  "signalAndNewsSentimentTabs",
+  "paperOrderDrawerNoSubmit",
+  "assetsWorkspace",
+  "strategyWorkflowOrder",
+  "strategyWorkspaceSmoke",
+  "automationPaperOnly",
+  "killSwitchReachable",
+  "settingsApiReachable",
+  "selfTestReachable",
+  "sidecarLogReachable",
+  "distributionReachable",
+  "responsiveWindowSizes",
 ] as const;
 
 const verificationJsonFromOutput = (output: string) => {

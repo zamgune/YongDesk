@@ -6,6 +6,8 @@ YongStockDesk는 관심종목, 포트폴리오 관리, 단건 차트 분석, 데
 
 이 저장소는 기존 StockAnalysis에서 분리한 최신 앱 소스의 기준 저장소입니다. 현재 배포 호환성을 위해 앱 번들 이름 `StockAnalysis.app`, Swift 제품명, 번들 ID, Keychain 서비스와 App Support 경로는 유지합니다. 전체 YongStockDesk 리브랜딩과 기존 사용자 데이터 이전은 별도 단계에서 진행합니다.
 
+현재 소스 버전은 `1.0.0`입니다. 데스크톱 첫 공개 범위는 분석·공식/RSS 뉴스·종목 민심·모의투자와 브로커 연결 점검입니다. Toss는 credential·계좌·보유·미체결·주문 사전검증, Upbit·Bithumb은 credential·잔고·주문가능정보·현재가·최소금액 사전검증을 사용할 수 있지만, 세 브로커 모두 실제 주문 제출은 차단하고 paper 자동화만 지원합니다.
+
 ## macOS App
 
 SwiftUI 앱은 `apps/macos/StockAnalysisMac`, 로컬 TypeScript sidecar와 패키징 도구는 `scripts/`에 있습니다. 앱은 sidecar가 사용하는 `src/` 도메인·유스케이스와 함께 빌드되므로 이 저장소 전체가 배포 소스의 기준입니다.
@@ -26,11 +28,20 @@ yarn mac:verify:launch
 - `시장 분석`: 종목 검색, 일봉 차트, 지지·저항, 돌파 상태, 실행 참고선과 신호 신뢰도를 제공합니다.
 - `시장 브리핑`: US·KR 시장의 주도 후보, 진입 준비도, 뉴스 이벤트와 페이퍼 후보를 정리합니다.
 - `전략·자동화`: ladder, 분할차수, 1% 반복 전략의 저장·시뮬레이션·활성화와 페이퍼 실행을 지원합니다.
-- `브로커 연결`: Toss, Upbit와 Bithumb credential 검증, 조회·사전검증과 안전한 주문 경계를 제공합니다.
-- `안전장치`: `OrderIntent`, `RiskCheck`, live gate, worker control과 kill switch를 모든 실제 주문보다 먼저 적용합니다.
+- `뉴스·민심`: 공식/RSS를 2분 주기로 갱신하고 종목별 커뮤니티 공포·과열·분열 근거를 표시합니다. Reddit 공식 OAuth는 뉴스 화면에서 Keychain에 선택 연결할 수 있으며, streaming 뉴스는 아닙니다.
+- `브로커 연결`: Toss credential·계좌·보유·사전검증과 Upbit·Bithumb 읽기 전용 준비 점검을 제공합니다. 데스크톱 1.0.0에서는 실제 주문을 제출하지 않습니다.
+- `안전장치`: `OrderIntent`, `RiskCheck`, live gate, worker control과 kill switch 계약을 유지하며, 1.0.0 데스크톱 sidecar는 그보다 앞에서 broker submit을 강제로 닫습니다.
 - `웹 fallback`: 포트폴리오, 분석, 자동화 관리와 백테스트 화면을 관리·보조 경로로 유지합니다.
 
 현재 SwiftUI와 향후 HTML 시안의 차이는 [기능 상태 문서](docs/features.md)에서 확인합니다.
+
+## 데스크톱 1.0.0 실행 경계
+
+- Toss와 Upbit·Bithumb API 키 등록 및 검증은 실제 주문 활성화가 아닙니다.
+- Toss 보유·미체결·매수 가능 금액·매도 가능 수량 조회와 주문 사전검증은 사용할 수 있습니다.
+- Upbit·Bithumb 잔고·주문 가능 정보·현재가·최소 주문금액 점검은 사용할 수 있습니다.
+- 자동화 1회 실행과 연속 scheduler는 주식과 코인 모두 로컬 paper 계좌만 갱신합니다.
+- 1.0.0 arm64/x64 DMG·ZIP·manifest와 설치 검증 리포트가 생성됐고 두 설치본의 sidecar·launch·UI smoke가 통과했습니다. x64는 Rosetta 검증이며 실제 Intel Mac과 Developer ID·공증 검증은 별도로 남아 있습니다.
 
 ## Getting Started
 
@@ -53,11 +64,18 @@ yarn build
 ```bash
 yarn test:crypto-buy
 yarn test:community-pain
+yarn test:crypto-exchanges
+yarn test:local-engine
+yarn test:local-engine-news
+yarn test:toss
+yarn test:toss-readiness
+yarn test:mac-release
 yarn test:market-briefing
 yarn test:portfolio-daily-action
 yarn test:signal-reliability
 yarn test:symbol-search
 yarn test:trading
+yarn mac:test
 ```
 
 종목 마스터 캐시 갱신:
@@ -88,7 +106,7 @@ GET /api/symbol-search?q=AP&markets=US,KOSPI,KOSDAQ,CRYPTO&limit=12
 - `/api/briefing/daily-market`: `US` 또는 `KR` 세션 단위 데일리 브리핑입니다. `US`는 장외 보조 체크를 포함할 수 있고, `KR`은 KOSPI와 KOSDAQ을 함께 다룹니다. 각 시장 리포트는 상세 보기용 `scanCandidates`를 포함합니다.
 - `/api/market/auto-leaders`: 데일리 브리핑을 만드는 내부 스캔 엔진입니다. 시장별 자동 후보, 후보 소스, 기준 거래일, 다음 분석 시각, 대장주 점수, 신고가 돌파 상태를 함께 반환합니다.
 - `/api/market/leaders`: 명시 종목 목록 또는 기본 유니버스를 스캔하는 호환 API입니다. 외부 호출 호환성을 위해 유지하며, 50일 상대강도에 신고가 돌파 여부를 보조 가점으로 반영합니다.
-- `/api/community-pain/[symbol]`: 커뮤니티 반응 기반 곡소리 점수를 반환합니다.
+- `/api/community-pain/[symbol]`: 커뮤니티 반응 기반 공포·과열·분열 점수, 표본 신뢰도와 근거 링크를 반환합니다. 낮은 표본은 `lowEvidence`로 구분합니다.
 - `/api/symbol-search`: 종목 자동완성 서버 API입니다. `.cache/stock-analysis/symbol-master` 캐시를 우선 사용하고, 캐시가 없거나 깨지면 repo seed와 기존 유니버스 fallback으로 응답합니다.
 
 ## Symbol Master
@@ -173,6 +191,7 @@ yarn backtest:crypto-buy --symbols BTC --tf 4h --start 2026-02-01 --mode A --cos
 - [추세추종 대장주 백테스트](docs/trend-following-leader-backtest.md)
 - [추세추종 임계값 메모](docs/trend-following-threshold-notes.md)
 - [커뮤니티 곡소리 소스 정책](docs/community-pain-sources.md)
+- [v1.0.0 릴리스 안내](docs/releases/v1.0.0.md)
 - [크립토 buy 신호 백테스트 사양](crypto_buy_signal_backtest_spec.md)
 
 완료된 목표와 과거 로드맵은 [문서 전체 안내](docs/README.md)의 archive 섹션에서 확인합니다.

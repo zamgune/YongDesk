@@ -14,7 +14,12 @@ import {
   Stochastic,
   WilliamsR,
 } from "technicalindicators";
-import { getMarketDataProvider, type MarketCandle, type MarketDataInterval } from "@/lib/market-data";
+import {
+  getMarketDataProvider,
+  type MarketCandle,
+  type MarketDataInterval,
+  type MarketDataProvider,
+} from "@/lib/market-data";
 import { calculateBreakoutRule } from "@/lib/market/breakout-rule";
 import { calculatePatternSignals } from "@/lib/market/pattern-signals";
 import { calculateSignalReliability } from "@/lib/market/signal-reliability";
@@ -113,6 +118,27 @@ const resampleCandles = (
   flushBucket();
 
   return resampled;
+};
+
+export const calculateCompletedTenMonthAverage = (candles: Candle[], timeZone: string) => {
+  const formatter = new Intl.DateTimeFormat("en-CA", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+  });
+  const monthlyCloses = new Map<string, number>();
+  for (const candle of candles) {
+    monthlyCloses.set(formatter.format(new Date(candle.time * 1000)), candle.close);
+  }
+  const formingMonth = candles.length
+    ? formatter.format(new Date(candles[candles.length - 1].time * 1000))
+    : null;
+  if (formingMonth) monthlyCloses.delete(formingMonth);
+  const values = SMA.calculate({
+    period: 10,
+    values: [...monthlyCloses.values()],
+  });
+  return values[values.length - 1] ?? null;
 };
 
 const alignValues = <T>(length: number, values: T[]) => {
@@ -901,10 +927,20 @@ const getRsiDoubleBottom = (rsiValues: Array<number | null>, lookback = 20) => {
 export async function analyzeSymbol(
   request: Request,
   context?: { params?: { symbol?: string } | Promise<{ symbol?: string }> },
-  options?: { userContext?: UserContext },
+  options?: {
+    userContext?: UserContext;
+    marketData?: Pick<MarketDataProvider, "getCandles">;
+    preAggregatedTimeframe?: "4h";
+    metadata?: {
+      market?: "KOSPI" | "KOSDAQ" | "US" | "CRYPTO";
+      currency?: "KRW" | "USD";
+      dataSource?: string;
+      quoteAt?: string | null;
+      stale?: boolean;
+    };
+  },
 ) {
-  void options;
-  const marketData = getMarketDataProvider();
+  const marketData = options?.marketData ?? getMarketDataProvider();
   const url = new URL(request.url);
   const pathParts = url.pathname.split("/").filter(Boolean);
   const symbolFromPath = pathParts[pathParts.length - 1] ?? "";
@@ -922,6 +958,12 @@ export async function analyzeSymbol(
   }
   const rangeDays = rangeDaysResult.value;
   const timeframeParam = url.searchParams.get("tf") ?? "1d";
+  if (!new Set(["1h", "4h", "1d", "1wk"]).has(timeframeParam)) {
+    return Response.json(
+      { error: "Unsupported timeframe. Use 1h, 4h, 1d, or 1wk." },
+      { status: 400 },
+    );
+  }
   const debugMode = url.searchParams.get("debug") === "1";
   const diagMode = url.searchParams.get("diag") === "1";
   const trendFollowingRole =
@@ -986,7 +1028,7 @@ export async function analyzeSymbol(
 
   let candles: Candle[] = chart.candles;
 
-  if (timeframe.resample) {
+  if (timeframe.resample && options?.preAggregatedTimeframe !== timeframeParam) {
     candles = resampleCandles(candles, timeframe.resample, chartTimeZone);
   }
 
@@ -1020,6 +1062,7 @@ export async function analyzeSymbol(
   const sma50 = SMA.calculate({ period: 50, values: closes });
   const sma60 = SMA.calculate({ period: 60, values: closes });
   const sma100 = SMA.calculate({ period: 100, values: closes });
+  const sma200 = SMA.calculate({ period: 200, values: closes });
   const volMa20 = SMA.calculate({ period: 20, values: volumes });
   const atr = ATR.calculate({ high: highs, low: lows, close: closes, period: 14 });
   const obv = OBV.calculate({ close: closes, volume: volumes });
@@ -1096,6 +1139,7 @@ export async function analyzeSymbol(
   const sma20Aligned = alignValues(candles.length, sma20);
   const sma50Aligned = alignValues(candles.length, sma50);
   const sma60Aligned = alignValues(candles.length, sma60);
+  const sma200Aligned = alignValues(candles.length, sma200);
   const volMa20Aligned = alignValues(candles.length, volMa20);
   const bbAligned = alignValues(candles.length, bbands);
   const macdAligned = alignValues(candles.length, macd);
@@ -2688,6 +2732,39 @@ export async function analyzeSymbol(
   const recentHigh20 = candles.length
     ? Math.max(...candles.slice(-20).map((candle) => candle.high))
     : null;
+  const inferredMarket = options?.metadata?.market ?? (
+    symbolIsCrypto
+      ? "CRYPTO"
+      : /\.KQ$/.test(sanitizedSymbol)
+        ? "KOSDAQ"
+        : /(?:\.KS$|^\d{6}$)/.test(sanitizedSymbol)
+          ? "KOSPI"
+          : "US"
+  );
+  const inferredCurrency = options?.metadata?.currency ?? (
+    inferredMarket === "US" ? "USD" : "KRW"
+  );
+  const quoteAt = options?.metadata?.quoteAt ?? (latestCandle
+    ? new Date(latestCandle.time * 1000).toISOString()
+    : null);
+  const latestAtr14 = atrAligned[atrAligned.length - 1] ?? null;
+  const latestHma20 = hma20Aligned[hma20Aligned.length - 1] ?? null;
+  const latestHma50 = hma50Aligned[hma50Aligned.length - 1] ?? null;
+  const latestAdx = adxAligned[adxAligned.length - 1]?.adx ?? null;
+  const latestChoppiness = chopAligned[chopAligned.length - 1] ?? null;
+  const latestVolumeMa20 = volMa20Aligned[volMa20Aligned.length - 1] ?? null;
+  const latestVolumeRatio = latestCandle && isNumber(latestVolumeMa20) && latestVolumeMa20 > 0
+    ? latestCandle.volume / latestVolumeMa20
+    : null;
+  const latestSma200 = sma200Aligned[sma200Aligned.length - 1] ?? null;
+  const latestEma200 = ema200Aligned[ema200Aligned.length - 1] ?? null;
+  const latestWeeklySma20 = weeklySma20[weeklySma20.length - 1] ?? null;
+  const latestWeeklySma60 = weeklySma60[weeklySma60.length - 1] ?? null;
+  const latestChandelierLong = chandelierSeries.long[chandelierSeries.long.length - 1]?.value ?? null;
+  const latestTenMonthAverage = calculateCompletedTenMonthAverage(candles, chartTimeZone);
+  const trendUp = isNumber(latestHma20) && isNumber(latestHma50)
+    ? latestHma20 > latestHma50
+    : null;
   const tradeSetupStopCandidates = [
     latestSma20 ? latestSma20 * 0.985 : null,
     isNumber(recentLow10) ? recentLow10 : null,
@@ -2742,6 +2819,14 @@ export async function analyzeSymbol(
     .filter(Boolean).length;
   const payload = {
     symbol: sanitizedSymbol,
+    market: inferredMarket,
+    currency: inferredCurrency,
+    dataSource: options?.metadata?.dataSource ?? "yahoo",
+    timeframe: timeframeParam,
+    quoteAt,
+    generatedAt: new Date().toISOString(),
+    stale: options?.metadata?.stale ?? false,
+    chartTimeZone,
     candles: visibleCandles,
     indicators: {
       sma: {
@@ -2787,6 +2872,27 @@ export async function analyzeSymbol(
     patternSignals,
     breakoutSignal,
     signalReliability,
+    analysisBasis: {
+      atr14: latestAtr14,
+      sma20: latestSma20,
+      sma200: latestSma200,
+      ema200: latestEma200,
+      tenMonthAverage: latestTenMonthAverage,
+      tenMonthAverageBasis: "completed-months",
+      hma20: latestHma20,
+      hma50: latestHma50,
+      adx14: latestAdx,
+      choppiness14: latestChoppiness,
+      volumeRatio20: latestVolumeRatio,
+      recentLow20: candles.length ? Math.min(...candles.slice(-20).map((candle) => candle.low)) : null,
+      recentHigh20,
+      chandelierLong: latestChandelierLong,
+      weeklySma20: latestWeeklySma20,
+      weeklySma60: latestWeeklySma60,
+      weeklyTrend,
+      trendUp,
+      closedCandleCount: candles.length,
+    },
   };
 
   if (!debugMode) {

@@ -8,6 +8,40 @@ func assert(_ condition: @autoclosure () -> Bool, _ message: String) {
     }
 }
 
+func verifyOneYearChartCandleRetentionContract() throws {
+    let appSourceURL = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .appending(path: "Sources/StockAnalysisMac/StockAnalysisMacApp.swift")
+    let appSource = try String(contentsOf: appSourceURL, encoding: .utf8)
+    let pattern = #"marketAnalysisCandleRetentionLimit\s*=\s*(\d+)"#
+    let expression = try NSRegularExpression(pattern: pattern)
+    let sourceRange = NSRange(appSource.startIndex..<appSource.endIndex, in: appSource)
+    let match = expression.firstMatch(in: appSource, range: sourceRange)
+
+    assert(match != nil, "app should declare a market-analysis candle retention limit")
+    guard let match,
+          let limitRange = Range(match.range(at: 1), in: appSource),
+          let retentionLimit = Int(appSource[limitRange]) else {
+        return
+    }
+
+    assert(retentionLimit >= 252, "1-year chart needs at least 252 daily candles")
+    assert(retentionLimit <= 400, "market-analysis candle retention should stay memory-bounded")
+    assert(
+        appSource.contains("candles: Array(candles.suffix(Self.marketAnalysisCandleRetentionLimit))"),
+        "market analysis parser should apply the shared retention limit"
+    )
+
+    let oneYearDailyCandles = Array(0..<252)
+    let retainedCandles = Array(oneYearDailyCandles.suffix(retentionLimit))
+    assert(retainedCandles.count == 252, "1-year chart data should retain all 252 trading-day candles")
+    assert(retainedCandles.first == 0 && retainedCandles.last == 251, "1-year retention should preserve candle order")
+}
+
+try verifyOneYearChartCandleRetentionContract()
+
 struct MockHTTPResponse {
     let statusCode: Int
     let body: String
@@ -16,6 +50,7 @@ struct MockHTTPResponse {
 struct CapturedHTTPRequest {
     let method: String
     let path: String
+    let percentEncodedPath: String
     let query: String?
     let body: String
 
@@ -52,6 +87,7 @@ final class EngineClientMockURLProtocolState: @unchecked Sendable {
         capturedRequests.append(CapturedHTTPRequest(
             method: request.httpMethod ?? "GET",
             path: url.path,
+            percentEncodedPath: URLComponents(url: url, resolvingAgainstBaseURL: false)?.percentEncodedPath ?? url.path,
             query: url.query,
             body: bodyText
         ))
@@ -131,6 +167,7 @@ let store = try AppSupportStore(rootURL: root)
 let settings = AppSettings(enginePort: 39_001, repositoryPath: "/tmp/repo", alertsEnabled: false, workerPaused: true)
 try store.saveSettings(settings)
 assert(store.loadSettings() == settings, "settings should round-trip through App Support JSON")
+assert(AppSettings().alertsEnabled == false, "new installs should keep notifications off until explicit opt-in")
 
 let overrideRoot = FileManager.default.temporaryDirectory
     .appending(path: "StockAnalysisMacOverride-\(UUID().uuidString)")
@@ -146,13 +183,14 @@ let legacySettingsJSON = """
 {
   "enginePort": 39002,
   "repositoryPath": "/tmp/legacy-repo",
-  "alertsEnabled": false,
   "workerPaused": true
 }
 """.data(using: .utf8)!
 let legacySettings = try JSONDecoder().decode(AppSettings.self, from: legacySettingsJSON)
 assert(legacySettings.enginePort == 39_002, "legacy settings should decode engine port")
+assert(legacySettings.alertsEnabled == false, "legacy settings without an alert preference should default notifications off")
 assert(legacySettings.liveTradingOperatorEnabled == false, "legacy settings should default live trading operator gate off")
+assert(legacySettings.hasCompletedOnboarding == false, "legacy settings should default onboarding completion off")
 
 let databaseURL = root.appending(path: "stock-analysis.sqlite3")
 let database = LocalSQLiteStore(databaseURL: databaseURL)
@@ -176,7 +214,7 @@ let healthJSON = """
 {
   "ok": true,
   "engine": "stock-analysis-local-engine",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "generatedAt": "2026-07-09T00:00:00.000Z",
   "storageRoot": "/tmp/stock-analysis",
   "localUserId": "local-macos-user",
@@ -912,6 +950,53 @@ let newsResponseJSON = """
 }
 """
 
+let communitySentimentJSON = """
+{
+  "symbol": "NVDA",
+  "canonicalSymbol": "NVDA",
+  "market": "US",
+  "queryTerms": ["NVDA", "NVIDIA"],
+  "lookbackHours": 24,
+  "score": 18,
+  "painScore": 18,
+  "gajuaScore": 12,
+  "divisionScore": 8,
+  "sentimentRegime": "low_evidence",
+  "level": "평온",
+  "confidence": 20,
+  "verdict": "근거 부족",
+  "evidenceCount": 2,
+  "postCount": 1,
+  "commentCount": 1,
+  "replyCount": 0,
+  "signalItemCount": 1,
+  "collectionWindowHours": 24,
+  "lowEvidence": true,
+  "factors": [],
+  "gajuaFactors": [],
+  "sourceStats": [{
+    "id": "reddit",
+    "label": "Reddit",
+    "status": "configuration-required",
+    "candidateCount": 0,
+    "recentItemCount": 0,
+    "itemCount": 0,
+    "postCount": 0,
+    "commentItemCount": 0,
+    "replyCount": 0,
+    "oldestItemAt": null,
+    "newestItemAt": null,
+    "dateParseCoverage": 0,
+    "timedOut": false
+  }],
+  "snippets": [],
+  "painSnippets": [],
+  "gajuaSnippets": [],
+  "generatedAt": "2026-07-10T00:00:00.000Z",
+  "cacheTtlSeconds": 1800
+}
+"""
+
 let killSwitchJSON = """
 {
   "generatedAt": "2026-07-09T00:00:00.000Z",
@@ -1102,6 +1187,7 @@ func verifyEngineClientActionRequests() async throws {
         mockResponse(#"{"symbol":"NVDA","latestClose":100}"#),
         mockResponse(#"{"ok":true}"#),
         mockResponse(#"{"query":"삼성","markets":["KOSPI","KOSDAQ"],"matches":[{"symbol":"005930.KS","displaySymbol":"005930","market":"KOSPI","exchange":"KOSPI","name":"삼성전자","nameKo":"삼성전자","nameEn":"Samsung Electronics","currency":"KRW","assetType":"stock","sector":"반도체","themes":["메모리"],"aliases":[],"score":222,"matchedBy":"삼성전자"}],"warnings":[]}"#),
+        mockResponse(communitySentimentJSON),
     ]
     EngineClientMockURLProtocol.reset(responses: responses)
 
@@ -1145,6 +1231,22 @@ func verifyEngineClientActionRequests() async throws {
     _ = try await client.dailyBriefing(session: "US")
     let symbolSearch = try await client.searchSymbols(query: "삼성", markets: ["KOSPI", "KOSDAQ"], limit: 12)
     assert(symbolSearch.matches.first?.displayLabel == "삼성전자 · Samsung Electronics · 005930", "symbol search should decode bilingual label")
+    let community = try await client.communitySentiment(
+        symbol: "NVDA",
+        market: "US",
+        includeBroad: true,
+        includeSpikeSources: true,
+        refresh: true,
+        sources: ["reddit", "paxnet"]
+    )
+    assert(community.canonicalSymbol == "NVDA", "community response should decode canonical symbol")
+    assert(community.lowEvidence, "community response should decode low-evidence state")
+    do {
+        _ = try await client.communitySentiment(symbol: "../health", market: "US")
+        assert(false, "community client should reject unsafe path symbols")
+    } catch {
+        assert(true, "unsafe community symbol rejected")
+    }
 
     let requests = EngineClientMockURLProtocol.captured()
     assert(requests.count == responses.count, "EngineClient should issue \(responses.count) captured app action requests")
@@ -1187,8 +1289,183 @@ func verifyEngineClientActionRequests() async throws {
     requireRequest(requests, 36, method: "GET", path: "/api/market/NVDA?days=365&tf=1d")
     requireRequest(requests, 37, method: "GET", path: "/api/briefing/daily-market?session=US&force=1")
     requireRequest(requests, 38, method: "GET", path: "/api/local/symbol-search?q=%EC%82%BC%EC%84%B1&markets=KOSPI,KOSDAQ&limit=12")
+    requireRequest(requests, 39, method: "GET", path: "/api/community-pain/NVDA?market=US&broad=1&spike=1&refresh=1&limit=60&sources=reddit,paxnet")
 }
 
 try await verifyEngineClientActionRequests()
+
+func verifyMarketAnalysisContracts() async throws {
+    let configuration = URLSessionConfiguration.ephemeral
+    configuration.protocolClasses = [EngineClientMockURLProtocol.self]
+    let session = URLSession(configuration: configuration)
+    let client = EngineClient(baseURL: URL(string: "http://127.0.0.1:39099")!, session: session)
+    let workspaceFixture = """
+    {
+      "symbol": "005930.KS",
+      "assetClass": "stock",
+      "market": "KOSPI",
+      "currency": "KRW",
+      "dataSource": "toss-open-api",
+      "quoteAt": "2026-07-10T06:00:00.000Z",
+      "generatedAt": "2026-07-10T06:00:01.000Z",
+      "stale": false,
+      "analyses": {
+        "oneHour": {
+          "symbol": "005930.KS",
+          "market": "KOSPI",
+          "currency": "KRW",
+          "dataSource": "toss-open-api",
+          "timeframe": "1h",
+          "quoteAt": "2026-07-10T06:00:00.000Z",
+          "latestClose": 88000,
+          "analysisBasis": {
+            "atr14": 1200,
+            "hma20": 87200,
+            "hma50": 86500,
+            "trendUp": true,
+            "closedCandleCount": 240
+          }
+        },
+        "fourHour": {
+          "currency": "KRW",
+          "dataSource": "future-provider-v2",
+          "timeframe": "4h",
+          "price": 88000
+        },
+        "daily": {
+          "currency": "KRW",
+          "dataSource": "toss",
+          "timeframe": "1d",
+          "currentPrice": 88000,
+          "analysisBasis": {
+            "sma200": 74100,
+            "weeklySma20": 81200,
+            "weeklySma60": 76800
+          }
+        }
+      },
+      "horizonPlans": [
+        {
+          "horizon": "day",
+          "status": "actionable",
+          "entryPrice": 88000,
+          "stop": {
+            "price": 85800,
+            "trigger": "hourly-close",
+            "isBrokerStopEligible": false,
+            "reason": "1시간봉 종가 기준"
+          },
+          "takeProfits": [
+            { "price": 90200, "allocationPct": 50, "basis": "1R" },
+            { "price": 92400, "allocationPct": 50, "basis": "2R" }
+          ],
+          "trailingExit": null,
+          "riskPerShare": 2200,
+          "stopPct": -2.5,
+          "rewardRisk": 2,
+          "basis": {
+            "symbol": "005930.KS",
+            "market": "KOSPI",
+            "currency": "KRW",
+            "dataSource": "toss-open-api",
+            "timeframeLabel": "4시간봉 추세 · 1시간봉 진입",
+            "entryPrice": 88000,
+            "reliabilityGrade": "high"
+          },
+          "formulaSteps": ["stop = entry - distance"],
+          "reasons": ["확정봉 기준"],
+          "blockers": []
+        },
+        {
+          "horizon": "swing",
+          "status": "wait",
+          "entryPrice": 88000,
+          "takeProfits": [],
+          "reasons": [],
+          "blockers": ["4시간봉 확정 대기"]
+        },
+        {
+          "horizon": "long",
+          "status": "unavailable",
+          "entryPrice": 88000,
+          "blockers": ["주봉 표본 부족"]
+        }
+      ],
+      "warnings": ["PAPER ONLY"],
+      "orderSubmissionAttempted": false
+    }
+    """
+    EngineClientMockURLProtocol.reset(responses: [
+        mockResponse(#"{"symbol":"삼성 전자/005930.KS","latestClose":88000}"#),
+        mockResponse(workspaceFixture),
+    ])
+
+    _ = try await client.analyze(symbol: "삼성 전자/005930.KS", timeframe: .fourHours, days: 90)
+    let workspace = try await client.workspaceAnalysis(
+        symbol: "005930.KS",
+        assetClass: .stock,
+        source: .auto
+    )
+
+    assert(workspace.assetClass == .stock, "workspace should decode stock asset class")
+    assert(workspace.market == .kospi, "workspace should decode KOSPI market metadata")
+    assert(workspace.currency == "KRW", "workspace should preserve response currency instead of assuming USD")
+    assert(workspace.dataSource == .toss, "workspace should normalize Toss source metadata")
+    assert(workspace.analyses?.oneHour?.timeframe == .oneHour, "workspace should decode one-hour analysis")
+    assert(workspace.analyses?.fourHour?.timeframe == .fourHours, "workspace should decode four-hour analysis")
+    assert(workspace.analyses?.fourHour?.dataSource == .unknown("future-provider-v2"), "unknown providers should decode without dropping metadata")
+    assert(workspace.analyses?.fourHour?.latestClose == 88_000, "analysis should accept price as a latestClose alias")
+    assert(workspace.analyses?.daily?.latestClose == 88_000, "analysis should accept currentPrice as a latestClose alias")
+    assert(workspace.analyses?.oneHour?.analysisBasis?.atr14 == 1_200, "analysis basis should decode ATR")
+    assert(workspace.horizonPlans.map(\.horizon) == [.day, .swing, .long], "workspace should decode all holding horizons")
+    assert(workspace.horizonPlans.first?.status == .actionable, "day plan should decode actionable status")
+    assert(workspace.horizonPlans.first?.stop?.isBrokerStopEligible == false, "analysis stops should remain advisory")
+    assert(workspace.horizonPlans.first?.takeProfits.count == 2, "day plan should decode take-profit levels")
+    assert(workspace.horizonPlans[1].blockers == ["4시간봉 확정 대기"], "wait plan should preserve blockers")
+    assert(workspace.orderSubmissionAttempted == false, "workspace analysis must not submit an order")
+
+    let decoder = JSONDecoder()
+    var missingOrderFlag = try JSONSerialization.jsonObject(with: Data(workspaceFixture.utf8)) as! [String: Any]
+    missingOrderFlag.removeValue(forKey: "orderSubmissionAttempted")
+    let missingOrderData = try JSONSerialization.data(withJSONObject: missingOrderFlag)
+    do {
+        _ = try decoder.decode(WorkspaceAnalysis.self, from: missingOrderData)
+        assert(false, "workspace must fail closed when orderSubmissionAttempted is missing")
+    } catch {
+        assert(true, "missing orderSubmissionAttempted rejected")
+    }
+
+    var missingStopEligibility = try JSONSerialization.jsonObject(with: Data(workspaceFixture.utf8)) as! [String: Any]
+    var plans = missingStopEligibility["horizonPlans"] as! [[String: Any]]
+    var firstPlan = plans[0]
+    var stop = firstPlan["stop"] as! [String: Any]
+    stop.removeValue(forKey: "isBrokerStopEligible")
+    firstPlan["stop"] = stop
+    plans[0] = firstPlan
+    missingStopEligibility["horizonPlans"] = plans
+    let missingStopData = try JSONSerialization.data(withJSONObject: missingStopEligibility)
+    do {
+        _ = try decoder.decode(WorkspaceAnalysis.self, from: missingStopData)
+        assert(false, "workspace must fail closed when stop eligibility is missing")
+    } catch {
+        assert(true, "missing stop eligibility rejected")
+    }
+
+    let requests = EngineClientMockURLProtocol.captured()
+    assert(requests.count == 2, "market analysis contract should issue two requests")
+    assert(
+        requests[0].percentEncodedPath == "/api/market/%EC%82%BC%EC%84%B1%20%EC%A0%84%EC%9E%90%2F005930.KS",
+        "analysis symbol must be encoded as one path segment, got \(requests[0].percentEncodedPath)"
+    )
+    assert(requests[0].query == "days=90&tf=4h", "analysis should encode explicit days and timeframe")
+    requireRequest(
+        requests,
+        1,
+        method: "GET",
+        path: "/api/local/analysis/workspace?symbol=005930.KS&assetClass=stock&source=auto"
+    )
+}
+
+try await verifyMarketAnalysisContracts()
 
 print("StockAnalysisMac smoke tests passed")

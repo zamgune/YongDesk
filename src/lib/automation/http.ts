@@ -2,6 +2,7 @@ import type {
   AutomationLastSimulation,
   AutomationMarket,
   AutomationMode,
+  AutomationOrderSizing,
   AutomationPriceAnchor,
   AutomationPreset,
   AutomationStrategyConfig,
@@ -66,6 +67,22 @@ const parseLadder = (value: unknown, supportPrice: number, resistancePrice: numb
 
 const modeOr = (value: unknown): AutomationMode =>
   value === "percent-grid" || value === "loop-grid" ? value : "ladder";
+
+const parseOrderSizing = (value: unknown): AutomationOrderSizing | undefined => {
+  if (typeof value !== "object" || value === null) {
+    return undefined;
+  }
+  const row = value as Record<string, unknown>;
+  if (row.mode === "quantity") {
+    const quantity = Number(row.quantity);
+    return Number.isFinite(quantity) && quantity > 0 ? { mode: "quantity", quantity } : undefined;
+  }
+  if (row.mode === "notional") {
+    const notional = Number(row.notional);
+    return Number.isFinite(notional) && notional > 0 ? { mode: "notional", notional } : undefined;
+  }
+  return undefined;
+};
 
 const parseGrid = (value: unknown, currentPrice: number): GridPlan | undefined => {
   if (typeof value !== "object" || value === null) {
@@ -161,6 +178,7 @@ export const parseStrategyConfigPayload = (
     preset: presetOr(payload.preset),
     status: payload.status === "enabled" || payload.status === "disabled" ? payload.status : "draft",
     mode: modeOr(payload.mode),
+    orderSizing: parseOrderSizing(payload.orderSizing),
     supportPrice,
     resistancePrice,
     currentPrice: numberOr(payload.currentPrice, (supportPrice + resistancePrice) / 2),
