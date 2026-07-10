@@ -163,6 +163,23 @@ public struct EngineClient: Sendable {
         return try await getJSON("/api/local/symbol-search?\(components.percentEncodedQuery ?? "")")
     }
 
+    public func watchlistSummary() async throws -> LocalWatchlistSummaryResponse {
+        try await getJSON("/api/local/watchlist/summary", timeout: 30)
+    }
+
+    public func addWatchlistItem(_ input: LocalWatchlistItemInput) async throws -> LocalWatchlistResponse {
+        let data = try await postJSON("/api/local/watchlist", body: input)
+        return try decoder.decode(LocalWatchlistResponse.self, from: data)
+    }
+
+    public func deleteWatchlistItem(id: String) async throws -> LocalWatchlistResponse {
+        guard let encodedId = percentEncodedPathSegment(id) else {
+            throw URLError(.badURL)
+        }
+        let data = try await requestData("/api/local/watchlist/\(encodedId)", method: "DELETE")
+        return try decoder.decode(LocalWatchlistResponse.self, from: data)
+    }
+
     public func cryptoExchanges() async throws -> CryptoExchangeListResponse {
         try await getJSON("/api/local/crypto-exchanges")
     }

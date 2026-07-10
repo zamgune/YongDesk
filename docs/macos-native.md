@@ -39,6 +39,7 @@ curl http://127.0.0.1:38771/health
 | 상태 | `GET /health`, `GET /api/local/self-test` | sidecar와 앱 준비 상태 |
 | 시장 | `GET /api/market/:symbol`, `GET /api/briefing/daily-market` | 분석과 시장 브리핑 |
 | 멀티타임프레임 | `GET /api/local/analysis/workspace` | 1시간·4시간·일봉 분석, metadata와 단타·스윙·장기 계획 |
+| 관심종목 | `GET/POST /api/local/watchlist`, `DELETE /api/local/watchlist/:id`, `GET /api/local/watchlist/summary` | 이 Mac의 관심종목 저장과 한국·미국 주식·코인 시세 요약 |
 | 뉴스·민심 | `GET /api/news/events`, `GET /api/community-pain/:symbol` | 공식/RSS 뉴스와 종목별 커뮤니티 근거 |
 | 대시보드 | `GET /api/dashboard/terminal`, `POST /api/dashboard/playbook` | macOS 대시보드와 포지션 메모 |
 | Toss | `/api/local/broker/credentials`, `/api/local/toss/readiness` | credential과 계좌 준비 상태 |
@@ -58,11 +59,13 @@ curl http://127.0.0.1:38771/health
 
 - 첫 설치에서는 시작 안내가 자동으로 열리고 `삼성전자 예제 분석 시작`, `내 API 연결하기`, `나중에 연결` 중 필요한 경로를 선택한다. API 연결은 별도 팝업이 아니라 설정 workspace의 Toss·Upbit·Bithumb 인라인 연결 관리로 이동한다.
 - credential은 선택 사항이다. API 키 없이도 삼성전자 Yahoo fallback 분석, Upbit 공개 분석, 공식/RSS 뉴스와 모의투자를 사용할 수 있다.
+- 차트에서 현재 종목을 관심종목에 추가하면 최대 20개를 이 Mac의 sidecar 저장소에 보관한다. 관심종목은 현재가·등락·출처·갱신 상태만 비교하며, 행 선택 후 단건 분석으로 이동한다.
 - Finder/Dock 실행 시 번들 sidecar를 우선 사용한다.
 - 번들 경로가 없으면 빌드 시 저장한 저장소 경로와 사용자가 저장한 sidecar 경로를 순서대로 확인한다.
 - 상단 상태와 메뉴바에서 sidecar, 모의투자, `PAPER ONLY`, 최근 갱신을 확인한다.
 - `점검` 화면은 credential이 없을 때 외부 계좌를 호출하지 않고 안전 경로를 검증한다.
 - `로그`와 운영 리포트는 secret, token과 raw account number를 제외한다.
+- 일반 설정은 API 연결·알림·자동화 안전 상태만 제공한다. self-test와 진단 로그는 앱 메뉴의 `지원` 경로로, 배포·설치 검증은 개발·패키징 경로로 분리한다.
 
 ### 차트와 멀티타임프레임 분석
 

@@ -119,6 +119,13 @@ import {
   buildTerminalDashboardSnapshot,
   saveTerminalDashboardPlaybook,
 } from "../src/lib/local-engine/dashboard.ts";
+import {
+  addWatchlistItem,
+  getWatchlistSummary,
+  listWatchlist,
+  removeWatchlistItem,
+  WatchlistRequestError,
+} from "../src/lib/local-engine/watchlist.ts";
 import { buildPaperTradingCandidates } from "../src/use-cases/trading/build-paper-trading-candidates.ts";
 import {
   PAPER_STRATEGY_VERSION,
@@ -4181,6 +4188,19 @@ export const handleLocalEngineRequest = async (request: Request): Promise<Respon
     if (request.method === "GET" && url.pathname === "/api/local/symbol-search") {
       return searchLocalSymbols(url);
     }
+    if (request.method === "GET" && url.pathname === "/api/local/watchlist") {
+      return jsonResponse(await listWatchlist());
+    }
+    if (request.method === "POST" && url.pathname === "/api/local/watchlist") {
+      return jsonResponse(await addWatchlistItem(await readJsonBody(request)), { status: 201 });
+    }
+    if (request.method === "GET" && url.pathname === "/api/local/watchlist/summary") {
+      return jsonResponse(await getWatchlistSummary());
+    }
+    const watchlistItemMatch = url.pathname.match(/^\/api\/local\/watchlist\/([^/]+)$/);
+    if (request.method === "DELETE" && watchlistItemMatch?.[1]) {
+      return jsonResponse(await removeWatchlistItem(decodeURIComponent(watchlistItemMatch[1])));
+    }
     if (request.method === "GET" && url.pathname === "/api/local/crypto-exchanges") {
       return cryptoCredentialState();
     }
@@ -4312,7 +4332,7 @@ export const handleLocalEngineRequest = async (request: Request): Promise<Respon
     }
     return jsonResponse({ error: "not found" }, { status: 404 });
   } catch (error) {
-    return errorResponse(error);
+    return errorResponse(error, error instanceof WatchlistRequestError ? error.status : 500);
   }
 };
 

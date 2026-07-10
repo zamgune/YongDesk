@@ -134,18 +134,18 @@ export const readPaperTradingState = async (
       );
       await rename(paths.statePath, backupPath).catch(() => undefined);
       const state = createDefaultPaperTradingState(now);
-      await writePaperTradingState(state, storageRoot);
+      const persistedState = await writePaperTradingState(state, storageRoot);
       return {
-        state,
+        state: normalizePaperTradingState(persistedState),
         storagePath: paths.statePath,
         repaired: true,
         backupPath,
       };
     }
     const state = createDefaultPaperTradingState(now);
-    await writePaperTradingState(state, storageRoot);
+    const persistedState = await writePaperTradingState(state, storageRoot);
     return {
-      state,
+      state: normalizePaperTradingState(persistedState),
       storagePath: paths.statePath,
       repaired: true,
     };

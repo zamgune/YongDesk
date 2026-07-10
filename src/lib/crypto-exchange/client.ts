@@ -299,24 +299,42 @@ export const getCryptoTicker = async (
   market: string,
   fetchImpl: typeof fetch = fetch,
 ): Promise<CryptoTickerQuote> => {
+  const quotes = await getCryptoTickers(exchange, [market], fetchImpl);
+  const quote = quotes[0];
+  if (!quote) {
+    throw new CryptoExchangeApiError(exchange, 502, `${exchange} 현재가 응답이 유효하지 않습니다.`);
+  }
+  return quote;
+};
+
+export const getCryptoTickers = async (
+  exchange: CryptoExchange,
+  markets: string[],
+  fetchImpl: typeof fetch = fetch,
+): Promise<CryptoTickerQuote[]> => {
+  const normalizedMarkets = [...new Set(markets.map((market) => market.trim().toUpperCase()).filter(Boolean))];
+  if (!normalizedMarkets.length) {
+    return [];
+  }
   const payload = await publicRequest<Array<Record<string, unknown>>>({
     exchange,
     path: CONTRACTS[exchange].tickerPath,
-    parameters: { markets: market },
+    parameters: { markets: normalizedMarkets.join(",") },
     fetchImpl,
   });
-  const ticker = payload[0];
-  const tradePrice = numericValue(ticker?.trade_price);
-  const timestamp = numericValue(ticker?.timestamp);
-  if (!ticker || tradePrice === null || tradePrice <= 0 || timestamp === null || timestamp <= 0) {
-    throw new CryptoExchangeApiError(exchange, 502, `${exchange} 현재가 응답이 유효하지 않습니다.`);
-  }
-  return {
-    market: typeof ticker.market === "string" ? ticker.market : market,
-    tradePrice,
-    timestamp,
-    tradeTimestamp: numericValue(ticker.trade_timestamp),
-  };
+  return payload.flatMap((ticker) => {
+    const tradePrice = numericValue(ticker.trade_price);
+    const timestamp = numericValue(ticker.timestamp);
+    if (tradePrice === null || tradePrice <= 0 || timestamp === null || timestamp <= 0) {
+      return [];
+    }
+    return [{
+      market: typeof ticker.market === "string" ? ticker.market.toUpperCase() : "",
+      tradePrice,
+      timestamp,
+      tradeTimestamp: numericValue(ticker.trade_timestamp),
+    }];
+  }).filter((ticker) => ticker.market.length > 0);
 };
 
 const UPBIT_CANDLE_CONTRACT: Record<UpbitCandleInterval, { path: string; seconds: number }> = {

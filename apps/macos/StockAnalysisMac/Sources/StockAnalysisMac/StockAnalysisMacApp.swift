@@ -27,6 +27,16 @@ struct StockAnalysisMacApp: App {
                 .environmentObject(model)
         }
         .menuBarExtraStyle(.window)
+        .commands {
+            CommandMenu("지원") {
+                Button("연결 상태 점검") {
+                    NotificationCenter.default.post(name: .openBeginnerSupportSelfTest, object: nil)
+                }
+                Button("진단 로그 열기") {
+                    NotificationCenter.default.post(name: .openBeginnerSupportLog, object: nil)
+                }
+            }
+        }
     }
 }
 
@@ -51,6 +61,9 @@ final class AppModel: ObservableObject {
     @Published var latestWorkspaceAnalysis: WorkspaceAnalysis?
     @Published var workspaceAnalysisMessage = "종목을 선택하면 1시간·4시간·일봉 기준을 함께 계산합니다."
     @Published private(set) var isWorkspaceAnalysisLoading = false
+    @Published var watchlistItems: [LocalWatchlistSummaryItem] = []
+    @Published var watchlistMaxItems = 20
+    @Published var watchlistMessage = "관심종목을 추가하면 현재가와 등락을 한 화면에서 비교할 수 있습니다."
     @Published var brokerCredential: BrokerCredentialView?
     @Published var brokerAccounts: [BrokerAccountView] = []
     @Published var brokerAccountPreference: BrokerAccountPreferenceView?
@@ -196,6 +209,7 @@ final class AppModel: ObservableObject {
             await refreshCryptoExchanges()
             await refreshPaperTradingState()
             await refreshStrategyConfigs()
+            await refreshWatchlist()
         } else {
             startSidecar()
         }
@@ -1590,6 +1604,44 @@ final class AppModel: ObservableObject {
             return
         }
         await refreshTerminalDashboard(symbol: dashboard.symbol, session: dashboard.session)
+    }
+
+    func refreshWatchlist() async {
+        do {
+            let response = try await client.watchlistSummary()
+            watchlistItems = response.items
+            watchlistMaxItems = response.maxItems
+            watchlistMessage = response.items.isEmpty
+                ? "관심종목이 없습니다. 차트에서 현재 종목을 추가해보세요."
+                : "관심종목 \(response.items.count)개를 갱신했습니다."
+            lastUpdated = Self.timeFormatter.string(from: Date())
+        } catch {
+            watchlistMessage = "관심종목 갱신 실패: \(Self.errorMessage(error))"
+        }
+    }
+
+    func addWatchlistItem(symbol: String, assetClass: String, market: String, name: String? = nil) async {
+        do {
+            let response = try await client.addWatchlistItem(
+                LocalWatchlistItemInput(symbol: symbol, assetClass: assetClass, market: market, name: name)
+            )
+            watchlistMaxItems = response.maxItems
+            watchlistMessage = "\(symbol.uppercased())을(를) 관심종목에 추가했습니다."
+            await refreshWatchlist()
+        } catch {
+            watchlistMessage = "관심종목 추가 실패: \(Self.errorMessage(error))"
+        }
+    }
+
+    func removeWatchlistItem(id: String) async {
+        do {
+            let response = try await client.deleteWatchlistItem(id: id)
+            watchlistMaxItems = response.maxItems
+            watchlistMessage = "관심종목에서 제거했습니다."
+            await refreshWatchlist()
+        } catch {
+            watchlistMessage = "관심종목 제거 실패: \(Self.errorMessage(error))"
+        }
     }
 
     func savePlaybook(_ playbook: DashboardPlaybook, session: String) async -> String {

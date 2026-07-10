@@ -25,6 +25,10 @@ const {
   readPaperTradingState,
   writePaperTradingState,
 } = await import("../src/lib/paper-trading/state-store.ts");
+const {
+  WATCHLIST_MAX_ITEMS,
+  summarizeWatchlistItems,
+} = await import("../src/lib/local-engine/watchlist.ts");
 
 type FetchCall = {
   url: string;
@@ -186,6 +190,60 @@ test("local engine searches Korean symbols with bilingual names", async () => {
   assert.equal(payload.matches?.[0]?.displaySymbol, "005930");
   assert.equal(payload.matches?.[0]?.nameKo, "삼성전자");
   assert.equal(payload.matches?.[0]?.nameEn, "Samsung Electronics");
+});
+
+test("local watchlist stores unique items, enforces its limit, and isolates summary failures", async () => {
+  const create = async (payload: Record<string, unknown>) =>
+    handleLocalEngineRequest(new Request("http://127.0.0.1:38771/api/local/watchlist", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    }));
+
+  const firstResponse = await create({ symbol: "005930", assetClass: "stock", market: "KR", name: "삼성전자" });
+  assert.equal(firstResponse.status, 201);
+  const first = await firstResponse.json() as { items?: Array<{ id?: string; symbol?: string }> };
+  assert.equal(first.items?.[0]?.symbol, "005930.KS");
+  const id = first.items?.[0]?.id;
+  assert.ok(id);
+
+  const duplicate = await create({ symbol: "005930.KS", assetClass: "stock", market: "KR" });
+  assert.equal(duplicate.status, 201);
+  assert.equal((await duplicate.json() as { items?: unknown[] }).items?.length, 1);
+
+  for (let index = 1; index < WATCHLIST_MAX_ITEMS; index += 1) {
+    const response = await create({ symbol: `ITEM${index}`, assetClass: "stock", market: "US" });
+    assert.equal(response.status, 201);
+  }
+  const overLimit = await create({ symbol: "OVERLIMIT", assetClass: "stock", market: "US" });
+  assert.equal(overLimit.status, 409);
+
+  const summary = await summarizeWatchlistItems([
+    { id: "stock-ok", symbol: "AAPL", name: "Apple", assetClass: "stock", market: "US", addedAt: "2026-07-11T00:00:00.000Z" },
+    { id: "stock-fail", symbol: "FAIL", name: null, assetClass: "stock", market: "US", addedAt: "2026-07-11T00:00:00.000Z" },
+    { id: "crypto-ok", symbol: "KRW-BTC", name: "Bitcoin", assetClass: "crypto", market: "CRYPTO", addedAt: "2026-07-11T00:00:00.000Z" },
+  ], {
+    now: () => new Date("2026-07-11T00:00:10.000Z"),
+    getStockQuotes: async () => new Map([
+      ["AAPL", { symbol: "AAPL", price: 200, changePercent: 1.5 }],
+      ["FAIL", new Error("provider unavailable")],
+    ]),
+    getCryptoQuotes: async () => new Map([
+      ["KRW-BTC", { price: 150_000_000, quoteAt: "2026-07-11T00:00:00.000Z" }],
+    ]),
+  });
+  assert.equal(summary[0]?.price, 200);
+  assert.equal(summary[0]?.changePercent, 1.5);
+  assert.equal(summary[1]?.error, "provider unavailable");
+  assert.equal(summary[1]?.stale, true);
+  assert.equal(summary[2]?.dataSource, "upbit");
+  assert.equal(summary[2]?.currency, "KRW");
+
+  const deleted = await handleLocalEngineRequest(new Request(
+    `http://127.0.0.1:38771/api/local/watchlist/${id}`,
+    { method: "DELETE" },
+  ));
+  assert.equal(deleted.status, 200);
 });
 
 test("local engine exposes fail-closed crypto exchange setup", async () => {

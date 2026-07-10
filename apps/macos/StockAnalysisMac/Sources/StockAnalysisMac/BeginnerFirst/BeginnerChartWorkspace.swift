@@ -13,6 +13,7 @@ struct BeginnerChartWorkspace: View {
     let isLoading: Bool
     let compact: Bool
     let onAnalyze: () -> Void
+    let onAddToWatchlist: () -> Void
     let onOpenOrder: () -> Void
     let onRefreshNews: () -> Void
 
@@ -110,6 +111,9 @@ struct BeginnerChartWorkspace: View {
                     .font(.caption)
                     .foregroundStyle(BeginnerPalette.muted)
                 HStack(spacing: 8) {
+                    Button("관심종목 추가", action: onAddToWatchlist)
+                        .buttonStyle(.bordered)
+                        .accessibilityIdentifier("beginner-add-watchlist")
                     Button("다시 분석", action: onAnalyze)
                         .buttonStyle(.bordered)
                         .disabled(isLoading)
