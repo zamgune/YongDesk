@@ -160,7 +160,10 @@ const writeFileStore = async (store: TrackerStore) => {
 
 // === Supabase 백엔드 ===
 
-const shouldUseSupabaseStore = () => getSupabaseAdminConfig() !== null;
+// macOS sidecar는 단일 설치의 주문 시도 원장을 App Support 파일에만 둔다.
+// 웹/관리 경로의 선택형 Supabase 원장은 로컬 실거래 복구 경계에 관여하지 않는다.
+const shouldUseSupabaseStore = () =>
+  process.env.STOCK_ANALYSIS_RUNTIME !== "macos-local" && getSupabaseAdminConfig() !== null;
 const supabase = () => createSupabaseAdminClient();
 const throwIfSupabaseError = (error: { message?: string } | null, operation: string) => {
   if (error) {
@@ -304,6 +307,12 @@ const readOrderPreview = async (
   const store = await readFileStore();
   return store.previews.find((preview) => preview.userId === userId && preview.id === previewId) ?? null;
 };
+
+/** 로컬 sidecar의 최종 제출 경로가 서버 입력을 다시 신뢰하지 않도록 사용한다. */
+export const getOrderPreview = async (
+  userId: string,
+  previewId: string,
+): Promise<OrderPreviewRecord | null> => readOrderPreview(userId, previewId);
 
 export const verifyOrderPreview = async ({
   userId,

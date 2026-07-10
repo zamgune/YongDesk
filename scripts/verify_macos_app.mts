@@ -741,12 +741,11 @@ const verifySidecar = async (expectedVersion: string) => {
       throw new Error("Account preference endpoint did not fail closed without Toss credentials");
     }
     if (
-      liveTradingState.status !== 501 ||
-      liveTradingState.payload.orderSubmissionAttempted !== false ||
+      liveTradingState.status !== 412 ||
       typeof liveTradingState.payload.error !== "string" ||
-      !liveTradingState.payload.error.includes("1.0.0")
+      !liveTradingState.payload.error.includes("선택")
     ) {
-      throw new Error("Live trading toggle endpoint did not preserve the desktop 1.0.0 paper-only boundary");
+      throw new Error("Live trading toggle endpoint did not fail closed without a selected Toss account");
     }
     if (
       precheckState.status !== 412 ||

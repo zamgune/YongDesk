@@ -873,6 +873,8 @@ struct BeginnerSettingsWorkspace: View {
 
                 BeginnerAPIConnectionWorkspace(selectedProvider: $selectedConnectionProvider)
 
+                BeginnerLiveTradingSettingsCard()
+
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 300), spacing: 12)], spacing: 12) {
                     settingsCard(
                         icon: "waveform.path.ecg",
@@ -1426,6 +1428,7 @@ struct BeginnerPaperOrderDrawer: View {
     @Binding var isLoading: Bool
     let onClose: () -> Void
     let onOpenStrategy: () -> Void
+    let onOpenLiveOrder: () -> Void
 
     @State private var showingSubmitConfirmation = false
     @AccessibilityFocusState private var closeButtonFocused: Bool
@@ -1561,6 +1564,11 @@ struct BeginnerPaperOrderDrawer: View {
                         .buttonStyle(.bordered)
                         .accessibilityIdentifier("beginner-paper-order-open-strategy")
                 }
+
+                Button("실주문 주문서") { onOpenLiveOrder() }
+                    .buttonStyle(.bordered)
+                    .frame(maxWidth: .infinity)
+                    .accessibilityIdentifier("beginner-paper-order-open-live")
             }
             .padding(16)
             .background(BeginnerPalette.surfaceRaised)
@@ -1634,6 +1642,367 @@ struct BeginnerPaperOrderDrawer: View {
             resultPreview = "\(dashboard.symbol) 주문 계획을 저장 중입니다."
             defer { isLoading = false }
             resultPreview = await model.saveOrderIntentPlan(dashboard, session: selectedSession)
+        }
+    }
+}
+
+struct BeginnerLiveTradingSettingsCard: View {
+    @EnvironmentObject private var model: AppModel
+    @State private var qaConfirmation = ""
+    @State private var manualConfirmation = ""
+    @State private var automationConfirmation = ""
+
+    private var policy: LocalLiveTradingPolicy? { model.localLiveTrading?.policy }
+    private var eligibility: LocalLiveAutomationEligibility? { model.localLiveTrading?.automationEligibility }
+
+    var body: some View {
+        BeginnerSurface {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(alignment: .top) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Toss 실거래 운영")
+                            .font(.headline)
+                        Text("이 Mac 한 대와 선택 계좌만 대상으로 합니다. Upbit·Bithumb은 계속 paper-only입니다.")
+                            .font(.caption)
+                            .foregroundStyle(BeginnerPalette.muted)
+                    }
+                    Spacer()
+                    BeginnerStatusBadge(policy?.manualEnabled == true ? "수동 ON" : "기본 OFF", color: policy?.manualEnabled == true ? BeginnerPalette.green : BeginnerPalette.amber)
+                }
+
+                if let unknown = policy?.unknownLock {
+                    Text("결과 불명 주문 잠금: \(unknown.reason)")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(BeginnerPalette.red)
+                }
+
+                VStack(alignment: .leading, spacing: 7) {
+                    Text("1. 읽기 전용 QA 승인")
+                        .font(.subheadline.weight(.semibold))
+                    Text("Toss 토큰·선택 계좌·005930 보유·AAPL 미체결 조회가 성공한 현재 설치/계좌에만 승인합니다. \"실거래 QA 승인\"을 입력하세요.")
+                        .font(.caption)
+                        .foregroundStyle(BeginnerPalette.muted)
+                    TextField("실거래 QA 승인", text: $qaConfirmation)
+                        .textFieldStyle(.roundedBorder)
+                    Button("QA 읽기전용 점검 후 승인") {
+                        Task { await model.approveLocalLiveTradingQA(confirmation: qaConfirmation) }
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(qaConfirmation != "실거래 QA 승인")
+                }
+
+                Divider().overlay(BeginnerPalette.line)
+
+                VStack(alignment: .leading, spacing: 7) {
+                    HStack {
+                        Text("2. 수동 지정가 주문")
+                            .font(.subheadline.weight(.semibold))
+                        Spacer()
+                        Text(policy?.manualQaApprovedAt == nil ? "QA 미승인" : "QA 승인됨")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(policy?.manualQaApprovedAt == nil ? BeginnerPalette.amber : BeginnerPalette.green)
+                    }
+                    Text("매수는 건당 10만원, KST 일일 제출 누적 30만원입니다. 취소·매도로 한도가 복구되지 않습니다.")
+                        .font(.caption)
+                        .foregroundStyle(BeginnerPalette.muted)
+                    TextField("실거래 수동 주문 해제", text: $manualConfirmation)
+                        .textFieldStyle(.roundedBorder)
+                        .disabled(policy?.manualEnabled == true)
+                    HStack {
+                        Button("수동 실거래 켜기") {
+                            Task { await model.setLocalLiveTradingUserEnabled(true, confirmation: manualConfirmation) }
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .tint(BeginnerPalette.red)
+                        .disabled(policy?.manualEnabled == true || manualConfirmation != "실거래 수동 주문 해제")
+                        Button("수동 실거래 끄기") {
+                            Task { await model.setLocalLiveTradingUserEnabled(false) }
+                        }
+                        .buttonStyle(.bordered)
+                        .disabled(policy?.manualEnabled != true)
+                    }
+                }
+
+                Divider().overlay(BeginnerPalette.line)
+
+                VStack(alignment: .leading, spacing: 7) {
+                    Text("3. 자동화 실거래 (별도 해제)")
+                        .font(.subheadline.weight(.semibold))
+                    if let eligibility {
+                        Text("수동 지정가 \(eligibility.manualLimitOrders)/5 · 재시작 재조정 \(eligibility.reconciliationRecorded ? "완료" : "미완료") · 안전 게이트 \(eligibility.safetyGateVerified ? "완료" : "미완료") · 결과 불명 \(eligibility.unresolvedUnknown)건")
+                            .font(.caption)
+                            .foregroundStyle(BeginnerPalette.muted)
+                        ForEach(eligibility.blockers, id: \.self) { blocker in
+                            Text("• \(blocker)")
+                                .font(.caption2)
+                                .foregroundStyle(BeginnerPalette.amber)
+                        }
+                    } else {
+                        Text("sidecar 상태를 불러오는 중입니다.")
+                            .font(.caption)
+                            .foregroundStyle(BeginnerPalette.muted)
+                    }
+                    Text("안전 차단 증거는 긴급 중지와 워커 일시중지를 모두 켠 상태에서만 기록됩니다.")
+                        .font(.caption)
+                        .foregroundStyle(BeginnerPalette.muted)
+                    Button("현재 차단 상태 기록") {
+                        Task { await model.verifyLocalLiveTradingSafetyGates() }
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(!model.killSwitchEngaged || !model.workerPausedEffective)
+                    TextField("자동화 실거래 해제", text: $automationConfirmation)
+                        .textFieldStyle(.roundedBorder)
+                        .disabled(policy?.automationEnabled == true)
+                    HStack {
+                        Button("자동화 실거래 켜기") {
+                            Task { await model.setLocalAutomationLiveTradingEnabled(true, confirmation: automationConfirmation) }
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .tint(BeginnerPalette.red)
+                        .disabled(policy?.automationEnabled == true || eligibility?.eligible != true || automationConfirmation != "자동화 실거래 해제")
+                        Button("자동화 실거래 끄기") {
+                            Task { await model.setLocalAutomationLiveTradingEnabled(false) }
+                        }
+                        .buttonStyle(.bordered)
+                        .disabled(policy?.automationEnabled != true)
+                    }
+                }
+
+                Text(model.localLiveTradingMessage)
+                    .font(.caption2)
+                    .foregroundStyle(BeginnerPalette.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .accessibilityIdentifier("beginner-settings-live-trading")
+        .task { await model.refreshLocalLiveTrading() }
+    }
+}
+
+struct BeginnerLiveOrderDrawer: View {
+    @EnvironmentObject private var model: AppModel
+    let selectedSymbol: String
+    let selectedSession: String
+    @Binding var resultPreview: String
+    @Binding var isLoading: Bool
+    let onClose: () -> Void
+
+    @State private var confirmation = ""
+    @AccessibilityFocusState private var closeButtonFocused: Bool
+
+    private var dashboard: TerminalDashboardSnapshot? {
+        guard let latest = model.terminalDashboard,
+              beginnerCanonicalSymbol(latest.symbol) == beginnerCanonicalSymbol(selectedSymbol) else {
+            return nil
+        }
+        return latest
+    }
+
+    private var precheck: LocalOrderPrecheckResponse? {
+        guard let latest = model.latestOrderPrecheck,
+              beginnerCanonicalSymbol(latest.symbol) == beginnerCanonicalSymbol(selectedSymbol) else {
+            return nil
+        }
+        return latest
+    }
+
+    private var manualEnabled: Bool {
+        model.localLiveTrading?.policy?.manualEnabled == true
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Toss 실주문")
+                        .font(.title2.weight(.bold))
+                        .accessibilityAddTraits(.isHeader)
+                    Text("단일 Mac · 선택 계좌 · 지정가 전용")
+                        .font(.caption)
+                        .foregroundStyle(BeginnerPalette.muted)
+                }
+                Spacer()
+                Button(action: onClose) {
+                    Image(systemName: "xmark")
+                }
+                .buttonStyle(.borderless)
+                .keyboardShortcut(.cancelAction)
+                .accessibilityLabel("실주문 주문서 닫기")
+                .accessibilityFocused($closeButtonFocused)
+            }
+            .padding(18)
+            .background(BeginnerPalette.surfaceRaised)
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
+                    HStack(spacing: 8) {
+                        BeginnerStatusBadge("Toss 지정가", color: BeginnerPalette.blue)
+                        BeginnerStatusBadge(manualEnabled ? "수동 토글 ON" : "수동 토글 OFF", color: manualEnabled ? BeginnerPalette.green : BeginnerPalette.amber)
+                        if model.localLiveTrading?.policy?.unknownLock != nil {
+                            BeginnerStatusBadge("결과 불명 잠금", color: BeginnerPalette.red)
+                        }
+                    }
+
+                    Text("Upbit·Bithumb과 시장가 주문은 이 화면에서 지원하지 않습니다. 제출 직전에도 계좌·RiskCheck·잔고/매도가능수량·환율·KST 한도를 다시 확인합니다.")
+                        .font(.caption)
+                        .foregroundStyle(BeginnerPalette.muted)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    if let dashboard {
+                        BeginnerSurface {
+                            VStack(alignment: .leading, spacing: 10) {
+                                Text("주문 요약")
+                                    .font(.headline)
+                                LazyVGrid(columns: [GridItem(), GridItem()], spacing: 9) {
+                                    metric("종목", dashboard.orderIntent.symbol)
+                                    metric("방향", dashboard.orderIntent.side == "buy" ? "매수" : "매도")
+                                    metric("유형", dashboard.orderIntent.type == "limit" ? "지정가" : dashboard.orderIntent.type)
+                                    metric("수량", "\(dashboard.orderIntent.quantity)")
+                                    metric("지정가", beginnerPrice(dashboard.orderIntent.limitPrice, currency: dashboard.orderIntent.currency))
+                                    metric("예상금액", beginnerPrice(
+                                        (dashboard.orderIntent.limitPrice ?? 0) * Double(dashboard.orderIntent.quantity),
+                                        currency: dashboard.orderIntent.currency
+                                    ))
+                                }
+                            }
+                        }
+
+                        if let precheck {
+                            BeginnerSurface {
+                                VStack(alignment: .leading, spacing: 9) {
+                                    HStack {
+                                        Text("제출 전 검증")
+                                            .font(.headline)
+                                        Spacer()
+                                        BeginnerStatusBadge(precheck.submitReady ? "제출 가능" : "차단", color: precheck.submitReady ? BeginnerPalette.green : BeginnerPalette.red)
+                                    }
+                                    metric("KRW 환산", beginnerPrice(precheck.krwEquivalent, currency: "KRW"))
+                                    metric("남은 일일 매수 한도", beginnerPrice(precheck.remainingDailyBuyKrw, currency: "KRW"))
+                                    if precheck.currency == "USD" {
+                                        metric("Toss USD/KRW", precheck.exchangeRate.map { $0.formatted(.number.precision(.fractionLength(2))) } ?? "유효하지 않음")
+                                    }
+                                    ForEach(precheck.blockers, id: \.self) { blocker in
+                                        riskLine(blocker, icon: "xmark.octagon.fill", color: BeginnerPalette.red)
+                                    }
+                                    ForEach(precheck.warnings, id: \.self) { warning in
+                                        riskLine(warning, icon: "exclamationmark.triangle.fill", color: BeginnerPalette.amber)
+                                    }
+                                }
+                            }
+
+                            if let confirmationText = precheck.confirmationText {
+                                BeginnerSurface {
+                                    VStack(alignment: .leading, spacing: 8) {
+                                        Text("최종 확인")
+                                            .font(.headline)
+                                        Text("아래 주문 요약을 정확히 입력해야 제출 버튼이 열립니다.")
+                                            .font(.caption)
+                                            .foregroundStyle(BeginnerPalette.muted)
+                                        Text(confirmationText)
+                                            .font(.system(.caption, design: .monospaced).weight(.semibold))
+                                            .textSelection(.enabled)
+                                            .padding(9)
+                                            .frame(maxWidth: .infinity, alignment: .leading)
+                                            .background(BeginnerPalette.background, in: RoundedRectangle(cornerRadius: 8))
+                                        TextField("주문 요약 입력", text: $confirmation)
+                                            .textFieldStyle(.roundedBorder)
+                                            .disabled(!precheck.submitReady || isLoading)
+                                            .accessibilityIdentifier("beginner-live-order-confirmation")
+                                    }
+                                }
+                            }
+                        } else {
+                            BeginnerSurface {
+                                Text("사전검증을 실행하면 RiskCheck, Toss 잔고/매도가능수량, USD 환율과 일일 한도를 표시합니다. 실제 주문은 아직 제출하지 않습니다.")
+                                    .font(.caption)
+                                    .foregroundStyle(BeginnerPalette.muted)
+                            }
+                        }
+                    } else {
+                        BeginnerSurface {
+                            Text("차트에서 종목 분석을 먼저 실행해 지정가 OrderIntent를 준비하세요.")
+                                .font(.caption)
+                                .foregroundStyle(BeginnerPalette.muted)
+                        }
+                    }
+
+                    if !resultPreview.isEmpty {
+                        Text(resultPreview)
+                            .font(.system(.caption, design: .monospaced))
+                            .foregroundStyle(BeginnerPalette.muted)
+                            .textSelection(.enabled)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .padding(16)
+            }
+
+            VStack(spacing: 8) {
+                Button(isLoading ? "검증 중" : "사전검증 다시 실행") { runPrecheck() }
+                    .buttonStyle(.bordered)
+                    .frame(maxWidth: .infinity)
+                    .disabled(dashboard == nil || isLoading)
+                    .accessibilityIdentifier("beginner-live-order-precheck")
+
+                Button(isLoading ? "처리 중" : "최종 실주문 제출") { submit() }
+                    .buttonStyle(.borderedProminent)
+                    .tint(BeginnerPalette.red)
+                    .foregroundStyle(BeginnerPalette.backgroundDeep)
+                    .frame(maxWidth: .infinity)
+                    .disabled(precheck?.submitReady != true || confirmation != precheck?.confirmationText || isLoading)
+                    .accessibilityIdentifier("beginner-live-order-submit")
+            }
+            .padding(16)
+            .background(BeginnerPalette.surfaceRaised)
+            .overlay(alignment: .top) { Rectangle().fill(BeginnerPalette.line).frame(height: 1) }
+        }
+        .frame(maxHeight: .infinity)
+        .background(BeginnerPalette.backgroundDeep)
+        .overlay(alignment: .leading) { Rectangle().fill(BeginnerPalette.lineStrong).frame(width: 1) }
+        .shadow(color: .black.opacity(0.35), radius: 28, x: -10)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Toss 실주문 패널")
+        .accessibilityIdentifier("beginner-live-order-drawer")
+        .task {
+            await Task.yield()
+            closeButtonFocused = true
+            if precheck == nil { runPrecheck() }
+        }
+    }
+
+    private func metric(_ title: String, _ value: String) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title).font(.caption2.weight(.semibold)).foregroundStyle(BeginnerPalette.muted)
+            Text(value).font(.system(size: 13, weight: .semibold)).lineLimit(2)
+        }
+        .padding(9)
+        .frame(maxWidth: .infinity, minHeight: 54, alignment: .topLeading)
+        .background(BeginnerPalette.background, in: RoundedRectangle(cornerRadius: 8))
+    }
+
+    private func riskLine(_ text: String, icon: String, color: Color) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: icon).foregroundStyle(color)
+            Text(text).font(.caption).fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private func runPrecheck() {
+        guard let dashboard else { return }
+        Task {
+            isLoading = true
+            defer { isLoading = false }
+            confirmation = ""
+            resultPreview = await model.runOrderPrecheck(dashboard)
+        }
+    }
+
+    private func submit() {
+        guard let precheck else { return }
+        Task {
+            isLoading = true
+            defer { isLoading = false }
+            resultPreview = await model.submitLocalLiveOrder(precheck, confirmation: confirmation)
         }
     }
 }

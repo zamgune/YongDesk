@@ -873,6 +873,67 @@ public struct LocalLiveTradingState: Codable, Equatable, Sendable {
     public let featureEnabled: Bool
     public let localRuntime: Bool
     public let storageRoot: String?
+    public let policy: LocalLiveTradingPolicy?
+    public let automationEligibility: LocalLiveAutomationEligibility?
+    public let attempts: [LocalLiveOrderAttempt]?
+    public let limits: LocalLiveTradingLimits?
+}
+
+public struct LocalLiveTradingPolicy: Codable, Equatable, Sendable {
+    public let installationId: String
+    public let boundUserId: String?
+    public let boundAccountSeq: Int?
+    public let manualQaApprovedAt: String?
+    public let manualEnabled: Bool
+    public let automationEnabled: Bool
+    public let dailyBuyKrwDate: String
+    public let dailyBuyKrwSubmitted: Double
+    public let lastReconciliationAt: String?
+    public let safetyGateVerifiedAt: String?
+    public let unknownLock: LocalLiveUnknownLock?
+}
+
+public struct LocalLiveUnknownLock: Codable, Equatable, Sendable {
+    public let attemptId: String
+    public let reason: String
+    public let lockedAt: String
+}
+
+public struct LocalLiveAutomationEligibility: Codable, Equatable, Sendable {
+    public let eligible: Bool
+    public let manualLimitOrders: Int
+    public let reconciliationRecorded: Bool
+    public let safetyGateVerified: Bool
+    public let unresolvedUnknown: Int
+    public let blockers: [String]
+}
+
+public struct LocalLiveTradingLimits: Codable, Equatable, Sendable {
+    public let perBuyOrderKrw: Double
+    public let dailyBuyKrw: Double
+}
+
+public struct LocalLiveOrderAttempt: Codable, Equatable, Sendable, Identifiable {
+    public let id: String
+    public let userId: String
+    public let accountSeq: Int
+    public let source: String
+    public let previewId: String?
+    public let clientOrderId: String
+    public let payloadHash: String
+    public let symbol: String
+    public let side: String
+    public let quantity: Double
+    public let limitPrice: Double
+    public let currency: String
+    public let krwEquivalent: Double
+    public let exchangeRate: Double?
+    public let status: String
+    public let brokerOrderId: String?
+    public let createdAt: String
+    public let submissionStartedAt: String?
+    public let completedAt: String?
+    public let error: String?
 }
 
 public struct LocalLiveTradingResponse: Codable, Equatable, Sendable {
@@ -1138,7 +1199,21 @@ public struct LocalOrderPrecheckResponse: Codable, Equatable, Sendable {
     public let blockers: [String]
     public let warnings: [String]
     public let submitReady: Bool
+    public let confirmationText: String?
+    public let krwEquivalent: Double?
+    public let exchangeRate: Double?
+    public let exchangeRateValidUntil: String?
+    public let remainingDailyBuyKrw: Double?
+    public let limits: LocalLiveTradingLimits?
     public let message: String
+}
+
+public struct LocalLiveOrderSubmissionResponse: Codable, Equatable, Sendable {
+    public let status: String
+    public let error: String?
+    public let orderSubmissionAttempted: Bool
+    public let attempt: LocalLiveOrderAttempt?
+    public let remainingDailyBuyKrw: Double?
 }
 
 public struct AutomationCycleResponseView: Codable, Equatable, Sendable {

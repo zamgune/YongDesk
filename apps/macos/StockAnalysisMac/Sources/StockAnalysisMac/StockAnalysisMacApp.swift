@@ -77,7 +77,7 @@ final class AppModel: ObservableObject {
     @Published var tossReadiness: TossReadinessResponse?
     @Published var tossReadinessMessage = "운영 준비 점검은 저장된 Toss credential로 토큰/계좌/보유/미체결 조회를 주문 없이 확인합니다."
     @Published var localLiveTrading: LocalLiveTradingState?
-    @Published var localLiveTradingMessage = "1.0.0 데스크톱은 Toss 조회·사전검증·paper 자동화 전용이며 실제 주문은 차단됩니다."
+    @Published var localLiveTradingMessage = "Toss 실거래는 기본 OFF입니다. 현재 Mac·선택 계좌의 QA와 별도 수동/자동화 토글을 모두 통과해야 합니다."
     @Published var killSwitchState: LocalKillSwitchState?
     @Published var killSwitchMessage = "긴급 중지는 모의 주문과 자동화 큐를 sidecar에서 차단합니다."
     @Published var workerControlState: LocalWorkerControlState?
@@ -96,6 +96,7 @@ final class AppModel: ObservableObject {
     @Published var latestAutomationRun: AutomationCycleResponseView?
     @Published var latestHolding: LocalHoldingResponse?
     @Published var latestOrderPrecheck: LocalOrderPrecheckResponse?
+    @Published var latestLiveOrderSubmission: LocalLiveOrderSubmissionResponse?
     @Published var appSelfTest: LocalSelfTestResponse?
     @Published var appSelfTestMessage = "점검을 실행하면 앱 핵심 동작 경로를 한 번에 확인합니다."
     @Published var sidecarLogText = "로그를 아직 불러오지 않았습니다."
@@ -340,6 +341,10 @@ final class AppModel: ObservableObject {
                 await refreshBrokerAccounts()
                 await refreshBrokerDiagnostics()
                 await refreshLocalLiveTrading()
+                if brokerCredential?.status == "verified", brokerAccountPreference != nil {
+                    _ = await syncAutomationOrders(startupReconciliation: true)
+                    await refreshLocalLiveTrading()
+                }
                 await refreshKillSwitch()
                 await refreshWorkerControl()
                 await refreshAutomationScheduler()
@@ -1352,9 +1357,21 @@ final class AppModel: ObservableObject {
         return "연속 자동 실행 ON · \(state.intervalSeconds)초 주기 · 다음 \(nextRun) · \(last)"
     }
 
-    func setLocalLiveTradingUserEnabled(_ enabled: Bool) async {
+    func approveLocalLiveTradingQA(confirmation: String) async {
         do {
-            let response = try await client.updateLocalLiveTrading(enabled: enabled)
+            let response = try await client.approveLocalLiveTradingQA(confirmation: confirmation)
+            localLiveTrading = response.liveTrading
+            brokerCredential = response.credential ?? brokerCredential
+            localLiveTradingMessage = "Toss 읽기 전용 QA가 현재 설치·선택 계좌에 기록되었습니다. 수동 주문은 계속 OFF입니다."
+            await refreshBrokerDiagnostics()
+        } catch {
+            localLiveTradingMessage = "실거래 QA 승인 실패: \(Self.errorMessage(error))"
+        }
+    }
+
+    func setLocalLiveTradingUserEnabled(_ enabled: Bool, confirmation: String? = nil) async {
+        do {
+            let response = try await client.updateLocalLiveTrading(enabled: enabled, confirmation: confirmation)
             localLiveTrading = response.liveTrading
             brokerCredential = response.credential ?? brokerCredential
             localLiveTradingMessage = enabled
@@ -1366,14 +1383,37 @@ final class AppModel: ObservableObject {
         }
     }
 
+    func setLocalAutomationLiveTradingEnabled(_ enabled: Bool, confirmation: String? = nil) async {
+        do {
+            let response = try await client.updateLocalAutomationLiveTrading(enabled: enabled, confirmation: confirmation)
+            localLiveTrading = response.liveTrading
+            localLiveTradingMessage = enabled
+                ? "자동화 실거래 토글이 켜졌습니다. 각 주문은 여전히 지정가·한도·전략 위험 한도를 다시 통과합니다."
+                : "자동화 실거래 토글을 껐습니다."
+            await refreshBrokerDiagnostics()
+        } catch {
+            localLiveTradingMessage = "자동화 실거래 토글 변경 실패: \(Self.errorMessage(error))"
+        }
+    }
+
+    func verifyLocalLiveTradingSafetyGates() async {
+        do {
+            let response = try await client.verifyLocalLiveTradingSafetyGates()
+            localLiveTrading = response.liveTrading
+            localLiveTradingMessage = "kill switch와 worker pause 차단 점검이 기록되었습니다."
+        } catch {
+            localLiveTradingMessage = "안전 게이트 점검 기록 실패: \(Self.errorMessage(error))"
+        }
+    }
+
     func setLocalLiveTradingOperatorEnabled(_ enabled: Bool) {
         settings.liveTradingOperatorEnabled = false
         try? store.saveSettings(settings)
         localLiveTradingMessage = enabled
-            ? "1.0.0에서는 Toss 실거래를 열지 않습니다. 조회·사전검증·paper 자동화를 사용하세요."
-            : "Toss 자동화는 paper 전용입니다."
+            ? "실거래 정책은 Beginner-first 설정의 QA·계좌 바인딩·typed confirmation으로만 변경할 수 있습니다."
+            : "Toss 자동화는 별도 자동화 실거래 토글을 켜기 전 paper 전용입니다."
         if enabled {
-            statusLine = "toss live trading remains disabled"
+            statusLine = "use local live trading policy controls"
         }
     }
 
@@ -2037,13 +2077,13 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func syncAutomationOrders() async -> String {
+    func syncAutomationOrders(startupReconciliation: Bool = false) async -> String {
         guard await ensureSidecarReadyForRequest() else {
             statusLine = "sidecar restart required"
             return "체결 동기화 전 엔진 연결을 복구하지 못했습니다. 엔진 시작 또는 상태 갱신 후 다시 실행하세요."
         }
         do {
-            let data = try await client.syncAutomationOrders()
+            let data = try await client.syncAutomationOrders(startupReconciliation: startupReconciliation)
             statusLine = "order sync completed"
             return Self.orderSyncPreview(data)
         } catch {
@@ -2103,6 +2143,33 @@ final class AppModel: ObservableObject {
             let message = Self.errorMessage(error)
             statusLine = message
             return "주문 전 사전검증 실패: \(message)"
+        }
+    }
+
+    func submitLocalLiveOrder(_ precheck: LocalOrderPrecheckResponse, confirmation: String) async -> String {
+        guard await ensureSidecarReadyForRequest() else {
+            return "실주문 제출 실패: 엔진 연결을 복구한 뒤 다시 확인하세요."
+        }
+        do {
+            let response = try await client.submitLocalLiveOrder(
+                previewId: precheck.preview.id,
+                confirmation: confirmation
+            )
+            latestLiveOrderSubmission = response
+            await refreshLocalLiveTrading()
+            await refreshBrokerDiagnostics()
+            switch response.status {
+            case "submitted":
+                return "Toss 지정가 주문을 제출했습니다. 주문 상태 재조정으로 broker order ID와 체결 상태를 확인하세요."
+            case "unknown":
+                return "주문 결과가 불명확해 실거래를 잠갔습니다. 자동 재시도하지 말고 Toss 주문 이력과 clientOrderId를 대조하세요."
+            default:
+                return response.error ?? "실주문이 거부되었습니다."
+            }
+        } catch {
+            let message = Self.errorMessage(error)
+            await refreshLocalLiveTrading()
+            return "실주문 제출 실패: \(message)"
         }
     }
 
@@ -2913,7 +2980,9 @@ final class AppModel: ObservableObject {
     }
 
     private func liveTradingMessage(_ state: LocalLiveTradingState) -> String {
-        state.reason ?? "1.0.0 데스크톱은 Toss 조회·사전검증·paper 자동화 전용이며 실제 주문은 차단됩니다."
+        state.reason ?? (state.effective
+            ? "수동 Toss 지정가 실거래가 이 Mac과 선택 계좌에서만 열려 있습니다."
+            : "Toss 실거래는 기본 OFF입니다. QA·계좌 바인딩·수동 토글을 확인하세요.")
     }
 
     private static func errorMessage(_ error: Error) -> String {
@@ -5446,10 +5515,10 @@ struct LiveTradingControlPanel: View {
                 StatusPill("PAPER ONLY", tone: .green)
                 StatusPill(model.brokerCredential?.status == "verified" ? "Toss 조회 연결" : "Toss 미연결", tone: model.brokerCredential?.status == "verified" ? .green : .muted)
                 StatusPill(model.localLiveTrading?.localRuntime == true ? "로컬 sidecar" : "런타임 미확인", tone: model.localLiveTrading?.localRuntime == true ? .green : .amber)
-                StatusPill("실주문 차단", tone: .red)
+                StatusPill(model.localLiveTrading?.effective == true ? "수동 지정가 가능" : "수동 실주문 차단", tone: model.localLiveTrading?.effective == true ? .green : .red)
             }
 
-            Text("1.0.0은 Toss token·계좌·보유·미체결 조회, 주문 사전검증과 paper 자동화를 지원합니다. 실제 주문은 결과 불명 주문 복구와 재시작 멱등성 검증이 포함된 뒤 별도 버전에서 엽니다.")
+            Text("Toss 실거래는 단일 Mac·선택 계좌의 QA와 수동 토글을 통과한 KR/US 지정가만 지원합니다. 자동화와 코인은 별도 정책이 열리기 전 paper 전용입니다.")
                 .font(.caption)
                 .foregroundStyle(Color.terminalText)
                 .fixedSize(horizontal: false, vertical: true)
@@ -8004,7 +8073,7 @@ struct StrategyConfigRow: View {
                         readiness.paperAutomationReady ? "모의 자동화 준비" : "모의 자동화 차단",
                         tone: readiness.paperAutomationReady ? .green : .red
                     )
-                    StatusPill("1.0.0 실주문 차단", tone: .red)
+                    StatusPill("자동화 실거래 별도 gate", tone: .amber)
                     StatusPill(
                         readiness.workerPaused ? "워커 정지" : "워커 대기",
                         tone: readiness.workerPaused ? .amber : .muted

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
@@ -13,10 +14,10 @@ import type {
   PaperTradingSession,
 } from "../src/domain/paper-trading.ts";
 import type { Currency } from "../src/domain/portfolio.ts";
-import type { OrderSide, OrderType } from "../src/domain/trading.ts";
+import type { BrokerOrderRequest, OrderSide, OrderType } from "../src/domain/trading.ts";
 import type { UserContext } from "../src/domain/user.ts";
 import type { BrokerPort } from "../src/ports/broker.ts";
-import { LiveTradingDisabledError } from "../src/adapters/toss/toss-broker.ts";
+import { createTossBroker, LiveTradingDisabledError } from "../src/adapters/toss/toss-broker.ts";
 import { createCryptoBroker } from "../src/adapters/crypto/crypto-broker.ts";
 import { parseStrategyConfigPayload } from "../src/lib/automation/http.ts";
 import {
@@ -40,7 +41,23 @@ import {
   configureLocalAutomationScheduler,
   getLocalAutomationSchedulerState,
 } from "../src/lib/automation/local-scheduler.ts";
-import { getLiveTradingGate as getConfiguredLiveTradingGate } from "../src/lib/automation/live-trading.ts";
+import { isCredentialEncryptionConfigured } from "../src/lib/security/crypto.ts";
+import {
+  LOCAL_LIVE_TRADING_MAX_BUY_ORDER_KRW,
+  LOCAL_LIVE_TRADING_MAX_DAILY_BUY_KRW,
+  approveLocalManualQa,
+  getLocalLiveTradingGate,
+  getLocalLiveTradingSnapshot,
+  markLocalLiveOrderRejected,
+  markLocalLiveOrderSubmitted,
+  markLocalLiveOrderUnknown,
+  prepareLocalLiveOrderAttempt,
+  recordLocalLiveReconciliation,
+  recordLocalLiveSafetyProof,
+  setLocalAutomationLiveTrading,
+  setLocalManualLiveTrading,
+  type LiveOrderSource,
+} from "../src/lib/automation/local-live-trading.ts";
 import {
   cryptoExchangeContract,
   getCryptoAccounts,
@@ -66,7 +83,6 @@ import {
   deleteStrategyConfig,
   findStrategyConfig,
   grantAutomationFeature,
-  listAutomationFeatures,
   listStrategyConfigs,
   revokeAutomationFeature,
   saveAutomationSimulation,
@@ -83,7 +99,11 @@ import {
   listFills,
   listOpenTrackedOrders,
   listTrackedOrders,
+  getOrderPreview,
+  markOrderPreviewSubmitted,
   recordOrderPreview,
+  recordSubmittedOrder,
+  verifyOrderPreview,
 } from "../src/lib/automation/order-tracker.ts";
 import { syncOrderFills } from "../src/use-cases/trading/sync-order-fills.ts";
 import {
@@ -185,7 +205,6 @@ const ENGINE_VERSION = (() => {
   }
 })();
 const DEFAULT_PORT = 38771;
-const LOCAL_TOSS_LIVE_TRADING_SUPPORTED = false;
 const CRYPTO_LIVE_AUTOMATION_SUPPORTED = false;
 const CRYPTO_TICKER_MAX_AGE_MS = 60_000;
 const DEFAULT_SYMBOL_MARKETS: SymbolSearchMarket[] = ["US", "KOSPI", "KOSDAQ", "CRYPTO"];
@@ -204,16 +223,55 @@ const localCommunityInFlight = new Map<string, Promise<CommunityPainResponse>>()
 const localUserId = () => process.env.STOCK_ANALYSIS_LOCAL_USER_ID?.trim() || "local-macos-user";
 let localAutomationScheduler: LocalAutomationScheduler | null = null;
 
-const getLiveTradingGate = async (userId: string) => {
-  const gate = await getConfiguredLiveTradingGate(userId);
-  if (LOCAL_TOSS_LIVE_TRADING_SUPPORTED) {
-    return gate;
-  }
+const getLiveTradingGate = async (
+  userId: string,
+  source: LiveOrderSource = "manual",
+  accountSeqOverride?: number,
+) => {
+  const [credential, accountPreference, killSwitch, workerControl, snapshot] = await Promise.all([
+    getBrokerCredentialView(userId, "toss"),
+    getBrokerAccountPreference(userId, "toss"),
+    getAutomationKillSwitchState(),
+    getAutomationWorkerControlState(),
+    getLocalLiveTradingSnapshot(),
+  ]);
+  const accountSeq = accountSeqOverride ?? accountPreference?.accountSeq ?? null;
+  const baseReason = process.env.STOCK_ANALYSIS_RUNTIME !== "macos-local"
+    ? "실거래는 macOS 로컬 sidecar에서만 허용됩니다."
+    : !process.env.STOCK_ANALYSIS_STORAGE_ROOT?.trim()
+      ? "실거래 정책 저장소가 설정되지 않았습니다."
+      : !isCredentialEncryptionConfigured()
+        ? "실거래에는 암호화 credential 저장소가 필요합니다."
+        : credential?.status !== "verified"
+          ? "검증 완료된 Toss API 키가 필요합니다."
+          : !accountSeq
+            ? "실거래에는 선택한 Toss BROKERAGE 계좌가 필요합니다."
+            : null;
+  const baseOpen = baseReason === null;
+  const policyGate = accountSeq
+    ? await getLocalLiveTradingGate({
+      userId,
+      accountSeq,
+      source,
+      globalGateOpen: baseOpen,
+      globalGateReason: baseReason,
+      killSwitchEngaged: killSwitch.engaged,
+      workerPaused: workerControl.paused,
+    })
+    : { effective: false, reason: baseReason ?? "선택 계좌가 필요합니다.", remainingDailyBuyKrw: 0 };
+  const userEnabled = source === "automation"
+    ? snapshot.policy.automationEnabled
+    : snapshot.policy.manualEnabled;
   return {
-    ...gate,
-    effective: false,
-    status: 501,
-    reason: "1.0.0 데스크톱 배포판은 Toss 조회·사전검증·모의 자동화만 지원합니다. 결과 불명 주문 복구가 포함된 뒤 실거래를 엽니다.",
+    userEnabled,
+    masterEnabled: baseOpen,
+    effective: policyGate.effective,
+    status: policyGate.effective ? 200 : 423,
+    reason: policyGate.reason,
+    accountSeq,
+    remainingDailyBuyKrw: policyGate.remainingDailyBuyKrw,
+    policy: snapshot.policy,
+    automationEligibility: snapshot.automationEligibility,
   };
 };
 
@@ -1647,6 +1705,100 @@ const previewBroker = (): BrokerPort => ({
   },
 });
 
+const automationPayloadHash = (request: BrokerOrderRequest) => createHash("sha256")
+  .update(JSON.stringify({
+    accountSeq: request.accountSeq,
+    symbol: request.symbol.trim().toUpperCase(),
+    side: request.side,
+    type: request.type,
+    quantity: request.quantity,
+    limitPrice: request.limitPrice,
+    clientOrderId: request.clientOrderId,
+  }))
+  .digest("hex");
+
+const createLocalLiveAutomationBroker = ({
+  userId,
+  client,
+  accountSeq,
+}: {
+  userId: string;
+  client: ReturnType<typeof createTossClient>;
+  accountSeq: number;
+}): BrokerPort => {
+  const tossBroker = createTossBroker({ client, liveTradingEnabled: true });
+  return {
+    async submitOrder(request) {
+      if (request.type !== "limit" || request.limitPrice === null || request.limitPrice <= 0) {
+        throw new Error("실거래 자동화는 Toss KR/US 지정가 주문만 지원합니다. 시장가·stop 주문은 차단됩니다.");
+      }
+      if (!request.clientOrderId) {
+        throw new Error("자동화 실거래에는 영속 clientOrderId가 필요합니다.");
+      }
+      const gate = await getLiveTradingGate(userId, "automation", accountSeq);
+      if (!gate.effective) {
+        throw new LiveTradingDisabledError(request);
+      }
+      const currency = inferCurrency(request.symbol);
+      const conversion = await resolveKrwConversion({
+        client,
+        currency,
+        amount: request.quantity * request.limitPrice,
+      });
+      if (conversion.krwEquivalent === null || conversion.reason) {
+        throw new Error(conversion.reason ?? "자동화 USD 주문의 KRW 환산 검증에 실패했습니다.");
+      }
+      const attempt = await prepareLocalLiveOrderAttempt({
+        userId,
+        accountSeq,
+        source: "automation",
+        previewId: null,
+        clientOrderId: request.clientOrderId,
+        payloadHash: automationPayloadHash(request),
+        symbol: request.symbol.trim().toUpperCase(),
+        side: request.side,
+        quantity: request.quantity,
+        limitPrice: request.limitPrice,
+        currency,
+        krwEquivalent: conversion.krwEquivalent,
+        exchangeRate: conversion.exchangeRate,
+      });
+      try {
+        const submitted = await tossBroker.submitOrder(request);
+        await markLocalLiveOrderSubmitted(attempt.id, submitted.brokerOrderId);
+        await recordSubmittedOrder({
+          userId,
+          brokerOrderId: submitted.brokerOrderId,
+          clientOrderId: request.clientOrderId,
+          accountSeq,
+          strategyId: "automation-live",
+          stepId: attempt.id,
+          symbol: request.symbol.trim().toUpperCase(),
+          side: request.side,
+          quantity: request.quantity,
+          limitPrice: request.limitPrice,
+          submittedAt: submitted.submittedAt,
+        });
+        return submitted;
+      } catch (error) {
+        const message = error instanceof TossApiError
+          ? `${error.code}: ${error.message}`
+          : error instanceof Error ? error.message : String(error);
+        if (isUnknownSubmissionError(error)) {
+          await markLocalLiveOrderUnknown(attempt.id, message);
+        } else {
+          await markLocalLiveOrderRejected(attempt.id, message);
+        }
+        throw error;
+      }
+    },
+    // 자동 청산 경로가 시장가로 바뀌는 것을 막기 위해 자동 취소도 별도 운영 확인 전까지 닫는다.
+    async cancelOrder() {
+      throw new Error("자동화 실거래의 주문 취소·시장가 청산은 1.1.0 범위 밖입니다.");
+    },
+  };
+};
+
 const previewLocalStrategyTick = async (request: Request, id: string) => {
   await ensureLocalAutomationAccess();
   const userId = localUserId();
@@ -1709,17 +1861,25 @@ const runAutomation = async (request: Request) => {
   const [credential, accountPreference, liveGate] = await Promise.all([
     getBrokerCredentialView(userId, "toss"),
     getBrokerAccountPreference(userId, "toss"),
-    getLiveTradingGate(userId),
+    getLiveTradingGate(userId, "automation"),
   ]);
   const liveReady = credential?.status === "verified" && !!accountPreference && liveGate.effective;
   const enabledConfigs = (await listStrategyConfigs(userId)).filter((config) => config.status === "enabled");
   const stockEnabled = enabledConfigs.some((config) => config.market !== "CRYPTO");
   const cryptoEnabled = enabledConfigs.some((config) => config.market === "CRYPTO");
-  const stockResult = liveReady
-    ? await runUserAutomationCycle(userId)
+  const credentials = liveReady ? await loadDecryptedCredentials(userId, "toss") : null;
+  const stockResult = liveReady && credentials && accountPreference
+    ? await runUserAutomationCycle(userId, {
+      liveTradingEnabledOverride: true,
+      broker: createLocalLiveAutomationBroker({
+        userId,
+        client: createTossClient(credentials),
+        accountSeq: accountPreference.accountSeq,
+      }),
+    })
     : await runLocalPaperAutomationCycle(
       userId,
-      credential?.status !== "verified"
+      credential?.status !== "verified" || !credentials
         ? "paper-automation-no-credentials"
         : !accountPreference
           ? "paper-automation-account-selection-required"
@@ -1833,6 +1993,7 @@ const localOrderSyncSnapshot = async () => {
 const localOrderSync = async (request: Request) => {
   const userId = localUserId();
   const payload = await readJsonBody(request);
+  const startupReconciliation = payload.startup === true;
   const credential = await loadDecryptedCredentials(userId, "toss");
   const accountPreference = await getBrokerAccountPreference(userId, "toss");
   const payloadAccountSeq = Number(payload.accountSeq);
@@ -1879,6 +2040,12 @@ const localOrderSync = async (request: Request) => {
       },
     });
     await applySyncUpdates({ orderUpdates: result.orderUpdates, newFills: result.newFills });
+    const liveTrading = startupReconciliation
+      ? await recordLocalLiveReconciliation({
+        accountSeq,
+        syncedBrokerOrderIds: trackedOrders.map((order) => order.brokerOrderId),
+      })
+      : await getLocalLiveTradingSnapshot();
     return jsonResponse({
       ...(await localOrderSyncSnapshot()),
       status: "ran",
@@ -1887,6 +2054,8 @@ const localOrderSync = async (request: Request) => {
       updates: result.orderUpdates.length,
       newFills: result.newFills.length,
       logs: result.logs,
+      liveTrading,
+      startupReconciliation,
     });
   } catch (error) {
     return jsonResponse({
@@ -1935,6 +2104,64 @@ const amountForCurrency = (
   const value = currency === "KRW" ? amount?.krw : amount?.usd;
   const number = Number(value);
   return Number.isFinite(number) ? number : null;
+};
+
+type KrwConversion = {
+  krwEquivalent: number | null;
+  exchangeRate: number | null;
+  reason: string | null;
+  validUntil: string | null;
+};
+
+const resolveKrwConversion = async ({
+  client,
+  currency,
+  amount,
+}: {
+  client: ReturnType<typeof createTossClient>;
+  currency: TossCurrency;
+  amount: number;
+}): Promise<KrwConversion> => {
+  if (currency === "KRW") {
+    return { krwEquivalent: amount, exchangeRate: 1, reason: null, validUntil: null };
+  }
+  try {
+    const quote = await client.getExchangeRate("USD", "KRW");
+    const rate = Number(quote.rate || quote.midRate);
+    const validFrom = Date.parse(quote.validFrom);
+    const validUntil = Date.parse(quote.validUntil);
+    if (
+      quote.baseCurrency !== "USD" ||
+      quote.quoteCurrency !== "KRW" ||
+      !Number.isFinite(rate) || rate <= 0 ||
+      !Number.isFinite(validFrom) ||
+      !Number.isFinite(validUntil) ||
+      Date.now() < validFrom ||
+      Date.now() > validUntil
+    ) {
+      return {
+        krwEquivalent: null,
+        exchangeRate: null,
+        reason: "Toss USD/KRW 환율 응답이 유효하지 않거나 만료되었습니다.",
+        validUntil: quote.validUntil || null,
+      };
+    }
+    return {
+      krwEquivalent: amount * rate,
+      exchangeRate: rate,
+      reason: null,
+      validUntil: quote.validUntil,
+    };
+  } catch (error) {
+    return {
+      krwEquivalent: null,
+      exchangeRate: null,
+      reason: error instanceof TossApiError
+        ? `USD 주문은 Toss 환율 조회가 필요합니다. [${error.code}]`
+        : "USD 주문은 유효한 Toss 환율 응답이 필요합니다.",
+      validUntil: null,
+    };
+  }
 };
 
 const resolveLocalBrokerageAccountSeq = async ({
@@ -2059,7 +2286,7 @@ const localOrderPrecheck = async (request: Request) => {
       return jsonResponse({ error: "사용 가능한 Toss 계좌가 없습니다." }, { status: 412 });
     }
 
-    const liveTradingGate = await getLiveTradingGate(userId);
+    const liveTradingGate = await getLiveTradingGate(userId, "manual", accountSeq);
     const intentResult = createOrderIntent({
       userId,
       symbol,
@@ -2081,9 +2308,26 @@ const localOrderPrecheck = async (request: Request) => {
       getSellableQuantity: (seq, sym) => client.getSellableQuantity(seq, sym),
     });
     const result = await precheck({ side, symbol, quantity, price, currency });
+    const conversion = await resolveKrwConversion({
+      client,
+      currency,
+      amount: quantity * price,
+    });
+    const buyLimitBlockers = side === "buy"
+      ? [
+        ...(conversion.reason ? [conversion.reason] : []),
+        ...(conversion.krwEquivalent !== null && conversion.krwEquivalent > LOCAL_LIVE_TRADING_MAX_BUY_ORDER_KRW
+          ? [`매수 1건은 ${LOCAL_LIVE_TRADING_MAX_BUY_ORDER_KRW.toLocaleString("ko-KR")}원 이하만 허용됩니다.`]
+          : []),
+        ...(conversion.krwEquivalent !== null && conversion.krwEquivalent > liveTradingGate.remainingDailyBuyKrw
+          ? ["KST 일일 매수 한도를 초과합니다. 취소·매도로 한도가 복구되지 않습니다."]
+          : []),
+      ]
+      : [];
     const blockers = [
       ...intentResult.riskCheck.blockers,
       ...(result.ok ? [] : [result.reason ?? "주문 사전검증을 통과하지 못했습니다."]),
+      ...buyLimitBlockers,
       ...(liveTradingGate.effective ? [] : [liveTradingGate.reason ?? "실거래 게이트가 닫혀 있습니다."]),
     ];
     const warnings = [
@@ -2129,6 +2373,21 @@ const localOrderPrecheck = async (request: Request) => {
       blockers,
       warnings,
       submitReady: preview.ok,
+      confirmationText: liveOrderConfirmationText({
+        symbol,
+        side,
+        quantity,
+        price,
+        currency,
+      }),
+      krwEquivalent: conversion.krwEquivalent,
+      exchangeRate: conversion.exchangeRate,
+      exchangeRateValidUntil: conversion.validUntil,
+      remainingDailyBuyKrw: liveTradingGate.remainingDailyBuyKrw,
+      limits: {
+        perBuyOrderKrw: LOCAL_LIVE_TRADING_MAX_BUY_ORDER_KRW,
+        dailyBuyKrw: LOCAL_LIVE_TRADING_MAX_DAILY_BUY_KRW,
+      },
       message: preview.ok
         ? "주문 제출 전 사전검증을 통과했습니다. 실제 제출은 별도 게이트에서만 가능합니다."
         : "사전검증 결과 주문 제출 준비가 완료되지 않았습니다.",
@@ -2137,6 +2396,196 @@ const localOrderPrecheck = async (request: Request) => {
     if (error instanceof TossApiError) {
       return jsonResponse(formatTossApiError(error, "사전검증 실패"), { status: 502 });
     }
+    return errorResponse(error, 502);
+  }
+};
+
+type LocalLiveOrderSubmitPayload = {
+  previewId?: unknown;
+  confirmation?: unknown;
+};
+
+const liveOrderConfirmationText = (preview: {
+  symbol: string;
+  side: "buy" | "sell";
+  quantity: number;
+  price: number;
+  currency: TossCurrency;
+}) => `${preview.symbol} ${preview.side === "buy" ? "매수" : "매도"} ${preview.quantity}주 ${preview.price} ${preview.currency}`;
+
+const isUnknownSubmissionError = (error: unknown) =>
+  !(error instanceof TossApiError) ||
+  error.status >= 500 ||
+  error.status === 429 ||
+  (error.status === 409 && error.code === "request-in-progress");
+
+const localLiveOrderSubmit = async (request: Request) => {
+  await ensureLocalAutomationAccess();
+  const userId = localUserId();
+  const payload = await readJsonBody(request) as LocalLiveOrderSubmitPayload;
+  const previewId = typeof payload.previewId === "string" ? payload.previewId : "";
+  const confirmation = typeof payload.confirmation === "string" ? payload.confirmation.trim() : "";
+  if (!previewId || !confirmation) {
+    return jsonResponse({ error: "previewId와 최종 확인 문구가 필요합니다.", orderSubmissionAttempted: false }, { status: 400 });
+  }
+
+  const storedPreview = await getOrderPreview(userId, previewId);
+  if (!storedPreview) {
+    return jsonResponse({ error: "주문 미리보기를 먼저 실행하세요.", orderSubmissionAttempted: false }, { status: 428 });
+  }
+  if (storedPreview.orderType !== "limit") {
+    return jsonResponse({ error: "실거래는 Toss KR/US 지정가 주문만 지원합니다.", orderSubmissionAttempted: false }, { status: 422 });
+  }
+  const expectedConfirmation = liveOrderConfirmationText(storedPreview);
+  if (confirmation !== expectedConfirmation) {
+    return jsonResponse({
+      error: "주문 요약과 동일한 확인 문구를 입력해야 합니다.",
+      expectedConfirmation,
+      orderSubmissionAttempted: false,
+    }, { status: 422 });
+  }
+  const verifiedPreview = await verifyOrderPreview({
+    userId,
+    previewId,
+    input: {
+      accountSeq: storedPreview.accountSeq,
+      symbol: storedPreview.symbol,
+      side: storedPreview.side,
+      orderType: storedPreview.orderType,
+      quantity: storedPreview.quantity,
+      price: storedPreview.price,
+      currency: storedPreview.currency,
+    },
+  });
+  if (!verifiedPreview.ok) {
+    return jsonResponse({
+      error: verifiedPreview.reason,
+      preview: verifiedPreview.preview ?? null,
+      orderSubmissionAttempted: false,
+    }, { status: verifiedPreview.status });
+  }
+
+  const credentials = await loadDecryptedCredentials(userId, "toss");
+  const accountPreference = await getBrokerAccountPreference(userId, "toss");
+  if (!credentials || !accountPreference) {
+    return jsonResponse({ error: "검증된 Toss API 키와 선택 계좌가 필요합니다.", orderSubmissionAttempted: false }, { status: 412 });
+  }
+  if (accountPreference.accountSeq !== storedPreview.accountSeq) {
+    return jsonResponse({
+      error: "선택 계좌가 미리보기와 달라졌습니다. 새 계좌로 다시 사전검증하세요.",
+      orderSubmissionAttempted: false,
+    }, { status: 409 });
+  }
+
+  const liveTradingGate = await getLiveTradingGate(userId, "manual", storedPreview.accountSeq);
+  if (!liveTradingGate.effective) {
+    return jsonResponse({
+      error: liveTradingGate.reason ?? "실거래 게이트가 닫혀 있습니다.",
+      orderSubmissionAttempted: false,
+      liveTradingGate,
+    }, { status: liveTradingGate.status });
+  }
+
+  const client = createTossClient(credentials);
+  try {
+    // 미리보기 뒤 변한 매수가능금액/매도가능수량/환율을 제출 직전에 다시 검사한다.
+    const precheck = createOrderPrecheck({
+      accountSeq: storedPreview.accountSeq,
+      getBuyingPower: (seq, currency) => client.getBuyingPower(seq, currency),
+      getSellableQuantity: (seq, symbol) => client.getSellableQuantity(seq, symbol),
+    });
+    const accountCheck = await precheck({
+      side: storedPreview.side,
+      symbol: storedPreview.symbol,
+      quantity: storedPreview.quantity,
+      price: storedPreview.price,
+      currency: storedPreview.currency,
+    });
+    if (!accountCheck.ok) {
+      return jsonResponse({ error: accountCheck.reason ?? "주문 직전 사전검증에 실패했습니다.", orderSubmissionAttempted: false }, { status: 422 });
+    }
+    const conversion = await resolveKrwConversion({
+      client,
+      currency: storedPreview.currency,
+      amount: storedPreview.estimatedOrderValue,
+    });
+    if (conversion.krwEquivalent === null || conversion.reason) {
+      return jsonResponse({ error: conversion.reason ?? "KRW 환산 검증에 실패했습니다.", orderSubmissionAttempted: false }, { status: 422 });
+    }
+    const attempt = await prepareLocalLiveOrderAttempt({
+      userId,
+      accountSeq: storedPreview.accountSeq,
+      source: "manual",
+      previewId: storedPreview.id,
+      clientOrderId: storedPreview.clientOrderId,
+      payloadHash: storedPreview.payloadHash,
+      symbol: storedPreview.symbol,
+      side: storedPreview.side,
+      quantity: storedPreview.quantity,
+      limitPrice: storedPreview.price,
+      currency: storedPreview.currency,
+      krwEquivalent: conversion.krwEquivalent,
+      exchangeRate: conversion.exchangeRate,
+    });
+    // 성공/실패/timeout 어느 경우에도 동일 preview로 다시 POST하지 못하게 잠근다.
+    await markOrderPreviewSubmitted(userId, storedPreview.id, attempt.submissionStartedAt ?? new Date().toISOString());
+    const broker = createTossBroker({ client, liveTradingEnabled: true });
+    try {
+      const submitted = await broker.submitOrder({
+        orderIntentId: storedPreview.id,
+        accountSeq: storedPreview.accountSeq,
+        symbol: storedPreview.symbol,
+        side: storedPreview.side,
+        type: "limit",
+        quantity: storedPreview.quantity,
+        limitPrice: storedPreview.price,
+        stopPrice: null,
+        clientOrderId: storedPreview.clientOrderId,
+        timeInForce: "DAY",
+      });
+      const updatedAttempt = await markLocalLiveOrderSubmitted(attempt.id, submitted.brokerOrderId);
+      await recordSubmittedOrder({
+        userId,
+        brokerOrderId: submitted.brokerOrderId,
+        clientOrderId: storedPreview.clientOrderId,
+        accountSeq: storedPreview.accountSeq,
+        strategyId: "manual-live",
+        stepId: attempt.id,
+        symbol: storedPreview.symbol,
+        side: storedPreview.side,
+        quantity: storedPreview.quantity,
+        limitPrice: storedPreview.price,
+        submittedAt: submitted.submittedAt,
+      });
+      return jsonResponse({
+        status: "submitted",
+        orderSubmissionAttempted: true,
+        result: submitted,
+        attempt: updatedAttempt,
+        remainingDailyBuyKrw: Math.max(0, LOCAL_LIVE_TRADING_MAX_DAILY_BUY_KRW - (await getLocalLiveTradingSnapshot()).policy.dailyBuyKrwSubmitted),
+      }, { status: 201 });
+    } catch (error) {
+      const message = error instanceof TossApiError
+        ? `${error.code}: ${error.message}`
+        : error instanceof Error ? error.message : String(error);
+      if (isUnknownSubmissionError(error)) {
+        const updatedAttempt = await markLocalLiveOrderUnknown(attempt.id, message);
+        return jsonResponse({
+          status: "unknown",
+          error: "주문 제출 결과가 불명확합니다. 자동 재시도를 금지하고 실거래를 잠급니다. Toss 주문 이력에서 clientOrderId를 확인하세요.",
+          orderSubmissionAttempted: true,
+          attempt: updatedAttempt,
+        }, { status: 202 });
+      }
+      const updatedAttempt = await markLocalLiveOrderRejected(attempt.id, message);
+      return jsonResponse({
+        status: "rejected",
+        error: message,
+        orderSubmissionAttempted: true,
+        attempt: updatedAttempt,
+      }, { status: 422 });
+    }
+  } catch (error) {
     return errorResponse(error, 502);
   }
 };
@@ -2310,11 +2759,11 @@ const localTossReadiness = async (request: Request) => {
 const localLiveTradingState = async () => {
   await ensureLocalAutomationAccess();
   const userId = localUserId();
-  const [credential, readiness, features, gate] = await Promise.all([
+  const [credential, readiness, gate, snapshot] = await Promise.all([
     getBrokerCredentialView(userId, "toss"),
     getAutomationReadinessSnapshot(userId, { includeOperator: true }),
-    listAutomationFeatures(userId),
     getLiveTradingGate(userId),
+    getLocalLiveTradingSnapshot(),
   ]);
   return jsonResponse({
     generatedAt: new Date().toISOString(),
@@ -2325,17 +2774,62 @@ const localLiveTradingState = async () => {
       effective: gate.effective,
       status: gate.status,
       reason: gate.reason,
-      featureEnabled: features.includes("live_trading"),
+      featureEnabled: snapshot.policy.manualEnabled,
       localRuntime: process.env.STOCK_ANALYSIS_RUNTIME === "macos-local",
       storageRoot: process.env.STOCK_ANALYSIS_STORAGE_ROOT ?? null,
+      policy: snapshot.policy,
+      automationEligibility: snapshot.automationEligibility,
+      attempts: snapshot.attempts.slice(0, 30),
+      limits: {
+        perBuyOrderKrw: LOCAL_LIVE_TRADING_MAX_BUY_ORDER_KRW,
+        dailyBuyKrw: LOCAL_LIVE_TRADING_MAX_DAILY_BUY_KRW,
+      },
     },
     readiness,
     guidance: [
-      "1.0.0 데스크톱 배포판은 Toss 조회·사전검증·모의 자동화 전용입니다.",
-      "실거래는 결과 불명 주문 복구와 재시작 멱등성 검증이 포함된 뒤 별도 버전에서 엽니다.",
+      "실거래는 이 Mac의 선택 계좌에만 바인딩되며, 수동·자동화 토글은 기본 OFF입니다.",
+      "Upbit와 Bithumb 실주문은 계속 차단됩니다.",
       "IP address not allowed 오류가 나오면 Toss Open API 콘솔 허용 IP를 현재 공인 IP로 갱신하세요.",
     ],
   });
+};
+
+const approveLocalLiveTradingQa = async (request: Request) => {
+  await ensureLocalAutomationAccess();
+  const payload = await readJsonBody(request);
+  const confirmation = typeof payload.confirmation === "string" ? payload.confirmation : "";
+  const userId = localUserId();
+  const [credentials, accountPreference] = await Promise.all([
+    loadDecryptedCredentials(userId, "toss"),
+    getBrokerAccountPreference(userId, "toss"),
+  ]);
+  if (!credentials || !accountPreference) {
+    return jsonResponse({ error: "QA 승인 전에 검증된 Toss API 키와 선택 계좌가 필요합니다." }, { status: 412 });
+  }
+  try {
+    // QA 승인은 실제 API의 토큰/계좌/계좌 헤더 조회가 모두 성공할 때만 기록한다.
+    const client = createTossClient(credentials);
+    const accounts = await client.listAccounts();
+    const selected = accounts.find((account) => account.accountSeq === accountPreference.accountSeq);
+    if (!selected || selected.accountType !== "BROKERAGE") {
+      return jsonResponse({ error: "선택한 Toss BROKERAGE 계좌를 다시 확인하세요." }, { status: 412 });
+    }
+    await Promise.all([
+      client.getHoldings(selected.accountSeq, "005930"),
+      client.getOpenOrders(selected.accountSeq, "AAPL"),
+    ]);
+    await approveLocalManualQa({
+      userId,
+      accountSeq: selected.accountSeq,
+      confirmation,
+    });
+    return localLiveTradingState();
+  } catch (error) {
+    if (error instanceof TossApiError) {
+      return jsonResponse(formatTossApiError(error, "실거래 QA 읽기 전용 점검 실패"), { status: 502 });
+    }
+    return errorResponse(error, 502);
+  }
 };
 
 const updateLocalLiveTrading = async (request: Request) => {
@@ -2345,30 +2839,62 @@ const updateLocalLiveTrading = async (request: Request) => {
     return jsonResponse({ error: "enabled boolean 값이 필요합니다." }, { status: 400 });
   }
   const userId = localUserId();
-  if (payload.enabled) {
-    if (!LOCAL_TOSS_LIVE_TRADING_SUPPORTED) {
-      return jsonResponse({
-        error: "1.0.0에서는 Toss 실거래를 활성화할 수 없습니다. 조회·사전검증·모의 자동화를 사용하세요.",
-        orderSubmissionAttempted: false,
-      }, { status: 501 });
-    }
-    const credential = await getBrokerCredentialView(userId, "toss");
-    if (credential?.status !== "verified") {
-      return jsonResponse({
-        error: "검증 완료된 Toss API 키가 있어야 사용자 실거래 토글을 켤 수 있습니다.",
-      }, { status: 412 });
-    }
-    const accountPreference = await getBrokerAccountPreference(userId, "toss");
-    if (!accountPreference) {
-      return jsonResponse({
-        error: "자동거래에 사용할 Toss 계좌를 먼저 선택해야 사용자 실거래 토글을 켤 수 있습니다.",
-      }, { status: 412 });
-    }
-    await grantAutomationFeature(userId, "live_trading");
-  } else {
-    await revokeAutomationFeature(userId, "live_trading");
+  const accountPreference = await getBrokerAccountPreference(userId, "toss");
+  if (!accountPreference) {
+    return jsonResponse({ error: "실거래 토글에는 선택한 Toss BROKERAGE 계좌가 필요합니다." }, { status: 412 });
   }
-  return localLiveTradingState();
+  try {
+    await setLocalManualLiveTrading({
+      userId,
+      accountSeq: accountPreference.accountSeq,
+      enabled: payload.enabled,
+      confirmation: typeof payload.confirmation === "string" ? payload.confirmation : undefined,
+    });
+    return localLiveTradingState();
+  } catch (error) {
+    return jsonResponse({ error: error instanceof Error ? error.message : String(error) }, { status: 423 });
+  }
+};
+
+const updateLocalAutomationLiveTrading = async (request: Request) => {
+  await ensureLocalAutomationAccess();
+  const payload = await readJsonBody(request);
+  if (typeof payload.enabled !== "boolean") {
+    return jsonResponse({ error: "enabled boolean 값이 필요합니다." }, { status: 400 });
+  }
+  const userId = localUserId();
+  const accountPreference = await getBrokerAccountPreference(userId, "toss");
+  if (!accountPreference) {
+    return jsonResponse({ error: "자동화 실거래에는 선택한 Toss BROKERAGE 계좌가 필요합니다." }, { status: 412 });
+  }
+  try {
+    await setLocalAutomationLiveTrading({
+      userId,
+      accountSeq: accountPreference.accountSeq,
+      enabled: payload.enabled,
+      confirmation: typeof payload.confirmation === "string" ? payload.confirmation : undefined,
+    });
+    return localLiveTradingState();
+  } catch (error) {
+    return jsonResponse({ error: error instanceof Error ? error.message : String(error) }, { status: 423 });
+  }
+};
+
+const verifyLocalLiveTradingSafetyGates = async () => {
+  await ensureLocalAutomationAccess();
+  const [killSwitch, workerControl] = await Promise.all([
+    getAutomationKillSwitchState(),
+    getAutomationWorkerControlState(),
+  ]);
+  try {
+    await recordLocalLiveSafetyProof({
+      killSwitchEngaged: killSwitch.engaged,
+      workerPaused: workerControl.paused,
+    });
+    return localLiveTradingState();
+  } catch (error) {
+    return jsonResponse({ error: error instanceof Error ? error.message : String(error) }, { status: 423 });
+  }
 };
 
 const fetchPublicEgressIp = async () => {
@@ -2440,7 +2966,7 @@ const brokerDiagnostics = async (request: Request) => {
   const includeEgress = url.searchParams.get("includeEgress") === "1";
   const userId = localUserId();
   const localRuntime = process.env.STOCK_ANALYSIS_RUNTIME === "macos-local";
-  const [credential, accountPreference, health, readiness, egress, killSwitch, workerControl, liveGate] = await Promise.all([
+  const [credential, accountPreference, health, readiness, egress, killSwitch, workerControl, liveGate, automationLiveGate] = await Promise.all([
     getBrokerCredentialView(userId, "toss"),
     getBrokerAccountPreference(userId, "toss"),
     getAutomationHealthSnapshot(),
@@ -2449,9 +2975,10 @@ const brokerDiagnostics = async (request: Request) => {
     getAutomationKillSwitchState(),
     getAutomationWorkerControlState(),
     getLiveTradingGate(userId),
+    getLiveTradingGate(userId, "automation"),
   ]);
-  const liveTradingEffective = readiness.user.liveTradingEffective && !killSwitch.engaged;
-  const automationQueueReady = liveTradingEffective && !workerControl.paused;
+  const liveTradingEffective = liveGate.effective;
+  const automationQueueReady = automationLiveGate.effective;
 
   return jsonResponse({
     generatedAt: new Date().toISOString(),
@@ -2459,7 +2986,7 @@ const brokerDiagnostics = async (request: Request) => {
     credential,
     egress,
     liveGate: {
-      enableLiveTrading: process.env.ENABLE_LIVE_TRADING === "true",
+      enableLiveTrading: liveGate.masterEnabled,
       credentialEncryptionConfigured: health.env.credentialEncryptionConfigured,
       storageRoot: process.env.STOCK_ANALYSIS_STORAGE_ROOT ?? null,
       automationOverall: health.overall,
@@ -2467,9 +2994,9 @@ const brokerDiagnostics = async (request: Request) => {
       automationBeta: readiness.user.automationBeta,
       brokerCredentials: readiness.user.brokerCredentials,
       accountPreferenceSelected: !!accountPreference,
-      userLiveTrading: readiness.user.liveTrading,
+      userLiveTrading: liveGate.userEnabled,
       liveTradingEffective,
-      rawLiveTradingEffective: readiness.user.liveTradingEffective,
+      rawLiveTradingEffective: liveGate.effective,
       gateStatus: liveGate.status,
       gateReason: liveGate.reason,
       killSwitchEngaged: killSwitch.engaged,
@@ -2477,6 +3004,8 @@ const brokerDiagnostics = async (request: Request) => {
       workerPaused: workerControl.paused,
       workerPauseReason: workerControl.reason,
       automationQueueReady,
+      automationGateStatus: automationLiveGate.status,
+      automationGateReason: automationLiveGate.reason,
     },
     readinessItems: readiness.items,
     guidance: [
@@ -2489,8 +3018,8 @@ const brokerDiagnostics = async (request: Request) => {
         ? "워커 일시중지가 켜져 있어 자동화 큐 실행이 차단됩니다."
         : "워커가 감시 상태입니다.",
       localRuntime
-        ? "Toss 시트의 로컬 운영자 게이트가 OFF이면 credential이 검증되어도 실거래 제출은 계속 차단됩니다."
-        : "ENABLE_LIVE_TRADING=false이면 credential이 검증되어도 실거래 제출은 계속 차단됩니다.",
+        ? "Toss 실거래는 현재 Mac·선택 계좌의 QA와 수동/자동화 정책 토글을 모두 통과해야 합니다."
+        : "실거래는 macOS 로컬 sidecar에서만 허용됩니다.",
     ],
   });
 };
@@ -4273,6 +4802,9 @@ export const handleLocalEngineRequest = async (request: Request): Promise<Respon
     if (request.method === "POST" && url.pathname === "/api/local/orders/precheck") {
       return localOrderPrecheck(request);
     }
+    if (request.method === "POST" && url.pathname === "/api/local/live-orders/submit") {
+      return localLiveOrderSubmit(request);
+    }
     if (request.method === "GET" && url.pathname === "/api/local/holdings") {
       return localHoldings(request);
     }
@@ -4290,6 +4822,15 @@ export const handleLocalEngineRequest = async (request: Request): Promise<Respon
     }
     if (request.method === "PUT" && url.pathname === "/api/local/live-trading") {
       return updateLocalLiveTrading(request);
+    }
+    if (request.method === "POST" && url.pathname === "/api/local/live-trading/qa") {
+      return approveLocalLiveTradingQa(request);
+    }
+    if (request.method === "PUT" && url.pathname === "/api/local/live-trading/automation") {
+      return updateLocalAutomationLiveTrading(request);
+    }
+    if (request.method === "POST" && url.pathname === "/api/local/live-trading/safety-proof") {
+      return verifyLocalLiveTradingSafetyGates();
     }
     if (request.method === "GET" && url.pathname === "/api/local/kill-switch") {
       return localKillSwitchState();

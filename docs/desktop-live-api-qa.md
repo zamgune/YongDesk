@@ -1,16 +1,17 @@
 # 데스크톱 실 API 인수 QA
 
-이 문서는 로컬 결정론적 검증을 모두 통과한 YongStockDesk에 실제 Toss·Upbit 연결만 추가해 인수 확인하는 절차다. 앱의 분석·paper 기능 준비와 외부 공개 배포 준비를 구분한다.
+이 문서는 로컬 결정론적 검증을 모두 통과한 YongStockDesk에 실제 Toss·Upbit 연결을 추가해 인수 확인하는 절차다. 1.1.0에서는 Toss 수동 지정가 주문의 제한적 실 API 인수도 포함하며, Upbit·Bithumb은 조회·paper 전용이다. 앱의 분석·paper 기능 준비와 외부 공개 배포 준비를 구분한다.
 
 ## 완료 판정
 
 | 판정 | 의미 |
 |---|---|
-| 로컬 기능 준비 완료 | 결정론적 게이트 통과, Toss·Upbit 실 조회 QA 통과, 실제 주문 미호출 확인 |
+| 로컬 기능 준비 완료 | 결정론적 게이트 통과, Toss·Upbit 실 조회 QA 통과, paper 경계 확인 |
+| Toss 수동 실거래 인수 완료 | 로컬 기능 준비에 더해 허용 IP·선택 계좌·수동 지정가 5건·재시작 재조정·원장 대조 완료 |
 | 특정 API 미연결 | 해당 계좌 조회는 미검증이지만 API 없이 예제·Yahoo fallback·Upbit 공개 분석·paper 기능은 사용 가능 |
 | 외부 배포 준비 완료 | 로컬 기능 준비에 더해 Developer ID, notarization, stapling, Gatekeeper와 실제 Intel Mac 검증까지 완료 |
 
-API 키 연결은 선택 사항이다. 다만 `dataSource=toss` 실 시세나 실계좌 잔고·주문 가능 정보까지 인수하려면 해당 절의 QA가 필요하다. 이 버전은 Toss·Upbit·Bithumb 실제 주문을 지원하지 않으며 모든 주문 관련 확인은 preview, precheck 또는 paper state에서 끝나야 한다.
+API 키 연결은 선택 사항이다. 다만 `dataSource=toss` 실 시세나 실계좌 잔고·주문 가능 정보까지 인수하려면 해당 절의 QA가 필요하다. Toss 실주문은 [1.1.0 운영 경계](live-trading-v1.1.md)의 QA와 별도 수동 토글을 완료한 경우에만 수행하며, Upbit·Bithumb 주문은 지원하지 않는다.
 
 ## 1. 먼저 실행할 결정론적 게이트
 
@@ -67,7 +68,7 @@ BASE_URL="http://127.0.0.1:<PORT>"
 2. `설정 → API 연결 관리 → Toss API 연결`에서 client ID와 secret을 입력하고 검증 저장한다.
 3. `검증 완료`, 조회된 계좌 수, Keychain 저장 완료가 표시되는지 확인한다. 계좌가 여러 개면 자동거래 계좌를 명시적으로 선택한다.
 4. `Toss 운영 준비 점검`을 실행한다. 계좌·보유·미체결·주문 가능 정보 조회 결과와 `주문 호출 없음`을 확인한다.
-5. 상단과 자동화 화면의 `PAPER ONLY`가 연결 전후 모두 유지되는지 확인한다.
+5. 연결만 완료된 상태에서는 수동/자동화 실거래 토글이 모두 OFF인지 확인한다.
 
 ### 005930 삼성전자
 
@@ -184,19 +185,27 @@ curl --fail --silent --show-error \
 
 `accounts=true`인데 `orderChance=false`이면 키 자체 검증 성공과 private QA 완료를 혼동하지 않는다. Upbit 콘솔의 IP와 조회 권한을 확인하고, 필요한 최소 권한을 부여하지 않을 정책이라면 잔고 조회만 가능하다고 명시해 인계한다. 이 경우 공개 1h/4h/1d 분석에는 영향이 없다.
 
-## 6. PAPER ONLY와 주문 미호출 확인
+## 6. Paper 경계와 Toss 수동 실거래 인수
 
-Toss와 Upbit 연결 전후 모두 다음 조건이 유지되어야 한다.
+Upbit 연결 전후와 Toss 수동 토글 OFF 상태에서는 다음 조건이 유지되어야 한다.
 
 - 앱 상단 또는 주문/자동화 화면에 `PAPER ONLY`가 보인다.
 - 모의 주문은 우측 drawer에서 명시적으로 연 뒤 기존 OrderIntent, RiskCheck와 확인 단계를 거친다.
 - paper 주문 후 바뀌는 것은 로컬 paper account/state뿐이다.
 - Toss readiness, holdings, precheck와 Upbit readiness, precheck에서 `orderSubmissionAttempted=false`다.
 - horizon plan의 stop에는 `isBrokerStopEligible=false`가 유지된다.
-- Toss 실거래 활성화 요청은 `not supported`로 차단되고 코인 자동화도 paper 기록만 남긴다.
+- Toss 수동 토글 OFF에서는 submit이 차단되고, 코인 자동화는 paper 기록만 남긴다.
 - 브로커·거래소의 주문/체결 내역에 QA로 생성된 주문이 없다.
 
-어느 응답에서든 `orderSubmissionAttempted=true`가 한 번이라도 나오거나 실 주문이 생기면 즉시 앱과 sidecar를 종료하고 키를 폐기한다. 이는 다른 항목의 성공으로 상쇄할 수 없는 치명적 실패다.
+수동 Toss 인수는 다음을 모두 기록한 경우에만 진행한다.
+
+1. `Toss 실거래 운영`에서 `실거래 QA 승인`을 입력하고 005930 보유/AAPL 미체결 읽기 전용 점검이 성공한 것을 확인한다.
+2. `실거래 수동 주문 해제` 뒤 최소 규모의 KR/US 지정가 주문을 총 5건 제출한다. 각 주문의 typed confirmation, `clientOrderId`, broker order ID, Toss 주문·체결 이력과 앱 감사 원장을 대조한다.
+3. 앱을 재시작한 뒤 주문 상태 재조정을 실행해 OPEN·종료 주문을 다시 대조한다.
+4. kill switch와 worker pause를 각각/동시에 켜 제출이 차단되는지 확인하고 차단 증거를 기록한다.
+5. `unknown` 주문이 0건인지 확인한다. timeout, 429, 5xx, `request-in-progress`가 발생하면 자동 재시도하지 말고 실거래 토글을 끄고 Toss 이력과 수동 대조한다.
+
+`orderSubmissionAttempted=true`가 수동 인수에서 예상한 한 번의 제출에만 대응하는지 확인해야 한다. 토글 OFF·읽기 전용 QA·코인 경로에서 이 값이 true가 되거나 의도하지 않은 주문이 생기면 즉시 앱과 sidecar를 종료하고 키를 폐기한다.
 
 ## 7. 로그와 Keychain 마스킹
 

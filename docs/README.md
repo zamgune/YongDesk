@@ -32,6 +32,7 @@
 ## 이력과 보관 자료
 
 - [1.0.0 릴리스 이력](releases/v1.0.0.md) — 고정된 당시 배포·검증 기록이며 현재 기능의 기준이 아님
+- [1.1.0 Toss 실거래 운영 경계](live-trading-v1.1.md) — 단일 Mac·선택 계좌의 제한적 지정가 주문과 실 API 인수 조건
 - [Archive](archive/README.md) — 완료된 계획, 구형 UX 시안, 과거 목표와 OpenSpec 보관 자료
 
 ## 갱신 원칙

@@ -112,8 +112,32 @@ public struct EngineClient: Sendable {
         try await getJSON("/api/local/live-trading")
     }
 
-    public func updateLocalLiveTrading(enabled: Bool) async throws -> LocalLiveTradingResponse {
-        let data = try await putJSON("/api/local/live-trading", body: ["enabled": enabled])
+    public func updateLocalLiveTrading(enabled: Bool, confirmation: String? = nil) async throws -> LocalLiveTradingResponse {
+        let data = try await putJSON(
+            "/api/local/live-trading",
+            body: LocalLiveTradingTogglePayload(enabled: enabled, confirmation: confirmation)
+        )
+        return try decoder.decode(LocalLiveTradingResponse.self, from: data)
+    }
+
+    public func approveLocalLiveTradingQA(confirmation: String) async throws -> LocalLiveTradingResponse {
+        let data = try await postJSON(
+            "/api/local/live-trading/qa",
+            body: LocalLiveTradingConfirmationPayload(confirmation: confirmation)
+        )
+        return try decoder.decode(LocalLiveTradingResponse.self, from: data)
+    }
+
+    public func updateLocalAutomationLiveTrading(enabled: Bool, confirmation: String? = nil) async throws -> LocalLiveTradingResponse {
+        let data = try await putJSON(
+            "/api/local/live-trading/automation",
+            body: LocalLiveTradingTogglePayload(enabled: enabled, confirmation: confirmation)
+        )
+        return try decoder.decode(LocalLiveTradingResponse.self, from: data)
+    }
+
+    public func verifyLocalLiveTradingSafetyGates() async throws -> LocalLiveTradingResponse {
+        let data = try await postJSON("/api/local/live-trading/safety-proof", body: [:] as [String: String])
         return try decoder.decode(LocalLiveTradingResponse.self, from: data)
     }
 
@@ -283,8 +307,8 @@ public struct EngineClient: Sendable {
         try await postJSON("/api/automation/cycle", body: ["dryRun": true])
     }
 
-    public func syncAutomationOrders() async throws -> Data {
-        try await postJSON("/api/local/orders/sync", body: [:] as [String: String])
+    public func syncAutomationOrders(startupReconciliation: Bool = false) async throws -> Data {
+        try await postJSON("/api/local/orders/sync", body: ["startup": startupReconciliation])
     }
 
     public func localHolding(symbol: String, accountSeq: Int? = nil) async throws -> LocalHoldingResponse {
@@ -313,6 +337,14 @@ public struct EngineClient: Sendable {
             )
         )
         return try decoder.decode(LocalOrderPrecheckResponse.self, from: data)
+    }
+
+    public func submitLocalLiveOrder(previewId: String, confirmation: String) async throws -> LocalLiveOrderSubmissionResponse {
+        let data = try await postJSON(
+            "/api/local/live-orders/submit",
+            body: LocalLiveOrderSubmitPayload(previewId: previewId, confirmation: confirmation)
+        )
+        return try decoder.decode(LocalLiveOrderSubmissionResponse.self, from: data)
     }
 
     public func analyze(
@@ -651,6 +683,20 @@ private struct LocalOrderPrecheckPayload: Encodable {
     let price: Double
     let currency: String
     let accountSeq: Int?
+}
+
+private struct LocalLiveTradingTogglePayload: Encodable {
+    let enabled: Bool
+    let confirmation: String?
+}
+
+private struct LocalLiveTradingConfirmationPayload: Encodable {
+    let confirmation: String
+}
+
+private struct LocalLiveOrderSubmitPayload: Encodable {
+    let previewId: String
+    let confirmation: String
 }
 
 private struct StrategyPriceAnchorPayload: Encodable {

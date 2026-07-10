@@ -247,7 +247,7 @@ export const buildMacReleaseInstallGuide = ({
 6. \`점검\`에서 Sidecar, 뉴스/RSS, 분석, 브리핑, 전략 저장/시뮬레이션, 자동화 dry-run 실패가 0인지 확인합니다.
 7. 실계좌 조회가 필요할 때만 \`Toss\`에서 API 키를 검증 후 sidecar 저장소와 macOS Keychain에 저장하고 사용할 BROKERAGE 계좌를 선택합니다.
 8. Toss 개발자 콘솔 허용 IP가 앱의 Toss 연결 진단 공인 IP와 같은지 확인합니다.
-9. 1.0.0은 Toss·Upbit·Bithumb 실제 주문을 차단합니다. OrderIntent·RiskCheck 결과와 자동화는 paper 계좌에서만 사용합니다.
+9. 1.1.0 Toss 실거래는 이 Mac의 선택 계좌 QA, 수동/자동화 별도 토글, 지정가·한도를 모두 통과한 경우에만 허용합니다. Upbit·Bithumb은 paper 전용입니다.
 
 ## 패키징 검증 근거
 
@@ -293,7 +293,7 @@ export const buildDmgInstallReadme = ({
 4. 첫 실행 설정에서 Toss API 키, 자동매매 전략, 앱 점검, 앱 배포 시트를 확인합니다.
 5. Toss 실계좌 조회가 필요하면 API 키를 이 Mac에서 다시 검증하고 사용할 계좌를 선택합니다.
 6. Toss 개발자 콘솔 허용 IP와 앱의 공인 IP 진단 결과가 일치해야 합니다.
-7. 1.0.0의 OrderIntent, RiskCheck와 자동화 결과는 paper 전용이며 실제 주문을 제출하지 않습니다.
+7. 1.1.0 Toss 실거래는 이 Mac의 선택 계좌 QA, 수동/자동화 별도 토글, 지정가·한도를 모두 통과한 경우에만 허용합니다. Upbit·Bithumb은 paper 전용입니다.
 
 Developer ID 서명과 Apple 공증이 없는 로컬 테스트 빌드는 Gatekeeper 경고가 날 수 있습니다.
 `;
@@ -338,7 +338,7 @@ const writeMacReleaseHandoffFiles = async (version: string, buildNumber: string)
       "StockAnalysis-<version>-macos-install-verification.json에서 sidecarEndpointChecks.strategyBackupImport/automationScheduler, appLaunchVerified/uiSmokeVerified, uiSmokeChecks.samsungFixtureAnalysis/horizonPlans/paperOrderDrawerNoSubmit/strategyWorkflowOrder/responsiveWindowSizes가 true인지 확인합니다.",
       "Toss API 키는 Mac마다 다시 검증해 sidecar 저장소와 macOS Keychain에 저장하고 자동거래 계좌를 다시 선택합니다.",
       "Toss 허용 IP와 앱 연결 진단 공인 IP가 일치해야 합니다.",
-      "1.0.0은 Toss·Upbit·Bithumb 실제 주문을 차단하며 OrderIntent·RiskCheck 결과는 paper 전용입니다.",
+      "1.1.0 Toss 실거래는 이 Mac의 선택 계좌 QA, 수동/자동화 별도 토글, 지정가·한도를 모두 통과한 경우에만 허용합니다. Upbit·Bithumb은 paper 전용입니다.",
     ],
   }, null, 2)}\n`, "utf8");
   await writeFile(installGuidePath, buildMacReleaseInstallGuide({ version, generatedAt, entries }), "utf8");
@@ -413,7 +413,7 @@ const distributionReadiness = (options: { arch: string; signingIdentity: string;
       "install-verification 리포트에서 sidecarEndpointVerified/appLaunchVerified/uiSmokeVerified와 Beginner-first 핵심 UI checks가 true인지 확인하세요.",
       "새 Mac에서는 Toss API 키를 앱 설정에서 다시 검증해 sidecar 저장소와 macOS Keychain에 저장하고 자동거래 계좌를 선택해야 합니다.",
       "Toss 개발자 콘솔의 허용 IP와 앱의 연결 진단 공인 IP가 일치해야 합니다.",
-      "1.0.0은 credential 상태와 관계없이 실제 주문을 차단하고 OrderIntent·RiskCheck 결과를 paper 계좌에만 기록합니다.",
+      "1.1.0 Toss 실거래는 이 Mac의 선택 계좌 QA, 수동/자동화 별도 토글, 지정가·한도를 모두 통과한 경우에만 허용합니다. Upbit·Bithumb은 paper 전용입니다.",
     ],
   };
 };

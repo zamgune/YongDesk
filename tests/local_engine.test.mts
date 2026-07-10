@@ -1359,8 +1359,8 @@ test("local engine exposes local broker diagnostics without secrets", async () =
       assert.equal(payload.liveGate?.accountPreferenceSelected, false);
       assert.equal(payload.liveGate?.liveTradingEffective, false);
       assert.equal(payload.liveGate?.rawLiveTradingEffective, false);
-      assert.equal(payload.liveGate?.gateStatus, 501);
-      assert.match(payload.liveGate?.gateReason ?? "", /1\.0\.0.*실거래/);
+      assert.equal(payload.liveGate?.gateStatus, 423);
+      assert.match(payload.liveGate?.gateReason ?? "", /Toss API 키|선택.*계좌/);
       assert.equal(payload.liveGate?.killSwitchEngaged, false);
       assert.equal(payload.liveGate?.workerPaused, false);
       assert.equal(payload.liveGate?.automationQueueReady, false);
@@ -1462,7 +1462,7 @@ test("local engine does not persist rejected Toss broker credentials", async () 
   assert.equal(stored.accountPreference, null);
 });
 
-test("local engine blocks Toss live trading in the desktop 1.0.0 runtime", async () => {
+test("local engine keeps Toss manual live policy OFF until account QA is approved", async () => {
   const previousLiveTrading = process.env.ENABLE_LIVE_TRADING;
   process.env.ENABLE_LIVE_TRADING = "true";
   try {
@@ -1471,10 +1471,9 @@ test("local engine blocks Toss live trading in the desktop 1.0.0 runtime", async
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ enabled: true }),
     }));
-    assert.equal(response.status, 501);
+    assert.equal(response.status, 412);
     const payload = await response.json() as { error?: string; orderSubmissionAttempted?: boolean };
-    assert.match(payload.error ?? "", /1\.0\.0.*실거래/);
-    assert.equal(payload.orderSubmissionAttempted, false);
+    assert.match(payload.error ?? "", /선택.*계좌/);
 
     const stateResponse = await handleLocalEngineRequest(
       new Request("http://127.0.0.1:38771/api/local/live-trading"),
@@ -1483,7 +1482,7 @@ test("local engine blocks Toss live trading in the desktop 1.0.0 runtime", async
     const state = await stateResponse.json() as {
       liveTrading?: { masterEnabled?: boolean; featureEnabled?: boolean; effective?: boolean; localRuntime?: boolean };
     };
-    assert.equal(state.liveTrading?.masterEnabled, true);
+    assert.equal(state.liveTrading?.masterEnabled, false);
     assert.equal(state.liveTrading?.featureEnabled, false);
     assert.equal(state.liveTrading?.effective, false);
     assert.equal(state.liveTrading?.localRuntime, true);
@@ -1550,6 +1549,18 @@ test("local engine previews Toss order precheck without submitting live orders",
         ],
       }),
       jsonResponse({ result: { currency: "USD", cashBuyingPower: "1000" } }),
+      jsonResponse({
+        result: {
+          baseCurrency: "USD",
+          quoteCurrency: "KRW",
+          rate: "1300",
+          midRate: "1300",
+          basisPoint: "0",
+          rateChangeType: "UNCHANGED",
+          validFrom: "2020-01-01T00:00:00.000Z",
+          validUntil: "2030-01-01T00:00:00.000Z",
+        },
+      }),
     ], async (calls) => {
       const credentialResponse = await handleLocalEngineRequest(new Request("http://127.0.0.1:38771/api/local/broker/credentials", {
         method: "POST",
@@ -1583,12 +1594,12 @@ test("local engine previews Toss order precheck without submitting live orders",
       assert.equal(payload.preview?.submittedAt, null);
       assert.equal(payload.preview?.brokerOrderId, undefined);
       assert.equal(payload.liveTradingGate?.effective, false);
-      assert.equal(payload.liveTradingGate?.masterEnabled, false);
-      assert.ok(payload.blockers?.some((blocker) => blocker.includes("마스터 게이트") || blocker.includes("실거래")));
-      assert.ok(payload.warnings?.some((warning) => warning.includes("킬스위치")));
+      assert.equal(payload.liveTradingGate?.masterEnabled, true);
+      assert.ok(payload.blockers?.some((blocker) => blocker.includes("수동 실거래") || blocker.includes("실거래")));
       assert.match(payload.message ?? "", /완료되지/);
-      assert.equal(calls.length, 3);
+      assert.equal(calls.length, 4);
       assert.match(calls[2]?.url ?? "", /\/api\/v1\/buying-power/);
+      assert.match(calls[3]?.url ?? "", /\/api\/v1\/exchange-rate/);
       assert.equal(calls.some((call) => call.url.includes("/api/v1/orders")), false);
     });
   } finally {
@@ -1605,9 +1616,148 @@ test("local engine previews Toss order precheck without submitting live orders",
   }
 });
 
-test("local engine keeps Toss live trading blocked after credential verification", async () => {
+test("local engine persists before Toss submit and locks unknown requests without retry", async () => {
+  const previousUserId = process.env.STOCK_ANALYSIS_LOCAL_USER_ID;
+  process.env.STOCK_ANALYSIS_LOCAL_USER_ID = `local-engine-live-submit-${Date.now()}`;
+  const account = {
+    accountNo: "1234567890",
+    accountSeq: 81,
+    accountType: "BROKERAGE",
+  };
+  const usdKrw = {
+    result: {
+      baseCurrency: "USD",
+      quoteCurrency: "KRW",
+      rate: "1300",
+      midRate: "1300",
+      basisPoint: "0",
+      rateChangeType: "UNCHANGED",
+      validFrom: "2020-01-01T00:00:00.000Z",
+      validUntil: "2030-01-01T00:00:00.000Z",
+    },
+  };
+  try {
+    await withMockFetch([
+      jsonResponse({ access_token: "live-submit-registration", token_type: "Bearer", expires_in: 3600 }),
+      jsonResponse({ result: [account] }),
+    ], async () => {
+      const response = await handleLocalEngineRequest(new Request("http://127.0.0.1:38771/api/local/broker/credentials", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ clientId: "live-submit-client", clientSecret: "live-submit-secret" }),
+      }));
+      assert.equal(response.status, 200);
+    });
+
+    await withMockFetch([
+      jsonResponse({ access_token: "live-submit-qa", token_type: "Bearer", expires_in: 3600 }),
+      jsonResponse({ result: [account] }),
+      jsonResponse({ result: { items: [] } }),
+      jsonResponse({ result: { orders: [], nextCursor: null } }),
+    ], async () => {
+      const response = await handleLocalEngineRequest(new Request("http://127.0.0.1:38771/api/local/live-trading/qa", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ confirmation: "실거래 QA 승인" }),
+      }));
+      assert.equal(response.status, 200);
+    });
+
+    const toggleResponse = await handleLocalEngineRequest(new Request("http://127.0.0.1:38771/api/local/live-trading", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ enabled: true, confirmation: "실거래 수동 주문 해제" }),
+    }));
+    assert.equal(toggleResponse.status, 200);
+
+    const precheck = async () => {
+      let preview: { id: string; clientOrderId: string } | undefined;
+      let confirmationText: string | undefined;
+      await withMockFetch([
+        jsonResponse({ access_token: `live-submit-precheck-${Date.now()}`, token_type: "Bearer", expires_in: 3600 }),
+        jsonResponse({ result: { currency: "USD", cashBuyingPower: "1000" } }),
+        jsonResponse(usdKrw),
+      ], async (calls) => {
+        const response = await handleLocalEngineRequest(new Request("http://127.0.0.1:38771/api/local/orders/precheck", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ symbol: "AAPL", side: "buy", quantity: 1, price: 10, currency: "USD", accountSeq: 81 }),
+        }));
+        assert.equal(response.status, 200);
+        const payload = await response.json() as {
+          submitReady?: boolean;
+          preview?: { id?: string; clientOrderId?: string };
+          confirmationText?: string;
+        };
+        assert.equal(payload.submitReady, true);
+        assert.equal(calls.length, 3);
+        preview = payload.preview?.id && payload.preview.clientOrderId
+          ? { id: payload.preview.id, clientOrderId: payload.preview.clientOrderId }
+          : undefined;
+        confirmationText = payload.confirmationText;
+      });
+      assert.ok(preview);
+      assert.ok(confirmationText);
+      return { preview, confirmationText };
+    };
+
+    const first = await precheck();
+    await withMockFetch([
+      jsonResponse({ access_token: "live-submit-order", token_type: "Bearer", expires_in: 3600 }),
+      jsonResponse({ result: { currency: "USD", cashBuyingPower: "1000" } }),
+      jsonResponse(usdKrw),
+      jsonResponse({ result: { orderId: "toss-order-1", clientOrderId: first.preview.clientOrderId } }),
+    ], async (calls) => {
+      const response = await handleLocalEngineRequest(new Request("http://127.0.0.1:38771/api/local/live-orders/submit", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ previewId: first.preview.id, confirmation: first.confirmationText }),
+      }));
+      assert.equal(response.status, 201);
+      const payload = await response.json() as { status?: string; attempt?: { status?: string; brokerOrderId?: string } };
+      assert.equal(payload.status, "submitted");
+      assert.equal(payload.attempt?.status, "submitted");
+      assert.equal(payload.attempt?.brokerOrderId, "toss-order-1");
+      assert.equal(calls.filter((call) => call.url.endsWith("/api/v1/orders") && call.init?.method === "POST").length, 1);
+    });
+
+    const second = await precheck();
+    await withMockFetch([
+      jsonResponse({ access_token: "live-submit-unknown", token_type: "Bearer", expires_in: 3600 }),
+      jsonResponse({ result: { currency: "USD", cashBuyingPower: "1000" } }),
+      jsonResponse(usdKrw),
+      jsonResponse({ error: { code: "request-in-progress", message: "pending" } }, { status: 409 }),
+    ], async (calls) => {
+      const response = await handleLocalEngineRequest(new Request("http://127.0.0.1:38771/api/local/live-orders/submit", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ previewId: second.preview.id, confirmation: second.confirmationText }),
+      }));
+      assert.equal(response.status, 202);
+      const payload = await response.json() as { status?: string; attempt?: { status?: string } };
+      assert.equal(payload.status, "unknown");
+      assert.equal(payload.attempt?.status, "unknown");
+      assert.equal(calls.filter((call) => call.url.endsWith("/api/v1/orders") && call.init?.method === "POST").length, 1);
+    });
+
+    const stateResponse = await handleLocalEngineRequest(new Request("http://127.0.0.1:38771/api/local/live-trading"));
+    const state = await stateResponse.json() as { liveTrading?: { effective?: boolean; policy?: { unknownLock?: unknown } } };
+    assert.equal(state.liveTrading?.effective, false);
+    assert.ok(state.liveTrading?.policy?.unknownLock);
+  } finally {
+    if (previousUserId === undefined) {
+      delete process.env.STOCK_ANALYSIS_LOCAL_USER_ID;
+    } else {
+      process.env.STOCK_ANALYSIS_LOCAL_USER_ID = previousUserId;
+    }
+  }
+});
+
+test("local engine requires QA confirmation after credential verification", async () => {
   const previousLiveTrading = process.env.ENABLE_LIVE_TRADING;
+  const previousUserId = process.env.STOCK_ANALYSIS_LOCAL_USER_ID;
   process.env.ENABLE_LIVE_TRADING = "true";
+  process.env.STOCK_ANALYSIS_LOCAL_USER_ID = `local-engine-qa-required-${Date.now()}`;
   try {
     await withMockFetch([
       jsonResponse({ access_token: "test-access-token-live", token_type: "Bearer", expires_in: 3600 }),
@@ -1639,23 +1789,12 @@ test("local engine keeps Toss live trading blocked after credential verification
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ enabled: true }),
     }));
-    assert.equal(response.status, 501);
+    assert.equal(response.status, 423);
     const payload = await response.json() as {
       error?: string;
       orderSubmissionAttempted?: boolean;
     };
-    assert.match(payload.error ?? "", /1\.0\.0.*실거래/);
-    assert.equal(payload.orderSubmissionAttempted, false);
-
-    const stateResponse = await handleLocalEngineRequest(
-      new Request("http://127.0.0.1:38771/api/local/live-trading"),
-    );
-    const statePayload = await stateResponse.json() as {
-      liveTrading?: { userEnabled?: boolean; featureEnabled?: boolean; effective?: boolean };
-    };
-    assert.equal(statePayload.liveTrading?.userEnabled, false);
-    assert.equal(statePayload.liveTrading?.featureEnabled, false);
-    assert.equal(statePayload.liveTrading?.effective, false);
+    assert.match(payload.error ?? "", /QA 승인/);
 
     const offResponse = await handleLocalEngineRequest(new Request("http://127.0.0.1:38771/api/local/live-trading", {
       method: "PUT",
@@ -1671,6 +1810,11 @@ test("local engine keeps Toss live trading blocked after credential verification
       delete process.env.ENABLE_LIVE_TRADING;
     } else {
       process.env.ENABLE_LIVE_TRADING = previousLiveTrading;
+    }
+    if (previousUserId === undefined) {
+      delete process.env.STOCK_ANALYSIS_LOCAL_USER_ID;
+    } else {
+      process.env.STOCK_ANALYSIS_LOCAL_USER_ID = previousUserId;
     }
   }
 });
@@ -1719,10 +1863,9 @@ test("local engine saves explicit Toss automation account preference", async () 
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ enabled: true }),
       }));
-      assert.equal(blockedToggle.status, 501);
+      assert.equal(blockedToggle.status, 412);
       const blockedPayload = await blockedToggle.json() as { error?: string; orderSubmissionAttempted?: boolean };
-      assert.match(blockedPayload.error ?? "", /1\.0\.0.*실거래/);
-      assert.equal(blockedPayload.orderSubmissionAttempted, false);
+      assert.match(blockedPayload.error ?? "", /선택.*계좌/);
 
       const preferenceResponse = await handleLocalEngineRequest(new Request("http://127.0.0.1:38771/api/local/broker/account-preference", {
         method: "PUT",
@@ -1745,10 +1888,9 @@ test("local engine saves explicit Toss automation account preference", async () 
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ enabled: true }),
     }));
-    assert.equal(response.status, 501);
+    assert.equal(response.status, 423);
     const payload = await response.json() as { error?: string; orderSubmissionAttempted?: boolean };
-    assert.match(payload.error ?? "", /1\.0\.0.*실거래/);
-    assert.equal(payload.orderSubmissionAttempted, false);
+    assert.match(payload.error ?? "", /QA 승인/);
   } finally {
     if (previousLiveTrading === undefined) {
       delete process.env.ENABLE_LIVE_TRADING;
