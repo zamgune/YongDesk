@@ -15,7 +15,8 @@ struct BeginnerFirstRootView: View {
     @State private var isLoading = false
     @State private var showingOrderDrawer = false
     @State private var activeSheet: BeginnerSettingsSheet?
-    @State private var showingConnectionChooser = false
+    @State private var selectedConnectionProvider: BeginnerAPIConnectionProvider = .toss
+    @State private var workspaceRevision = UUID()
     @State private var analysisGeneration = 0
 
     private var destination: BeginnerDestination {
@@ -78,6 +79,7 @@ struct BeginnerFirstRootView: View {
                         )
 
                         workspace(compact: proxy.size.width < 1_230)
+                            .id(workspaceRevision)
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                     }
                 }
@@ -110,7 +112,10 @@ struct BeginnerFirstRootView: View {
                     BeginnerOnboardingView(
                         isLoading: isLoading,
                         onStartExample: { Task { await startExample() } },
-                        onConnectAPI: { showingConnectionChooser = true },
+                        onConnectAPI: {
+                            model.completeOnboarding()
+                            openConnectionManagement(provider: .toss)
+                        },
                         onSkip: {
                             model.completeOnboarding()
                             destination = .chart
@@ -128,17 +133,6 @@ struct BeginnerFirstRootView: View {
         .foregroundStyle(BeginnerPalette.text)
         .sheet(item: $activeSheet) { sheet in
             sheetContent(sheet)
-        }
-        .confirmationDialog(
-            "연결할 API 선택",
-            isPresented: $showingConnectionChooser,
-            titleVisibility: .visible
-        ) {
-            Button("Toss 주식 API") { activeSheet = .toss }
-            Button("Upbit·Bithumb 코인 API") { activeSheet = .crypto }
-            Button("취소", role: .cancel) {}
-        } message: {
-            Text("API 연결은 선택 사항입니다. 연결하지 않아도 예제 분석과 paper 기능을 둘러볼 수 있습니다.")
         }
         .task(id: model.health?.ok == true) {
             guard model.settings.hasCompletedOnboarding,
@@ -177,7 +171,9 @@ struct BeginnerFirstRootView: View {
                 selectedSymbol: selectedSymbol,
                 selectedSession: selectedSession,
                 assetClass: assetClass,
-                onOpenCryptoSettings: { activeSheet = .crypto },
+                onOpenAPIConnection: { provider in
+                    openConnectionManagement(provider: provider)
+                },
                 onOpenOrder: { showingOrderDrawer = true }
             )
         case .strategy:
@@ -203,9 +199,8 @@ struct BeginnerFirstRootView: View {
             )
         case .settings:
             BeginnerSettingsWorkspace(
-                selectedSymbol: selectedSymbol,
                 onOpen: { activeSheet = $0 },
-                onShowConnectionChooser: { showingConnectionChooser = true }
+                selectedConnectionProvider: $selectedConnectionProvider
             )
         }
     }
@@ -213,12 +208,6 @@ struct BeginnerFirstRootView: View {
     @ViewBuilder
     private func sheetContent(_ sheet: BeginnerSettingsSheet) -> some View {
         switch sheet {
-        case .toss:
-            TossCredentialSheet()
-                .environmentObject(model)
-        case .crypto:
-            CryptoExchangeSheet()
-                .environmentObject(model)
         case .strategy:
             StrategySettingsSheet(selectedSymbol: selectedSymbol, selectedSession: selectedSession)
                 .environmentObject(model)
@@ -244,6 +233,12 @@ struct BeginnerFirstRootView: View {
 
     private func selectDestination(_ next: BeginnerDestination) {
         destination = next
+        workspaceRevision = UUID()
+    }
+
+    private func openConnectionManagement(provider: BeginnerAPIConnectionProvider) {
+        selectedConnectionProvider = provider
+        selectDestination(.settings)
     }
 
     private func changeAssetClass(_ next: BeginnerAssetClass) {
@@ -337,6 +332,8 @@ private struct BeginnerSidebar: View {
     @Binding var destination: BeginnerDestination
     let compact: Bool
 
+    @State private var hoveredDestination: BeginnerDestination?
+
     private let primaryDestinations: [BeginnerDestination] = [.chart, .assets, .strategy, .automation]
 
     var body: some View {
@@ -413,14 +410,24 @@ private struct BeginnerSidebar: View {
             }
             .foregroundStyle(destination == item ? BeginnerPalette.green : BeginnerPalette.muted)
             .padding(.horizontal, compact ? 10 : 12)
-            .frame(maxWidth: .infinity, minHeight: 42, alignment: compact ? .center : .leading)
-            .background(destination == item ? BeginnerPalette.green.opacity(0.12) : Color.clear, in: RoundedRectangle(cornerRadius: 10))
+            .frame(maxWidth: .infinity, minHeight: 44, alignment: compact ? .center : .leading)
+            .background(
+                destination == item
+                    ? BeginnerPalette.green.opacity(0.12)
+                    : hoveredDestination == item ? BeginnerPalette.surfaceSoft.opacity(0.65) : Color.clear,
+                in: RoundedRectangle(cornerRadius: 10)
+            )
             .overlay {
                 RoundedRectangle(cornerRadius: 10)
                     .stroke(destination == item ? BeginnerPalette.green.opacity(0.28) : Color.clear)
             }
         }
         .buttonStyle(.plain)
+        .contentShape(RoundedRectangle(cornerRadius: 10))
+        .onHover { isHovering in
+            hoveredDestination = isHovering ? item : nil
+        }
+        .focusable()
         .accessibilityLabel(item.title)
         .accessibilityValue(destination == item ? "선택됨" : "선택 안 됨")
         .accessibilityAddTraits(destination == item ? .isSelected : [])

@@ -42,6 +42,38 @@ func verifyOneYearChartCandleRetentionContract() throws {
 
 try verifyOneYearChartCandleRetentionContract()
 
+func verifyBeginnerNavigationAndConnectionWorkspaceSource() throws {
+    let packageURL = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+    let rootView = try String(
+        contentsOf: packageURL.appending(path: "Sources/StockAnalysisMac/BeginnerFirst/BeginnerFirstRootView.swift"),
+        encoding: .utf8
+    )
+    let supportWorkspace = try String(
+        contentsOf: packageURL.appending(path: "Sources/StockAnalysisMac/BeginnerFirst/BeginnerSupportWorkspaces.swift"),
+        encoding: .utf8
+    )
+    let models = try String(
+        contentsOf: packageURL.appending(path: "Sources/StockAnalysisMac/BeginnerFirst/BeginnerFirstModels.swift"),
+        encoding: .utf8
+    )
+
+    assert(!rootView.contains("showingConnectionChooser"), "beginner flow should not reopen the API chooser dialog")
+    assert(rootView.contains("selectedConnectionProvider"), "beginner flow should retain the selected inline API provider")
+    assert(rootView.contains("openConnectionManagement(provider:"), "onboarding and asset CTAs should route to inline connection management")
+    assert(rootView.contains("minHeight: 44"), "sidebar tabs should expose a 44pt hit target")
+    assert(rootView.contains(".contentShape(RoundedRectangle"), "sidebar tabs should use their full rounded hit area")
+    assert(rootView.contains(".focusable()"), "sidebar tabs should remain keyboard focusable")
+    assert(supportWorkspace.contains("BeginnerAPIConnectionWorkspace"), "settings should embed inline API connection management")
+    assert(models.contains("beginner-api-provider-"), "connection providers should have stable accessibility identifiers")
+    assert(supportWorkspace.contains("DisclosureGroup(isExpanded: $showingAdvanced)"), "advanced diagnostics should stay collapsed until requested")
+    assert(supportWorkspace.contains("TossOperationReport.make"), "Toss operational reports should remain available in advanced diagnostics")
+}
+
+try verifyBeginnerNavigationAndConnectionWorkspaceSource()
+
 struct MockHTTPResponse {
     let statusCode: Int
     let body: String

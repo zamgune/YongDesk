@@ -5,7 +5,7 @@
 ## 아키텍처
 
 - SwiftUI가 메인 대시보드, 설정 시트, 메뉴바, 알림, Keychain과 App Support 상태를 담당한다.
-- 기본 창은 `BeginnerFirstRootView`이며 차트·내 자산·전략·자동화·설정 workspace를 분리한다. 기존 자동매매 설정 시트와 동작은 그대로 재사용한다.
+- 기본 창은 `BeginnerFirstRootView`이며 차트·내 자산·전략·자동화·설정 workspace를 분리한다. API credential은 설정 workspace의 인라인 연결 관리에서 등록하고, 전략·점검·배포·로그 시트는 그대로 재사용한다.
 - 앱은 번들된 TypeScript sidecar를 `127.0.0.1`의 임의 포트에서 자동 시작한다.
 - sidecar는 `src/domain`, `src/use-cases`, `src/ports`와 `src/adapters`의 기존 분석·자동화·브로커 코드를 재사용한다.
 - 앱은 `STOCK_ANALYSIS_STORAGE_ROOT`를 `~/Library/Application Support/com.stockanalysis.mac/sidecar`로 설정한다.
@@ -56,7 +56,7 @@ curl http://127.0.0.1:38771/health
 
 ### 시작과 상태
 
-- 첫 설치에서는 시작 안내가 자동으로 열리고 `삼성전자 예제 분석 시작`, `내 API 연결하기`, `나중에 연결` 중 필요한 경로를 선택한다.
+- 첫 설치에서는 시작 안내가 자동으로 열리고 `삼성전자 예제 분석 시작`, `내 API 연결하기`, `나중에 연결` 중 필요한 경로를 선택한다. API 연결은 별도 팝업이 아니라 설정 workspace의 Toss·Upbit·Bithumb 인라인 연결 관리로 이동한다.
 - credential은 선택 사항이다. API 키 없이도 삼성전자 Yahoo fallback 분석, Upbit 공개 분석, 공식/RSS 뉴스와 모의투자를 사용할 수 있다.
 - Finder/Dock 실행 시 번들 sidecar를 우선 사용한다.
 - 번들 경로가 없으면 빌드 시 저장한 저장소 경로와 사용자가 저장한 sidecar 경로를 순서대로 확인한다.

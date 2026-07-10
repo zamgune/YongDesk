@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 import StockAnalysisMacCore
 
@@ -6,7 +7,7 @@ struct BeginnerAssetsWorkspace: View {
     let selectedSymbol: String
     let selectedSession: String
     let assetClass: BeginnerAssetClass
-    let onOpenCryptoSettings: () -> Void
+    let onOpenAPIConnection: (BeginnerAPIConnectionProvider) -> Void
     let onOpenOrder: () -> Void
 
     private var selectedAccount: PaperTradingAccountView? {
@@ -89,7 +90,9 @@ struct BeginnerAssetsWorkspace: View {
                                             .font(.caption.weight(.semibold))
                                             .foregroundStyle(BeginnerPalette.amber)
                                             .multilineTextAlignment(.center)
-                                        Button("코인 계좌 API 연결·확인", action: onOpenCryptoSettings)
+                                        Button("코인 계좌 API 연결·확인") {
+                                            onOpenAPIConnection(.upbit)
+                                        }
                                             .buttonStyle(.bordered)
                                             .accessibilityIdentifier("beginner-assets-open-crypto-settings")
                                     }
@@ -660,9 +663,8 @@ struct BeginnerAutomationWorkspace: View {
 
 struct BeginnerSettingsWorkspace: View {
     @EnvironmentObject private var model: AppModel
-    let selectedSymbol: String
     let onOpen: (BeginnerSettingsSheet) -> Void
-    let onShowConnectionChooser: () -> Void
+    @Binding var selectedConnectionProvider: BeginnerAPIConnectionProvider
 
     var body: some View {
         ScrollView {
@@ -670,20 +672,14 @@ struct BeginnerSettingsWorkspace: View {
                 VStack(alignment: .leading, spacing: 5) {
                     Text("설정")
                         .font(.system(size: 26, weight: .bold))
-                    Text("연결, 엔진, 점검과 배포 도구는 일상 분석 화면에서 분리했습니다.")
+                    Text("연결 관리는 이 화면에서 처리하고, 엔진·점검·배포 도구는 일상 분석 화면에서 분리했습니다.")
                         .font(.caption)
                         .foregroundStyle(BeginnerPalette.muted)
                 }
 
+                BeginnerAPIConnectionWorkspace(selectedProvider: $selectedConnectionProvider)
+
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 300), spacing: 12)], spacing: 12) {
-                    settingsCard(
-                        icon: "link",
-                        title: "데이터·계좌 API",
-                        detail: "Toss와 Upbit·Bithumb 연결은 선택 사항입니다. 조회와 사전검증부터 확인합니다.",
-                        actionTitle: "API 연결 관리",
-                        identifier: "beginner-settings-api",
-                        action: onShowConnectionChooser
-                    )
                     settingsCard(
                         icon: "waveform.path.ecg",
                         title: "로컬 엔진",
@@ -797,6 +793,461 @@ struct BeginnerSettingsWorkspace: View {
             }
             .frame(minHeight: 140, alignment: .topLeading)
         }
+    }
+}
+
+private struct BeginnerAPIConnectionWorkspace: View {
+    @EnvironmentObject private var model: AppModel
+    @Binding var selectedProvider: BeginnerAPIConnectionProvider
+
+    @State private var identifier = ""
+    @State private var secret = ""
+    @State private var isSaving = false
+    @State private var isRefreshing = false
+    @State private var isRunningAdvancedCheck = false
+    @State private var selectedAccountSeq: Int?
+    @State private var showingAdvanced = false
+    @State private var showingDeleteConfirmation = false
+    @State private var copiedOperationReport = false
+    @State private var cryptoMarket = "KRW-BTC"
+    @State private var cryptoSide = "buy"
+    @State private var cryptoVolume = "0.001"
+    @State private var cryptoPrice = "100000000"
+
+    private var credential: BrokerCredentialView? {
+        if selectedProvider == .toss {
+            return model.brokerCredential
+        }
+        return model.cryptoExchanges.first { $0.exchange == selectedProvider.rawValue }?.credential
+    }
+
+    private var isVerified: Bool {
+        credential?.status == "verified"
+    }
+
+    private var statusText: String {
+        switch credential?.status {
+        case "verified": return "연결됨"
+        case "pending": return "검증 대기"
+        case "failed": return "검증 실패"
+        case .some(let status): return status
+        case .none: return "미등록"
+        }
+    }
+
+    private var statusColor: Color {
+        switch credential?.status {
+        case "verified": return BeginnerPalette.green
+        case "failed": return BeginnerPalette.red
+        case "pending": return BeginnerPalette.amber
+        default: return BeginnerPalette.muted
+        }
+    }
+
+    private var statusMessage: String {
+        selectedProvider == .toss ? model.brokerCredentialMessage : model.cryptoExchangeMessage
+    }
+
+    private var canSave: Bool {
+        model.health?.ok == true &&
+            !isSaving &&
+            !identifier.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
+            !secret.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    var body: some View {
+        BeginnerSurface {
+            VStack(alignment: .leading, spacing: 16) {
+                HStack(alignment: .top, spacing: 14) {
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text("연결 관리")
+                            .font(.title3.weight(.bold))
+                        Text("키 등록 전에는 연결에 필요한 정보만 표시합니다. 계좌·진단·사전검증은 검증된 연결에서만 확인하세요.")
+                            .font(.caption)
+                            .foregroundStyle(BeginnerPalette.muted)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    Spacer()
+                    BeginnerStatusBadge("PAPER ONLY", color: BeginnerPalette.green)
+                }
+
+                HStack(spacing: 8) {
+                    ForEach(BeginnerAPIConnectionProvider.allCases) { provider in
+                        providerButton(provider)
+                    }
+                }
+
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack(alignment: .top, spacing: 10) {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(selectedProvider.title)
+                                .font(.headline)
+                            Text(selectedProvider.detail)
+                                .font(.caption)
+                                .foregroundStyle(BeginnerPalette.muted)
+                        }
+                        Spacer()
+                        BeginnerStatusBadge(statusText, color: statusColor)
+                    }
+
+                    HStack(spacing: 10) {
+                        VStack(alignment: .leading, spacing: 5) {
+                            Text(selectedProvider.identifierLabel)
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(BeginnerPalette.muted)
+                            TextField("\(selectedProvider.identifierLabel) 입력", text: $identifier)
+                                .textFieldStyle(.roundedBorder)
+                                .accessibilityIdentifier("beginner-api-identifier")
+                        }
+                        VStack(alignment: .leading, spacing: 5) {
+                            Text(selectedProvider.secretLabel)
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(BeginnerPalette.muted)
+                            SecureField("\(selectedProvider.secretLabel) 입력", text: $secret)
+                                .textFieldStyle(.roundedBorder)
+                                .accessibilityIdentifier("beginner-api-secret")
+                        }
+                    }
+
+                    HStack(spacing: 8) {
+                        Button(isSaving ? "검증 중" : "검증 후 저장") {
+                            Task { await saveCredential() }
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .tint(BeginnerPalette.green)
+                        .foregroundStyle(BeginnerPalette.backgroundDeep)
+                        .disabled(!canSave)
+                        .accessibilityIdentifier("beginner-api-save")
+
+                        Button("입력 지우기") {
+                            identifier = ""
+                            secret = ""
+                        }
+                        .buttonStyle(.bordered)
+
+                        if isVerified {
+                            Button(isRefreshing ? "상태 확인 중" : "상태 새로고침") {
+                                Task { await refreshProviderState() }
+                            }
+                            .buttonStyle(.bordered)
+                            .disabled(isRefreshing)
+                        }
+                    }
+
+                    Text(statusMessage)
+                        .font(.caption2)
+                        .foregroundStyle(statusColor)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .padding(14)
+                .background(BeginnerPalette.backgroundDeep.opacity(0.42), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .stroke(BeginnerPalette.line)
+                }
+
+                Text("API 연결은 선택 사항입니다. 이 버전에서는 연결·조회·사전검증만 제공하며 실제 주문은 계속 차단됩니다.")
+                    .font(.caption)
+                    .foregroundStyle(BeginnerPalette.amber)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(11)
+                    .background(BeginnerPalette.amber.opacity(0.10), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+
+                DisclosureGroup(isExpanded: $showingAdvanced) {
+                    if isVerified {
+                        advancedContent
+                            .padding(.top, 8)
+                    } else {
+                        Text("검증이 완료되면 계좌 선택, 허용 IP·진단, 주문 사전검증과 운영 리포트를 필요한 때만 확인할 수 있습니다.")
+                            .font(.caption)
+                            .foregroundStyle(BeginnerPalette.muted)
+                            .padding(.top, 8)
+                    }
+                } label: {
+                    HStack {
+                        Text("고급 점검")
+                            .font(.subheadline.weight(.semibold))
+                        Spacer()
+                        Text(isVerified ? "필요할 때 열기" : "연결 후 사용 가능")
+                            .font(.caption2)
+                            .foregroundStyle(BeginnerPalette.muted)
+                    }
+                }
+                .padding(12)
+                .background(BeginnerPalette.backgroundDeep.opacity(0.30), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .stroke(BeginnerPalette.line)
+                }
+            }
+        }
+        .task(id: selectedProvider) {
+            identifier = ""
+            secret = ""
+            showingAdvanced = false
+            await refreshProviderState()
+        }
+        .confirmationDialog(
+            "\(selectedProvider.shortTitle) API 키 삭제",
+            isPresented: $showingDeleteConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("API 키 삭제", role: .destructive) {
+                Task { await deleteCredential() }
+            }
+            Button("취소", role: .cancel) {}
+        } message: {
+            Text("sidecar 저장소와 macOS Keychain에서 credential을 삭제합니다. 실제 주문은 이 작업 전후에도 차단된 상태입니다.")
+        }
+        .accessibilityIdentifier("beginner-api-connection-workspace")
+    }
+
+    @ViewBuilder
+    private var advancedContent: some View {
+        if selectedProvider == .toss {
+            tossAdvancedContent
+        } else {
+            cryptoAdvancedContent
+        }
+    }
+
+    private var tossAdvancedContent: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 8) {
+                Button(isRunningAdvancedCheck ? "점검 중" : "운영 준비 점검") {
+                    Task {
+                        isRunningAdvancedCheck = true
+                        await model.runTossReadiness()
+                        isRunningAdvancedCheck = false
+                    }
+                }
+                .buttonStyle(.bordered)
+                .disabled(isRunningAdvancedCheck)
+
+                Button("허용 IP·진단") {
+                    Task { await model.refreshBrokerDiagnostics(includePublicIP: true) }
+                }
+                .buttonStyle(.bordered)
+
+                Button(copiedOperationReport ? "리포트 복사됨" : "운영 리포트 복사") {
+                    copyOperationReport()
+                }
+                .buttonStyle(.bordered)
+
+                Spacer()
+                Button("API 키 삭제", role: .destructive) {
+                    showingDeleteConfirmation = true
+                }
+                .buttonStyle(.bordered)
+            }
+
+            Text(model.tossReadinessMessage)
+                .font(.caption2)
+                .foregroundStyle(BeginnerPalette.muted)
+                .fixedSize(horizontal: false, vertical: true)
+            Text(model.brokerDiagnosticsMessage)
+                .font(.caption2)
+                .foregroundStyle(BeginnerPalette.muted)
+                .fixedSize(horizontal: false, vertical: true)
+
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Text("자동화 계좌")
+                        .font(.caption.weight(.semibold))
+                    Spacer()
+                    Button("계좌 새로고침") {
+                        Task { await model.refreshBrokerAccounts() }
+                    }
+                    .buttonStyle(.borderless)
+                }
+                if model.brokerAccounts.isEmpty {
+                    Text(model.brokerAccountMessage)
+                        .font(.caption2)
+                        .foregroundStyle(BeginnerPalette.muted)
+                } else {
+                    ForEach(model.brokerAccounts) { account in
+                        let selected = model.brokerAccountPreference?.accountSeq == account.accountSeq
+                        HStack {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(account.accountNo)
+                                    .font(.caption.monospaced())
+                                Text(account.accountType)
+                                    .font(.caption2)
+                                    .foregroundStyle(BeginnerPalette.muted)
+                            }
+                            Spacer()
+                            Button(selectedAccountSeq == account.accountSeq ? "선택 중" : selected ? "선택됨" : "이 계좌 사용") {
+                                Task {
+                                    selectedAccountSeq = account.accountSeq
+                                    await model.selectBrokerAccount(account)
+                                    selectedAccountSeq = nil
+                                }
+                            }
+                            .buttonStyle(.bordered)
+                            .disabled(selected || selectedAccountSeq != nil || account.accountType != "BROKERAGE")
+                        }
+                    }
+                }
+            }
+            .padding(10)
+            .background(BeginnerPalette.surfaceRaised.opacity(0.42), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+        }
+    }
+
+    private var cryptoAdvancedContent: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 8) {
+                TextField("마켓", text: $cryptoMarket)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 130)
+                Picker("방향", selection: $cryptoSide) {
+                    Text("매수").tag("buy")
+                    Text("매도").tag("sell")
+                }
+                .frame(width: 100)
+                Button(isRunningAdvancedCheck ? "점검 중" : "계좌·주문가능 점검") {
+                    Task {
+                        isRunningAdvancedCheck = true
+                        await model.runCryptoReadiness(exchange: selectedProvider.rawValue, market: cryptoMarket.uppercased())
+                        isRunningAdvancedCheck = false
+                    }
+                }
+                .buttonStyle(.bordered)
+                .disabled(isRunningAdvancedCheck)
+                Spacer()
+                Button("API 키 삭제", role: .destructive) {
+                    showingDeleteConfirmation = true
+                }
+                .buttonStyle(.bordered)
+            }
+
+            HStack(spacing: 8) {
+                TextField("수량", text: $cryptoVolume)
+                    .textFieldStyle(.roundedBorder)
+                TextField("지정가", text: $cryptoPrice)
+                    .textFieldStyle(.roundedBorder)
+                Button("주문 사전검증") {
+                    Task {
+                        isRunningAdvancedCheck = true
+                        await model.runCryptoOrderPrecheck(
+                            exchange: selectedProvider.rawValue,
+                            market: cryptoMarket.uppercased(),
+                            side: cryptoSide,
+                            volume: Double(cryptoVolume) ?? 0,
+                            price: Double(cryptoPrice) ?? 0
+                        )
+                        isRunningAdvancedCheck = false
+                    }
+                }
+                .buttonStyle(.bordered)
+                .disabled(isRunningAdvancedCheck || (Double(cryptoVolume) ?? 0) <= 0 || (Double(cryptoPrice) ?? 0) <= 0)
+            }
+
+            Text(model.cryptoExchangeMessage)
+                .font(.caption2)
+                .foregroundStyle(BeginnerPalette.muted)
+                .fixedSize(horizontal: false, vertical: true)
+
+            if let readiness = model.cryptoReadiness,
+               readiness.exchange == selectedProvider.rawValue,
+               readiness.market == cryptoMarket.uppercased() {
+                Text(readiness.message)
+                    .font(.caption2)
+                    .foregroundStyle(readiness.ready ? BeginnerPalette.green : BeginnerPalette.amber)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            if let precheck = model.cryptoOrderPrecheck,
+               precheck.exchange == selectedProvider.rawValue,
+               precheck.market == cryptoMarket.uppercased() {
+                let precheckMessage = precheck.blockers.first ?? "조건을 확인하세요."
+                Text(precheck.passed ? "사전검증 통과 · 주문 제출 없음" : "사전검증 차단 · \(precheckMessage)")
+                    .font(.caption2)
+                    .foregroundStyle(precheck.passed ? BeginnerPalette.green : BeginnerPalette.amber)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    private func providerButton(_ provider: BeginnerAPIConnectionProvider) -> some View {
+        Button {
+            selectedProvider = provider
+        } label: {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(provider.shortTitle)
+                    .font(.caption.weight(.semibold))
+                Text(provider.detail)
+                    .font(.caption2)
+                    .foregroundStyle(selectedProvider == provider ? BeginnerPalette.text.opacity(0.78) : BeginnerPalette.muted)
+                    .lineLimit(2)
+            }
+            .frame(maxWidth: .infinity, minHeight: 54, alignment: .leading)
+            .padding(.horizontal, 10)
+            .background(selectedProvider == provider ? BeginnerPalette.blue.opacity(0.14) : Color.clear, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .stroke(selectedProvider == provider ? BeginnerPalette.blue.opacity(0.55) : BeginnerPalette.line)
+            }
+        }
+        .buttonStyle(.plain)
+        .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .accessibilityIdentifier(provider.accessibilityIdentifier)
+        .accessibilityValue(selectedProvider == provider ? "선택됨" : "선택 안 됨")
+        .accessibilityAddTraits(selectedProvider == provider ? .isSelected : [])
+    }
+
+    private func saveCredential() async {
+        isSaving = true
+        defer { isSaving = false }
+        if selectedProvider == .toss {
+            await model.registerBrokerCredential(clientId: identifier, clientSecret: secret)
+        } else {
+            await model.registerCryptoCredential(exchange: selectedProvider.rawValue, accessKey: identifier, secretKey: secret)
+        }
+        secret = ""
+        await refreshProviderState()
+        showingAdvanced = isVerified
+    }
+
+    private func refreshProviderState() async {
+        isRefreshing = true
+        defer { isRefreshing = false }
+        guard model.health?.ok == true else { return }
+        if selectedProvider == .toss {
+            model.refreshKeychainCredentialStatus()
+            await model.refreshBrokerCredential()
+        } else {
+            await model.refreshCryptoExchanges()
+        }
+    }
+
+    private func deleteCredential() async {
+        if selectedProvider == .toss {
+            await model.deleteBrokerCredential()
+        } else {
+            await model.deleteCryptoCredential(exchange: selectedProvider.rawValue)
+        }
+        identifier = ""
+        secret = ""
+        showingAdvanced = false
+    }
+
+    private func copyOperationReport() {
+        let report = TossOperationReport.make(from: TossOperationReportInput(
+            sidecarOK: model.health?.ok == true,
+            credential: model.brokerCredential,
+            keychainCredentialStored: model.keychainCredentialStored,
+            accountPreference: model.brokerAccountPreference,
+            accountCount: model.brokerAccounts.count,
+            diagnostics: model.brokerDiagnostics,
+            localLiveTrading: model.localLiveTrading,
+            killSwitchEngaged: model.killSwitchEngaged,
+            workerPaused: model.workerPausedEffective,
+            liveTradingOperatorEnabled: model.settings.liveTradingOperatorEnabled
+        ))
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(report, forType: .string)
+        copiedOperationReport = true
     }
 }
 

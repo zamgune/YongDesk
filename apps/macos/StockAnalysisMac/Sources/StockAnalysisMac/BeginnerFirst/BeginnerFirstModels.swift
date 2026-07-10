@@ -36,6 +36,51 @@ enum BeginnerDestination: String, CaseIterable, Identifiable {
     }
 }
 
+enum BeginnerAPIConnectionProvider: String, CaseIterable, Identifiable {
+    case toss
+    case upbit
+    case bithumb
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .toss: return "Toss 주식 API"
+        case .upbit: return "Upbit API"
+        case .bithumb: return "Bithumb API"
+        }
+    }
+
+    var shortTitle: String {
+        switch self {
+        case .toss: return "Toss 주식"
+        case .upbit: return "Upbit"
+        case .bithumb: return "Bithumb"
+        }
+    }
+
+    var detail: String {
+        switch self {
+        case .toss:
+            return "계좌·보유·미체결 조회와 paper 자동화 사전검증"
+        case .upbit, .bithumb:
+            return "코인 잔고·주문 가능 정보와 paper 자동화 사전검증"
+        }
+    }
+
+    var identifierLabel: String {
+        self == .toss ? "Client ID" : "Access Key"
+    }
+
+    var secretLabel: String {
+        self == .toss ? "Client Secret" : "Secret Key"
+    }
+
+    var accessibilityIdentifier: String {
+        "beginner-api-provider-\(rawValue)"
+    }
+}
+
 enum BeginnerAssetClass: String, CaseIterable, Identifiable {
     case stock
     case crypto
@@ -120,8 +165,6 @@ enum BeginnerTradeHorizon: String, CaseIterable, Identifiable {
 }
 
 enum BeginnerSettingsSheet: Identifiable {
-    case toss
-    case crypto
     case strategy
     case selfTest
     case distribution
@@ -129,8 +172,6 @@ enum BeginnerSettingsSheet: Identifiable {
 
     var id: String {
         switch self {
-        case .toss: return "toss"
-        case .crypto: return "crypto"
         case .strategy: return "strategy"
         case .selfTest: return "self-test"
         case .distribution: return "distribution"

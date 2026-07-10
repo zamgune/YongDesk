@@ -1,0 +1,274 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="icon" href="data:,">
+  <title>YongStockDesk · API 연결 워크스페이스 시안</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0c1117;
+      --bg-deep: #080c11;
+      --panel: #111923;
+      --panel-soft: #151f2b;
+      --line: rgba(183, 204, 224, .13);
+      --line-strong: rgba(183, 204, 224, .22);
+      --text: #edf4fa;
+      --muted: #9aaaba;
+      --faint: #66788b;
+      --green: #49d9b0;
+      --green-soft: rgba(73, 217, 176, .12);
+      --amber: #f4ba70;
+      --amber-soft: rgba(244, 186, 112, .12);
+      --red: #ff8189;
+      --red-soft: rgba(255, 129, 137, .12);
+      --blue: #87bdfd;
+      --blue-soft: rgba(135, 189, 253, .12);
+      --sidebar: 218px;
+      --radius: 15px;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 720px; background: var(--bg-deep); color: var(--text); }
+    button, input { font: inherit; }
+    button { cursor: pointer; }
+    button:focus-visible, input:focus-visible, summary:focus-visible { outline: 2px solid var(--blue); outline-offset: 3px; }
+
+    .app { min-height: 100vh; display: grid; grid-template-columns: var(--sidebar) minmax(0, 1fr); background: radial-gradient(circle at 74% -10%, rgba(73,217,176,.075), transparent 34%), var(--bg); }
+    .sidebar { position: sticky; top: 0; height: 100vh; padding: 20px 13px 14px; display: flex; flex-direction: column; gap: 22px; border-right: 1px solid var(--line); background: rgba(8,12,17,.96); }
+    .brand { display: flex; align-items: center; gap: 10px; padding: 0 7px; }
+    .brand-mark { width: 34px; height: 34px; display: grid; place-items: center; border: 1px solid rgba(73,217,176,.35); border-radius: 11px; color: var(--green); background: var(--green-soft); font-size: 13px; font-weight: 900; letter-spacing: -.04em; }
+    .brand strong, .brand span { display: block; }
+    .brand strong { font-size: 14px; }
+    .brand span { margin-top: 2px; color: var(--muted); font-size: 10px; }
+    .nav-label { margin: 0 8px 5px; color: var(--faint); font-size: 10px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
+    .nav-group { display: grid; gap: 6px; }
+    .nav-button { width: 100%; min-height: 44px; display: flex; align-items: center; gap: 10px; padding: 9px 11px; border: 1px solid transparent; border-radius: 11px; color: var(--muted); background: transparent; text-align: left; font-size: 13px; font-weight: 720; transition: background .15s ease, color .15s ease, border-color .15s ease; }
+    .nav-button:hover { color: var(--text); background: rgba(255,255,255,.04); }
+    .nav-button[aria-current="page"] { border-color: rgba(73,217,176,.28); color: var(--text); background: var(--green-soft); }
+    .nav-icon { width: 25px; height: 25px; display: grid; flex: 0 0 25px; place-items: center; border: 1px solid var(--line); border-radius: 8px; color: var(--faint); font-size: 11px; font-weight: 900; }
+    .nav-button[aria-current="page"] .nav-icon { border-color: rgba(73,217,176,.34); color: var(--green); background: rgba(73,217,176,.07); }
+    .nav-tag { margin-left: auto; color: var(--faint); font-size: 9px; font-weight: 800; }
+    .side-bottom { margin-top: auto; display: grid; gap: 10px; }
+    .paper-note { padding: 11px; border: 1px solid var(--line); border-radius: 11px; color: var(--muted); background: rgba(255,255,255,.018); font-size: 10px; line-height: 1.48; }
+    .paper-note strong { display: block; margin-bottom: 3px; color: var(--green); font-size: 10px; letter-spacing: .07em; }
+
+    main { min-width: 0; }
+    .topbar { min-height: 64px; display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 12px 24px; border-bottom: 1px solid var(--line); background: rgba(12,17,23,.8); }
+    .crumb { color: var(--muted); font-size: 12px; }
+    .crumb strong { color: var(--text); }
+    .top-status { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 11px; }
+    .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--green); box-shadow: 0 0 0 4px rgba(73,217,176,.09); }
+    .page { display: none; max-width: 1320px; margin: 0 auto; padding: 27px 30px 46px; }
+    .page.active { display: block; }
+    .page:focus { outline: none; }
+    .eyebrow { margin: 0 0 6px; color: var(--green); font-size: 10px; font-weight: 850; letter-spacing: .11em; text-transform: uppercase; }
+    h1 { margin: 0; font-size: clamp(25px, 2.4vw, 32px); letter-spacing: -.04em; }
+    h2 { margin: 0; font-size: 16px; letter-spacing: -.025em; }
+    .lead { max-width: 700px; margin: 9px 0 0; color: var(--muted); font-size: 13px; line-height: 1.62; }
+    .page-head { display: flex; align-items: end; justify-content: space-between; gap: 24px; margin-bottom: 22px; }
+    .button { min-height: 38px; padding: 8px 12px; border: 1px solid var(--line-strong); border-radius: 9px; color: var(--text); background: var(--panel-soft); font-size: 12px; font-weight: 750; }
+    .button:hover { border-color: rgba(73,217,176,.4); background: rgba(73,217,176,.08); }
+    .button.primary { border-color: rgba(73,217,176,.42); color: #082018; background: var(--green); }
+    .button.primary:hover { background: #69e3c0; }
+    .button.subtle { color: var(--muted); background: transparent; }
+    .button.danger { border-color: rgba(255,129,137,.4); color: #ffd6d9; background: var(--red-soft); }
+    .panel { border: 1px solid var(--line); border-radius: var(--radius); background: linear-gradient(145deg, rgba(21,31,43,.94), rgba(15,23,32,.94)); }
+    .panel-pad { padding: 18px; }
+    .stat-grid, .content-grid { display: grid; gap: 13px; }
+    .stat-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .stat { padding: 15px; }
+    .stat span, .label { display: block; color: var(--faint); font-size: 10px; font-weight: 800; letter-spacing: .065em; text-transform: uppercase; }
+    .stat strong { display: block; margin-top: 7px; color: var(--text); font-size: 18px; }
+    .stat small { display: block; margin-top: 5px; color: var(--muted); font-size: 11px; }
+    .content-grid.two { grid-template-columns: minmax(0, 1.5fr) minmax(290px, .9fr); }
+    .content-grid.cards { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .section-title { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 13px; }
+    .section-title p { margin: 3px 0 0; color: var(--muted); font-size: 11px; }
+    .chart { position: relative; height: 248px; overflow: hidden; border: 1px solid var(--line); border-radius: 11px; background: linear-gradient(180deg, rgba(135,189,253,.055), transparent 70%), repeating-linear-gradient(0deg, transparent 0 48px, rgba(183,204,224,.06) 49px 50px), repeating-linear-gradient(90deg, transparent 0 74px, rgba(183,204,224,.05) 75px 76px); }
+    .chart svg { width: 100%; height: 100%; }
+    .list { display: grid; gap: 8px; }
+    .list-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 11px 0; border-bottom: 1px solid var(--line); }
+    .list-row:last-child { border-bottom: 0; }
+    .list-row strong { font-size: 12px; }
+    .list-row span { color: var(--muted); font-size: 11px; }
+    .badge { display: inline-flex; align-items: center; min-height: 22px; padding: 3px 8px; border: 1px solid var(--line); border-radius: 99px; color: var(--muted); font-size: 10px; font-weight: 800; white-space: nowrap; }
+    .badge.green { border-color: rgba(73,217,176,.3); color: var(--green); background: var(--green-soft); }
+    .badge.amber { border-color: rgba(244,186,112,.32); color: var(--amber); background: var(--amber-soft); }
+    .badge.red { border-color: rgba(255,129,137,.3); color: var(--red); background: var(--red-soft); }
+    .badge.blue { border-color: rgba(135,189,253,.3); color: var(--blue); background: var(--blue-soft); }
+    .empty { padding: 30px 18px; color: var(--muted); font-size: 12px; text-align: center; }
+
+    .connection-layout { display: grid; grid-template-columns: minmax(220px, .38fr) minmax(0, 1fr); gap: 15px; }
+    .provider-list { display: grid; align-content: start; gap: 8px; padding: 10px; }
+    .provider { width: 100%; min-height: 68px; display: flex; align-items: center; gap: 10px; padding: 10px; border: 1px solid transparent; border-radius: 11px; color: var(--muted); background: transparent; text-align: left; }
+    .provider:hover { color: var(--text); background: rgba(255,255,255,.035); }
+    .provider[aria-pressed="true"] { border-color: rgba(135,189,253,.3); color: var(--text); background: var(--blue-soft); }
+    .provider-logo { width: 32px; height: 32px; display: grid; flex: 0 0 32px; place-items: center; border: 1px solid var(--line); border-radius: 10px; color: var(--blue); background: rgba(135,189,253,.06); font-size: 11px; font-weight: 900; }
+    .provider-copy { min-width: 0; }
+    .provider-copy strong { display: block; font-size: 12px; }
+    .provider-copy span { display: block; overflow: hidden; margin-top: 3px; color: var(--faint); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+    .provider .badge { margin-left: auto; }
+    .connection-body { padding: 22px; }
+    .connection-header { display: flex; align-items: start; justify-content: space-between; gap: 18px; padding-bottom: 16px; border-bottom: 1px solid var(--line); }
+    .connection-header h2 { font-size: 19px; }
+    .connection-header p { max-width: 570px; margin: 6px 0 0; color: var(--muted); font-size: 12px; line-height: 1.55; }
+    .connection-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-top: 18px; }
+    .field { display: grid; gap: 7px; }
+    .field label { color: var(--muted); font-size: 11px; font-weight: 720; }
+    .field input { width: 100%; min-height: 40px; padding: 9px 10px; border: 1px solid var(--line-strong); border-radius: 9px; color: var(--text); background: #0b1118; font-size: 13px; }
+    .field input::placeholder { color: #526273; }
+    .connection-actions { display: flex; align-items: center; gap: 9px; margin-top: 16px; }
+    .form-message { min-height: 18px; margin: 10px 0 0; color: var(--muted); font-size: 11px; }
+    .form-message.error { color: var(--red); }
+    .form-message.success { color: var(--green); }
+    .safety-line { margin: 18px 0 0; padding: 11px 12px; border: 1px solid rgba(244,186,112,.2); border-radius: 10px; color: #e9d3ae; background: var(--amber-soft); font-size: 11px; line-height: 1.5; }
+    details { margin-top: 14px; border: 1px solid var(--line); border-radius: 11px; background: rgba(8,12,17,.25); }
+    summary { min-height: 43px; display: flex; align-items: center; padding: 0 13px; color: var(--muted); cursor: pointer; font-size: 12px; font-weight: 750; }
+    details[open] summary { border-bottom: 1px solid var(--line); color: var(--text); }
+    .advanced-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; padding: 13px; }
+    .advanced-item { min-height: 82px; padding: 11px; border: 1px solid var(--line); border-radius: 9px; background: rgba(255,255,255,.02); }
+    .advanced-item span { display: block; color: var(--faint); font-size: 10px; }
+    .advanced-item strong { display: block; margin-top: 7px; color: var(--text); font-size: 12px; }
+    .advanced-item p { margin: 5px 0 0; color: var(--muted); font-size: 10px; line-height: 1.4; }
+    .advanced-locked { padding: 13px; color: var(--faint); font-size: 11px; }
+    .callout { display: flex; gap: 11px; padding: 13px; border: 1px solid var(--line); border-radius: 11px; background: rgba(255,255,255,.018); }
+    .callout b { color: var(--blue); font-size: 16px; }
+    .callout strong { display: block; font-size: 12px; }
+    .callout p { margin: 4px 0 0; color: var(--muted); font-size: 11px; line-height: 1.5; }
+    .toast { position: fixed; z-index: 5; right: 24px; bottom: 22px; max-width: 390px; padding: 12px 14px; border: 1px solid rgba(73,217,176,.3); border-radius: 11px; color: var(--text); background: #10231f; box-shadow: 0 15px 40px rgba(0,0,0,.35); font-size: 12px; opacity: 0; pointer-events: none; transform: translateY(10px); transition: .18s ease; }
+    .toast.show { opacity: 1; transform: translateY(0); }
+
+    @media (max-width: 1120px) { :root { --sidebar: 188px; } .page { padding: 22px 22px 38px; } .content-grid.cards { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar" aria-label="주요 메뉴">
+      <div class="brand"><div class="brand-mark">YS</div><div><strong>YongStockDesk</strong><span>시장 판단을 한눈에</span></div></div>
+      <nav class="nav-group" aria-label="워크스페이스">
+        <p class="nav-label">Workspace</p>
+        <button class="nav-button" type="button" data-page="chart" aria-current="page"><span class="nav-icon">C</span><span>차트</span></button>
+        <button class="nav-button" type="button" data-page="assets"><span class="nav-icon">₩</span><span>내 자산</span></button>
+        <button class="nav-button" type="button" data-page="strategy"><span class="nav-icon">S</span><span>전략</span></button>
+        <button class="nav-button" type="button" data-page="automation"><span class="nav-icon">A</span><span>자동화</span><span class="nav-tag">1 활성</span></button>
+      </nav>
+      <div class="side-bottom">
+        <div class="paper-note"><strong>PAPER ONLY</strong>분석과 API 연결은 실제 주문을 제출하지 않습니다.</div>
+        <button class="nav-button" type="button" data-page="settings"><span class="nav-icon">⋯</span><span>설정</span></button>
+      </div>
+    </aside>
+
+    <main>
+      <header class="topbar"><div class="crumb"><strong id="crumb-page">차트</strong><span> / YongStockDesk</span></div><div class="top-status"><span class="dot"></span><span>Sidecar 정상 · 시안 데이터</span></div></header>
+
+      <section class="page active" id="page-chart" data-title="차트" tabindex="-1">
+        <div class="page-head"><div><p class="eyebrow">Market workspace</p><h1>삼성전자 분석</h1><p class="lead">한 줄 결론과 근거를 먼저 확인합니다. API를 연결하지 않아도 예제 분석과 모의 기능을 사용할 수 있습니다.</p></div><button class="button" type="button" data-open-settings>API 연결 관리</button></div>
+        <div class="stat-grid"><div class="panel stat"><span>현재 판단</span><strong>조건 대기</strong><small>확정 1시간봉 진입 전</small></div><div class="panel stat"><span>지지 기준</span><strong>71,200원</strong><small>손절선과 별도 관리</small></div><div class="panel stat"><span>데이터</span><strong>일봉 · Yahoo</strong><small>API 연결 시 Toss 우선</small></div></div>
+        <div class="content-grid two" style="margin-top:13px"><div class="panel panel-pad"><div class="section-title"><div><h2>가격 흐름</h2><p>시안용 일봉 그래프</p></div><span class="badge blue">1D</span></div><div class="chart"><svg viewBox="0 0 800 250" preserveAspectRatio="none" aria-label="삼성전자 시안 차트" role="img"><polyline fill="none" stroke="#49d9b0" stroke-width="3" points="0,184 35,169 67,178 103,149 140,158 178,126 210,139 250,110 290,125 332,95 370,112 409,92 450,104 487,78 528,86 565,58 607,74 646,49 690,65 730,38 800,51"/><polyline fill="none" stroke="rgba(135,189,253,.8)" stroke-width="1.5" stroke-dasharray="5 6" points="0,198 90,181 180,157 270,142 360,120 450,107 540,85 630,69 720,50 800,44"/></svg></div></div><aside class="panel panel-pad"><div class="section-title"><div><h2>바로 보기</h2><p>첫 분석에 필요한 정보</p></div></div><div class="list"><div class="list-row"><div><strong>단타</strong><span>조건 대기</span></div><span class="badge amber">관찰</span></div><div class="list-row"><div><strong>스윙</strong><span>추세 유지</span></div><span class="badge green">유효</span></div><div class="list-row"><div><strong>장기</strong><span>월봉 확인 필요</span></div><span class="badge blue">참고</span></div></div></aside></div>
+      </section>
+
+      <section class="page" id="page-assets" data-title="내 자산" tabindex="-1"><div class="page-head"><div><p class="eyebrow">Portfolio</p><h1>내 자산</h1><p class="lead">연결한 계좌가 없어도 관심 종목과 모의 보유 현황을 먼저 정리할 수 있습니다.</p></div><button class="button" type="button" data-open-settings>계좌 API 연결</button></div><div class="content-grid two"><div class="panel panel-pad"><div class="section-title"><div><h2>관심 종목</h2><p>분석 화면으로 바로 이동할 수 있는 목록</p></div><span class="badge">3 종목</span></div><div class="list"><div class="list-row"><div><strong>005930.KS · 삼성전자</strong><span>분석 조건 대기</span></div><span class="badge amber">관찰</span></div><div class="list-row"><div><strong>AAPL · Apple</strong><span>스윙 추세 유효</span></div><span class="badge green">유효</span></div><div class="list-row"><div><strong>KRW-BTC · Bitcoin</strong><span>공개 데이터 분석</span></div><span class="badge blue">공개</span></div></div></div><div class="panel empty">연결된 실계좌가 없습니다.<br>모의 보유와 종목 분석은 계속 사용할 수 있습니다.</div></div></section>
+
+      <section class="page" id="page-strategy" data-title="전략" tabindex="-1"><div class="page-head"><div><p class="eyebrow">Strategy</p><h1>매매 문장으로 전략 만들기</h1><p class="lead">저장, 조건 확인, 모의 시뮬레이션, 활성화 순서를 유지합니다.</p></div><button class="button primary" type="button" data-toast="전략 작성 시안입니다. 실제 계약은 변경하지 않습니다.">새 전략</button></div><div class="content-grid cards"><div class="panel panel-pad"><span class="label">1. 초안</span><h2 style="margin-top:8px">분할 매수 기준</h2><p class="lead">현재가와 투자 규모를 지정합니다.</p></div><div class="panel panel-pad"><span class="label">2. 확인</span><h2 style="margin-top:8px">현재 조건 확인</h2><p class="lead">신호와 실패선을 먼저 확인합니다.</p></div><div class="panel panel-pad"><span class="label">3. 모의</span><h2 style="margin-top:8px">시뮬레이션</h2><p class="lead">paper 계좌에서만 결과를 확인합니다.</p></div></div></section>
+
+      <section class="page" id="page-automation" data-title="자동화" tabindex="-1"><div class="page-head"><div><p class="eyebrow">Automation</p><h1>활성 전략 운영</h1><p class="lead">활성화된 전략만 확인하고, 실행 제어는 별도 고급 영역에서 다룹니다.</p></div><span class="badge green">PAPER ONLY</span></div><div class="content-grid two"><div class="panel panel-pad"><div class="section-title"><div><h2>삼성전자 초보 분할</h2><p>005930.KS · paper 계좌</p></div><span class="badge green">실행 가능</span></div><div class="list"><div class="list-row"><div><strong>다음 진입</strong><span>71,200원 이하</span></div><span>수동 실행 대기</span></div><div class="list-row"><div><strong>최대 노출</strong><span>5회 분할</span></div><span>약 500,000원</span></div><div class="list-row"><div><strong>실행 상태</strong><span>Worker 정상 · Scheduler 꺼짐</span></div><button class="button subtle" type="button" data-toast="자동화 제어는 이 HTML 시안에서 실행되지 않습니다.">상세</button></div></div></div><div class="panel panel-pad"><h2>안전 경계</h2><p class="lead">API 등록과 전략 활성화는 실주문 제출이 아닙니다.</p><div class="callout" style="margin-top:15px"><b>!</b><div><strong>실거래는 차단됨</strong><p>OrderIntent와 RiskCheck 경계는 유지하고, 이번 시안은 UI 동선만 검토합니다.</p></div></div></div></div></section>
+
+      <section class="page" id="page-settings" data-title="설정" tabindex="-1">
+        <div class="page-head"><div><p class="eyebrow">Settings</p><h1>연결 관리</h1><p class="lead">API 키 등록은 이 화면에서 끝냅니다. 연결하지 않아도 분석과 paper 기능을 계속 사용할 수 있습니다.</p></div><span class="badge green">PAPER ONLY</span></div>
+        <div class="connection-layout">
+          <div class="panel provider-list" role="group" aria-label="연결할 API 선택">
+            <button class="provider" type="button" data-provider="toss" aria-pressed="true"><span class="provider-logo">T</span><span class="provider-copy"><strong>Toss 주식</strong><span>국내·미국 주식 조회</span></span><span class="badge amber" data-provider-badge="toss">미등록</span></button>
+            <button class="provider" type="button" data-provider="upbit" aria-pressed="false"><span class="provider-logo">U</span><span class="provider-copy"><strong>Upbit</strong><span>코인 잔고·사전검증</span></span><span class="badge amber" data-provider-badge="upbit">미등록</span></button>
+            <button class="provider" type="button" data-provider="bithumb" aria-pressed="false"><span class="provider-logo">B</span><span class="provider-copy"><strong>Bithumb</strong><span>코인 잔고·사전검증</span></span><span class="badge amber" data-provider-badge="bithumb">미등록</span></button>
+          </div>
+          <div class="panel connection-body">
+            <div class="connection-header"><div><h2 id="provider-name">Toss 주식 API</h2><p id="provider-description">연결 후 계좌·보유·미체결 조회와 paper 자동화의 사전검증을 사용할 수 있습니다.</p></div><span id="connection-status" class="badge amber">미등록</span></div>
+            <form id="connection-form" novalidate>
+              <div class="connection-form"><div class="field"><label id="identifier-label" for="identifier">Client ID</label><input id="identifier" autocomplete="off" placeholder="Client ID 입력"></div><div class="field"><label id="secret-label" for="secret">Client Secret</label><input id="secret" type="password" autocomplete="new-password" placeholder="Client Secret 입력"></div></div>
+              <div class="connection-actions"><button class="button primary" type="submit">검증 후 저장</button><button class="button subtle" type="button" id="clear-connection">입력 지우기</button></div>
+              <p class="form-message" id="form-message" aria-live="polite">키는 이 시안에서 저장되거나 외부로 전송되지 않습니다.</p>
+            </form>
+            <p class="safety-line">API 연결은 선택 사항입니다. 이번 앱 버전에서는 연결·조회·사전검증만 제공하며 실제 주문은 계속 차단됩니다.</p>
+            <details id="advanced-panel"><summary>고급 점검 <span id="advanced-state" style="margin-left:auto;color:var(--faint);font-size:10px">연결 후 사용 가능</span></summary><div id="advanced-content" class="advanced-locked">먼저 키를 검증하고 저장하면 계좌, 허용 IP, 주문 사전검증 같은 운영 점검을 이곳에서 필요한 때만 확인할 수 있습니다.</div></details>
+          </div>
+        </div>
+        <div class="callout" style="margin-top:15px"><b>i</b><div><strong>정보를 단계별로 표시합니다</strong><p>키 등록 전에는 연결에 필요한 정보만 보입니다. 계좌·진단·운영 리포트는 검증이 끝난 뒤 고급 점검에서 확인합니다.</p></div></div>
+      </section>
+    </main>
+  </div>
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  <script>
+    const providers = {
+      toss: { title: "Toss 주식 API", description: "연결 후 계좌·보유·미체결 조회와 paper 자동화의 사전검증을 사용할 수 있습니다.", identifier: "Client ID", secret: "Client Secret", status: "unregistered", fields: {} },
+      upbit: { title: "Upbit API", description: "연결 후 코인 잔고·주문 가능 정보 조회와 paper 자동화의 사전검증을 사용할 수 있습니다.", identifier: "Access Key", secret: "Secret Key", status: "unregistered", fields: {} },
+      bithumb: { title: "Bithumb API", description: "연결 후 코인 잔고·주문 가능 정보 조회와 paper 자동화의 사전검증을 사용할 수 있습니다.", identifier: "Access Key", secret: "Secret Key", status: "unregistered", fields: {} }
+    };
+    let activeProvider = "toss";
+    const statusMeta = { unregistered: ["미등록", "amber"], verified: ["연결됨", "green"], failed: ["검증 실패", "red"] };
+    const pageNames = { chart: "차트", assets: "내 자산", strategy: "전략", automation: "자동화", settings: "설정" };
+
+    const toast = document.getElementById("toast");
+    let toastTimer;
+    function announce(message) { toast.textContent = message; toast.classList.add("show"); clearTimeout(toastTimer); toastTimer = setTimeout(() => toast.classList.remove("show"), 2600); }
+    function setPage(name, focus = true) {
+      document.querySelectorAll(".page").forEach(page => page.classList.toggle("active", page.id === `page-${name}`));
+      document.querySelectorAll(".nav-button[data-page]").forEach(button => {
+        if (button.dataset.page === name) button.setAttribute("aria-current", "page");
+        else button.removeAttribute("aria-current");
+      });
+      document.getElementById("crumb-page").textContent = pageNames[name];
+      window.scrollTo(0, 0);
+      if (focus) document.getElementById(`page-${name}`).focus({ preventScroll: true });
+    }
+    function statusBadge(status) { const [text, tone] = statusMeta[status]; return `<span class="badge ${tone}">${text}</span>`; }
+    function renderProvider() {
+      const provider = providers[activeProvider];
+      document.querySelectorAll(".provider").forEach(button => button.setAttribute("aria-pressed", String(button.dataset.provider === activeProvider)));
+      document.querySelectorAll("[data-provider-badge]").forEach(badge => { const [text, tone] = statusMeta[providers[badge.dataset.providerBadge].status]; badge.textContent = text; badge.className = `badge ${tone}`; });
+      document.getElementById("provider-name").textContent = provider.title;
+      document.getElementById("provider-description").textContent = provider.description;
+      document.getElementById("identifier-label").textContent = provider.identifier;
+      document.getElementById("secret-label").textContent = provider.secret;
+      document.getElementById("identifier").placeholder = `${provider.identifier} 입력`;
+      document.getElementById("secret").placeholder = `${provider.secret} 입력`;
+      document.getElementById("identifier").value = provider.fields.identifier || "";
+      document.getElementById("secret").value = provider.fields.secret || "";
+      const [statusText, tone] = statusMeta[provider.status];
+      const status = document.getElementById("connection-status"); status.textContent = statusText; status.className = `badge ${tone}`;
+      const details = document.getElementById("advanced-panel");
+      const advancedState = document.getElementById("advanced-state");
+      if (provider.status === "verified") {
+        advancedState.textContent = "필요할 때 열기";
+        document.getElementById("advanced-content").className = "advanced-grid";
+        document.getElementById("advanced-content").innerHTML = `<div class="advanced-item"><span>계좌·잔고</span><strong>조회 준비됨</strong><p>연결 후 필요한 경우에만 계좌를 선택합니다.</p></div><div class="advanced-item"><span>진단</span><strong>허용 IP 확인</strong><p>외부 설정 문제를 점검합니다.</p></div><div class="advanced-item"><span>사전검증</span><strong>주문 제출 없음</strong><p>최소금액·호가 단위를 확인합니다.</p></div>`;
+      } else {
+        details.open = false; advancedState.textContent = "연결 후 사용 가능";
+        document.getElementById("advanced-content").className = "advanced-locked";
+        document.getElementById("advanced-content").textContent = "먼저 키를 검증하고 저장하면 계좌, 허용 IP, 주문 사전검증 같은 운영 점검을 이곳에서 필요한 때만 확인할 수 있습니다.";
+      }
+      document.getElementById("form-message").className = "form-message";
+      document.getElementById("form-message").textContent = provider.status === "verified" ? "검증된 연결입니다. 키 값은 다시 표시하지 않습니다." : "키는 이 시안에서 저장되거나 외부로 전송되지 않습니다.";
+    }
+
+    document.querySelectorAll(".nav-button[data-page]").forEach(button => button.addEventListener("click", () => setPage(button.dataset.page)));
+    document.querySelectorAll("[data-open-settings]").forEach(button => button.addEventListener("click", () => { setPage("settings"); document.querySelector(`.provider[data-provider="${activeProvider}"]`).focus(); }));
+    document.querySelectorAll(".provider").forEach(button => button.addEventListener("click", () => { activeProvider = button.dataset.provider; renderProvider(); document.getElementById("identifier").focus(); }));
+    document.getElementById("identifier").addEventListener("input", event => providers[activeProvider].fields.identifier = event.target.value);
+    document.getElementById("secret").addEventListener("input", event => providers[activeProvider].fields.secret = event.target.value);
+    document.getElementById("clear-connection").addEventListener("click", () => { providers[activeProvider].fields = {}; renderProvider(); document.getElementById("identifier").focus(); });
+    document.getElementById("connection-form").addEventListener("submit", event => {
+      event.preventDefault(); const provider = providers[activeProvider]; const message = document.getElementById("form-message");
+      if (!provider.fields.identifier?.trim() || !provider.fields.secret?.trim()) { provider.status = "failed"; message.className = "form-message error"; message.textContent = `${provider.identifier}와 ${provider.secret}을 모두 입력하세요.`; renderProvider(); message.className = "form-message error"; message.textContent = `${provider.identifier}와 ${provider.secret}을 모두 입력하세요.`; return; }
+      provider.status = provider.fields.secret.toLowerCase().includes("fail") ? "failed" : "verified";
+      renderProvider();
+      if (provider.status === "verified") { message.className = "form-message success"; message.textContent = "검증 후 저장된 연결 시안입니다. 고급 점검을 열어 필요한 다음 단계를 확인하세요."; announce(`${provider.title} 연결 시안이 완료되었습니다.`); }
+      else { message.className = "form-message error"; message.textContent = "검증 실패 시안입니다. 키 또는 외부 설정을 확인한 뒤 다시 시도하세요."; }
+    });
+    document.querySelectorAll("[data-toast]").forEach(button => button.addEventListener("click", () => announce(button.dataset.toast)));
+    renderProvider();
+  </script>
+</body>
+</html>
