@@ -92,7 +92,7 @@ src/features/watchlist
 - 실계좌 연결 전 단계는 `페이퍼 자동운용`으로 검증한다.
 - 페이퍼 자동운용은 `BrokerPort`를 호출하지 않고 모의 계좌, 페이퍼 주문, 페이퍼 체결 로그만 생성한다.
 - 페이퍼 자동운용 상태는 `.cache/stock-analysis/paper-trading/state.json` 파일 저장소를 기본으로 사용한다.
-- Codex App 자동화는 `npm run paper:run -- --session=KR|US` runner를 호출하는 방식으로 등록하고, 자동화 prompt는 실행 요약, 체결 수, probe 체결 수, 제외 사유, 저장 파일 경로만 보고한다.
+- Codex App 자동화는 `yarn paper:run --session=KR|US` runner를 호출하는 방식으로 등록하고, 자동화 prompt는 실행 요약, 체결 수, probe 체결 수, 제외 사유, 저장 파일 경로만 보고한다.
 - v1 페이퍼 전략은 `paper-breakout-v1`로 고정하며 자동 미세조정이나 임계값 자동 변경을 하지 않는다.
 
 ## 피해야 할 것
@@ -106,7 +106,7 @@ src/features/watchlist
 
 ## 문서 갱신 기준
 
-- 사용자에게 보이는 기능이 바뀌면 `docs/current-main-features.md`를 갱신한다.
-- 구조나 확장 규칙이 바뀌면 이 문서와 `docs/security-server-refactor.md`를 갱신한다.
+- 사용자에게 보이는 기능이 바뀌면 `docs/features.md`의 상태와 사용 조건을 갱신한다.
+- 구조나 확장 규칙이 바뀌면 이 문서와 `docs/continuation-guide.md`, 필요하면 `docs/macos-native.md`를 함께 갱신한다.
 - 전략 판단 로직이 바뀌면 관련 전략 문서도 갱신한다.
 - README의 명령어와 문서 목록은 실제 파일과 맞춘다.

@@ -22,13 +22,15 @@ yarn mac:verify:launch
 
 ## Main Features
 
-- `관심종목`: 사용자가 추적하는 종목의 가격 곡소리, 추세 판단, 5일선/20일선 기준 리스크를 표와 모바일 카드로 확인합니다.
-- `포트폴리오`: 보유 종목, 평단가, 수량, 통화를 브라우저에 저장하고 현재가 기준 손익, 수익 실현, 추가매수, 손절 기준을 분석합니다.
-- `포트폴리오`: 보유 종목별 `오늘 할 일`을 계산해 보유 유지, 지지 확인, 추가매수 대기, 수익 실현 검토, 손절선 근접 여부를 정리합니다.
-- `데일리 브리핑`: `데일리 나스닥`과 `데일리 한국장`을 분리해 주도 섹터, 대장주 후보, 신규 진입 기준, 다음 분석 예정 시각을 보여줍니다. 신호 신뢰도 기반 `오늘의 돌파 후보`, `지지 확인 후보`, `주의 종목`을 분리하고, 필요하면 `스캔 상세 후보`를 펼쳐 자동 후보 전체 흐름을 확인합니다.
-- `종목분석`: `NVDA`, `005930`, `247540`처럼 원하는 종목을 입력해 현재가 기준 차트 브리핑, 지지/저항, 매수 구간, 손절 기준, 신고가 돌파 룰, 신호 신뢰도를 확인합니다.
-- `커뮤니티 곡소리`: 공개/허용된 소스 기반 커뮤니티 반응 점수를 별도 API로 제공합니다.
-- `크립토 백테스트`: 패닉셀 반등형 crypto buy 엔진을 CLI로 백테스트합니다.
+- `macOS 앱`: Finder/Dock에서 실행되는 SwiftUI 앱이 번들된 TypeScript sidecar를 자동으로 시작합니다.
+- `시장 분석`: 종목 검색, 일봉 차트, 지지·저항, 돌파 상태, 실행 참고선과 신호 신뢰도를 제공합니다.
+- `시장 브리핑`: US·KR 시장의 주도 후보, 진입 준비도, 뉴스 이벤트와 페이퍼 후보를 정리합니다.
+- `전략·자동화`: ladder, 분할차수, 1% 반복 전략의 저장·시뮬레이션·활성화와 페이퍼 실행을 지원합니다.
+- `브로커 연결`: Toss, Upbit와 Bithumb credential 검증, 조회·사전검증과 안전한 주문 경계를 제공합니다.
+- `안전장치`: `OrderIntent`, `RiskCheck`, live gate, worker control과 kill switch를 모든 실제 주문보다 먼저 적용합니다.
+- `웹 fallback`: 포트폴리오, 분석, 자동화 관리와 백테스트 화면을 관리·보조 경로로 유지합니다.
+
+현재 SwiftUI와 향후 HTML 시안의 차이는 [기능 상태 문서](docs/features.md)에서 확인합니다.
 
 ## Getting Started
 
@@ -159,16 +161,21 @@ yarn backtest:crypto-buy --symbols BTC --tf 4h --start 2026-02-01 --mode A --cos
 
 ## Documentation
 
-- [현재 main 기능 요약](docs/current-main-features.md)
+- [문서 전체 안내](docs/README.md)
+- [새 저장소에서 이어서 개발하기](docs/continuation-guide.md)
+- [현재 기능 상태](docs/features.md)
+- [macOS 네이티브 앱](docs/macos-native.md)
 - [기능 확장 가이드](docs/feature-extension-guide.md)
-- [보안·서버 확장 리팩토링 메모](docs/security-server-refactor.md)
-- [서비스형 신호·브리핑·포트폴리오 개선 로드맵](docs/service-signal-briefing-roadmap.md)
+- [초보자용 전략 조립기 명세](docs/automation-strategy-builder-spec.md)
+- [보유 기간별 익절·손절 명세](docs/ux-prototypes/macos-native/horizon-exit-plan-spec.md)
 - [어스플러스식 브리핑 전략 기준](docs/us-plus-briefing-strategy.md)
 - [신고가 돌파 보조 룰](docs/breakout-rule.md)
 - [추세추종 대장주 백테스트](docs/trend-following-leader-backtest.md)
 - [추세추종 임계값 메모](docs/trend-following-threshold-notes.md)
 - [커뮤니티 곡소리 소스 정책](docs/community-pain-sources.md)
 - [크립토 buy 신호 백테스트 사양](crypto_buy_signal_backtest_spec.md)
+
+완료된 목표와 과거 로드맵은 [문서 전체 안내](docs/README.md)의 archive 섹션에서 확인합니다.
 
 ## Notes
 
