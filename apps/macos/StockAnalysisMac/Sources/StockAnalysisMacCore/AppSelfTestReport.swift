@@ -31,7 +31,7 @@ public struct AppSelfTestReportInput: Sendable {
 public enum AppSelfTestReport {
     public static func make(from input: AppSelfTestReportInput) -> String {
         var lines = [
-            "StockAnalysis 앱 점검 리포트",
+            "Yong'Desk 앱 점검 리포트",
             "생성: \(input.generatedAt)",
             "주의: 이 리포트는 로컬 앱/sidecar 상태 요약이며 API secret, 계좌 원문, 주문 제출 내역을 포함하지 않습니다.",
             "",

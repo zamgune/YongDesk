@@ -12,7 +12,7 @@
 | 패키지 도구 | Yarn `1.22.22` |
 | macOS 요구 버전 | macOS 14 이상 |
 
-제품과 저장소의 사용자 명칭은 `YongStockDesk`다. 이관 직후의 배포 호환성을 위해 런타임 이름은 아직 `StockAnalysis.app`, Swift 제품명은 `StockAnalysisMac`, 번들 ID는 `com.stockanalysis.mac`을 사용한다. 이 이름과 Keychain·App Support 경로는 별도 데이터 마이그레이션 없이 바꾸지 않는다.
+저장소의 사용자 명칭은 `YongStockDesk`이고, macOS 앱의 Finder·Dock·창 표시는 `Yong'Desk`다. 기존 데이터 호환을 위해 생성되는 앱 번들 이름은 계속 `StockAnalysis.app`, Swift 제품명은 `StockAnalysisMac`, 번들 ID는 `com.stockanalysis.mac`을 사용한다. Keychain·App Support 경로는 별도 데이터 마이그레이션 없이 바꾸지 않는다.
 
 ## 개발 시작
 

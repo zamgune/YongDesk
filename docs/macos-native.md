@@ -1,6 +1,6 @@
 # YongStockDesk macOS 네이티브 앱
 
-`apps/macos/StockAnalysisMac`은 YongStockDesk의 SwiftUI 앱이다. 이관 호환성을 위해 런타임 이름은 아직 `StockAnalysis.app`, Swift 제품명은 `StockAnalysisMac`, 번들 ID는 `com.stockanalysis.mac`을 사용한다. Keychain과 App Support 데이터를 함께 마이그레이션하기 전에는 이 값을 개별적으로 바꾸지 않는다.
+`apps/macos/StockAnalysisMac`은 YongStockDesk의 SwiftUI 앱이며 Finder·Dock·창의 표시 이름은 `Yong'Desk`다. 이관 호환성을 위해 생성 번들 이름은 계속 `StockAnalysis.app`, Swift 제품명은 `StockAnalysisMac`, 번들 ID는 `com.stockanalysis.mac`을 사용한다. Keychain과 App Support 데이터를 함께 마이그레이션하기 전에는 이 값을 개별적으로 바꾸지 않는다.
 
 ## 아키텍처
 

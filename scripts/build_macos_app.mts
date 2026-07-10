@@ -21,6 +21,7 @@ type TargetArch = "arm64" | "x64";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const packagePath = join(repoRoot, "apps", "macos", "StockAnalysisMac");
+const appIconPath = join(packagePath, "Resources", "YongDesk.icns");
 const distRoot = join(repoRoot, "dist", "macos");
 const appRoot = join(distRoot, "StockAnalysis.app");
 const contentsRoot = join(appRoot, "Contents");
@@ -60,15 +61,17 @@ export const buildMacInfoPlist = ({
   <key>CFBundleDevelopmentRegion</key>
   <string>ko</string>
   <key>CFBundleDisplayName</key>
-  <string>StockAnalysis</string>
+  <string>Yong'Desk</string>
   <key>CFBundleExecutable</key>
   <string>StockAnalysisMac</string>
   <key>CFBundleIdentifier</key>
   <string>com.stockanalysis.mac</string>
   <key>CFBundleInfoDictionaryVersion</key>
   <string>6.0</string>
+  <key>CFBundleIconFile</key>
+  <string>YongDesk.icns</string>
   <key>CFBundleName</key>
-  <string>StockAnalysis</string>
+  <string>Yong'Desk</string>
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>
@@ -352,6 +355,7 @@ const main = async () => {
   await mkdir(macOSRoot, { recursive: true });
   await mkdir(resourcesRoot, { recursive: true });
   await copyRequired(executablePath, join(macOSRoot, "StockAnalysisMac"));
+  await copyRequired(appIconPath, join(resourcesRoot, "YongDesk.icns"));
   assertMachOArch(join(macOSRoot, "StockAnalysisMac"), "StockAnalysisMac");
   await writeInfoPlist(version, buildNumber);
   await copyNode();

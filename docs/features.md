@@ -17,7 +17,7 @@
 
 | 영역 | 기능 | 상태 | 조건·제한 | 주문 제출 |
 |---|---|---|---|---|
-| 앱 셸 | Finder/Dock에서 실행되는 SwiftUI 앱과 번들 sidecar | 구현됨 | 현재 호환 이름은 `StockAnalysis.app` | 없음 |
+| 앱 셸 | Finder/Dock에서 실행되는 SwiftUI 앱과 번들 sidecar | 구현됨 | 표시 이름과 아이콘은 `Yong'Desk`, 호환 번들 이름은 `StockAnalysis.app` | 없음 |
 | 앱 셸 | 메뉴바 상태, 앱 점검, sidecar 로그, 배포 점검 | 구현됨 | 로컬 App Support와 번들 상태를 사용 | 없음 |
 | 앱 셸 | 차트 중심 사이드바와 단순화된 beginner-first 레이아웃 | 구현됨 | `BeginnerFirstRootView`가 승인된 `beginner-first-v3.html` 정보 구조를 적용하며 최소 크기는 1024×720 | 없음 |
 | 앱 셸 | 개인 관심종목 목록과 한국·미국 주식·코인 요약 | 구현됨 | 최대 20개를 이 Mac의 sidecar 저장소에 보관하며, 현재가·등락·출처·갱신 상태만 비교 | 없음 |

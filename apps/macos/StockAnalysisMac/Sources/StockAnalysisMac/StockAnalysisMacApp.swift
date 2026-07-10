@@ -12,7 +12,7 @@ struct StockAnalysisMacApp: App {
     @StateObject private var model = AppModel()
 
     var body: some Scene {
-        WindowGroup("YongStockDesk", id: "main") {
+        WindowGroup("Yong'Desk", id: "main") {
             BeginnerFirstRootView()
                 .environmentObject(model)
                 .task {
@@ -22,7 +22,7 @@ struct StockAnalysisMacApp: App {
         .defaultSize(width: 1440, height: 900)
         .windowResizability(.contentMinSize)
 
-        MenuBarExtra("YongStockDesk", systemImage: model.menuBarIcon) {
+        MenuBarExtra("Yong'Desk", systemImage: model.menuBarIcon) {
             MenuBarStatusView()
                 .environmentObject(model)
         }
@@ -6826,7 +6826,7 @@ struct DistributionSheet: View {
 
     private func installReportLines() -> [String] {
         var lines = [
-            "StockAnalysis macOS 설치 점검 리포트",
+            "Yong'Desk macOS 설치 점검 리포트",
             "생성: \(Date().formatted(date: .numeric, time: .standard))",
             "앱: \(Bundle.main.bundleURL.path(percentEncoded: false))",
             "Sidecar: \(model.health?.ok == true ? "정상" : model.statusLine)",

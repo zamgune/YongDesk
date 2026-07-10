@@ -496,7 +496,7 @@ let selfTestReport = AppSelfTestReport.make(from: AppSelfTestReportInput(
     workerPaused: false,
     releaseReadiness: "로컬 테스트 빌드"
 ))
-assert(selfTestReport.contains("StockAnalysis 앱 점검 리포트"), "app self-test report should include title")
+assert(selfTestReport.contains("Yong'Desk 앱 점검 리포트"), "app self-test report should include title")
 assert(selfTestReport.contains("Toss 실거래 게이트"), "app self-test report should include warning checks")
 assert(selfTestReport.contains("Developer ID"), "app self-test report should include distribution next action")
 assert(selfTestReport.contains("Toss credential"), "app self-test report should include live gate next action")
