@@ -2,8 +2,14 @@ import Foundation
 import SwiftUI
 import StockAnalysisMacCore
 
+extension Notification.Name {
+    static let openBeginnerSupportSelfTest = Notification.Name("openBeginnerSupportSelfTest")
+    static let openBeginnerSupportLog = Notification.Name("openBeginnerSupportLog")
+}
+
 enum BeginnerDestination: String, CaseIterable, Identifiable {
     case chart
+    case watchlist
     case assets
     case strategy
     case automation
@@ -14,6 +20,7 @@ enum BeginnerDestination: String, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .chart: return "차트"
+        case .watchlist: return "관심종목"
         case .assets: return "내 자산"
         case .strategy: return "전략"
         case .automation: return "자동화"
@@ -24,6 +31,7 @@ enum BeginnerDestination: String, CaseIterable, Identifiable {
     var icon: String {
         switch self {
         case .chart: return "chart.xyaxis.line"
+        case .watchlist: return "star"
         case .assets: return "wallet.bifold"
         case .strategy: return "slider.horizontal.3"
         case .automation: return "bolt.horizontal.circle"

@@ -1468,4 +1468,64 @@ func verifyMarketAnalysisContracts() async throws {
 
 try await verifyMarketAnalysisContracts()
 
+func verifyWatchlistClientContracts() async throws {
+    let configuration = URLSessionConfiguration.ephemeral
+    configuration.protocolClasses = [EngineClientMockURLProtocol.self]
+    let session = URLSession(configuration: configuration)
+    let client = EngineClient(baseURL: URL(string: "http://127.0.0.1:39099")!, session: session)
+    let summary = """
+    {
+      "maxItems": 20,
+      "generatedAt": "2026-07-11T00:00:00.000Z",
+      "items": [{
+        "id": "watch-1",
+        "symbol": "005930.KS",
+        "name": "삼성전자",
+        "assetClass": "stock",
+        "market": "KR",
+        "addedAt": "2026-07-11T00:00:00.000Z",
+        "price": 88000,
+        "changePercent": 1.25,
+        "currency": "KRW",
+        "dataSource": "yahoo",
+        "quoteAt": "2026-07-11T00:00:00.000Z",
+        "stale": false,
+        "error": null
+      }]
+    }
+    """
+    let stored = """
+    {
+      "maxItems": 20,
+      "items": [{
+        "id": "watch-1",
+        "symbol": "005930.KS",
+        "name": "삼성전자",
+        "assetClass": "stock",
+        "market": "KR",
+        "addedAt": "2026-07-11T00:00:00.000Z"
+      }]
+    }
+    """
+    EngineClientMockURLProtocol.reset(responses: [
+        mockResponse(summary),
+        mockResponse(stored, statusCode: 201),
+        mockResponse(#"{"maxItems":20,"items":[]}"#),
+    ])
+
+    let loaded = try await client.watchlistSummary()
+    assert(loaded.items.first?.symbol == "005930.KS", "watchlist summary should decode a saved Korean stock")
+    assert(loaded.items.first?.currency == "KRW", "watchlist summary should preserve row currency")
+    _ = try await client.addWatchlistItem(LocalWatchlistItemInput(symbol: "005930.KS", assetClass: "stock", market: "KR"))
+    let removed = try await client.deleteWatchlistItem(id: "watch-1")
+    assert(removed.items.isEmpty, "watchlist delete should decode the updated collection")
+
+    let requests = EngineClientMockURLProtocol.captured()
+    requireRequest(requests, 0, method: "GET", path: "/api/local/watchlist/summary")
+    requireRequest(requests, 1, method: "POST", path: "/api/local/watchlist", bodyContains: ["005930.KS", "stock", "KR"])
+    requireRequest(requests, 2, method: "DELETE", path: "/api/local/watchlist/watch-1")
+}
+
+try await verifyWatchlistClientContracts()
+
 print("StockAnalysisMac smoke tests passed")

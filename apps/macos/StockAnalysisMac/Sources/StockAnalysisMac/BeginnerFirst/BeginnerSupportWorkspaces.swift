@@ -169,6 +169,200 @@ struct BeginnerAssetsWorkspace: View {
     }
 }
 
+struct BeginnerWatchlistWorkspace: View {
+    @EnvironmentObject private var model: AppModel
+    let onSelect: (LocalWatchlistSummaryItem) -> Void
+    let onAddCurrent: () -> Void
+
+    @State private var filter: WatchlistFilter = .all
+
+    private var visibleItems: [LocalWatchlistSummaryItem] {
+        model.watchlistItems.filter { filter.includes($0) }
+    }
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                HStack(alignment: .top) {
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text("관심종목")
+                            .font(.system(size: 26, weight: .bold))
+                        Text("저장한 종목의 현재가와 데이터 상태를 빠르게 비교합니다. 매수 판단은 종목별 분석에서 확인하세요.")
+                            .font(.caption)
+                            .foregroundStyle(BeginnerPalette.muted)
+                    }
+                    Spacer()
+                    VStack(alignment: .trailing, spacing: 7) {
+                        Text("\(model.watchlistItems.count) / \(model.watchlistMaxItems)")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(BeginnerPalette.muted)
+                        HStack(spacing: 8) {
+                            Button("현재 종목 추가", action: onAddCurrent)
+                                .buttonStyle(.bordered)
+                                .disabled(model.watchlistItems.count >= model.watchlistMaxItems)
+                                .accessibilityIdentifier("beginner-watchlist-add-current")
+                            Button("새로고침") {
+                                Task { await model.refreshWatchlist() }
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .tint(BeginnerPalette.green)
+                            .foregroundStyle(BeginnerPalette.backgroundDeep)
+                            .accessibilityIdentifier("beginner-watchlist-refresh")
+                        }
+                    }
+                }
+
+                Picker("관심종목 필터", selection: $filter) {
+                    ForEach(WatchlistFilter.allCases) { item in
+                        Text(item.title).tag(item)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .accessibilityIdentifier("beginner-watchlist-filter")
+
+                if visibleItems.isEmpty {
+                    BeginnerSurface {
+                        VStack(spacing: 10) {
+                            Image(systemName: "star")
+                                .font(.system(size: 30))
+                                .foregroundStyle(BeginnerPalette.muted)
+                            Text(model.watchlistItems.isEmpty ? "아직 관심종목이 없습니다." : "이 필터에 해당하는 관심종목이 없습니다.")
+                                .font(.headline)
+                            Text(model.watchlistMessage)
+                                .font(.caption)
+                                .foregroundStyle(BeginnerPalette.muted)
+                                .multilineTextAlignment(.center)
+                            Button("현재 종목 추가", action: onAddCurrent)
+                                .buttonStyle(.borderedProminent)
+                                .tint(BeginnerPalette.green)
+                                .foregroundStyle(BeginnerPalette.backgroundDeep)
+                                .disabled(model.watchlistItems.count >= model.watchlistMaxItems)
+                        }
+                        .frame(maxWidth: .infinity, minHeight: 240)
+                    }
+                } else {
+                    BeginnerSurface {
+                        VStack(spacing: 0) {
+                            ForEach(visibleItems) { item in
+                                watchlistRow(item)
+                                if item.id != visibleItems.last?.id {
+                                    Divider().overlay(BeginnerPalette.line.opacity(0.7))
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Text(model.watchlistMessage)
+                    .font(.caption)
+                    .foregroundStyle(BeginnerPalette.muted)
+                    .accessibilityIdentifier("beginner-watchlist-message")
+            }
+            .padding(20)
+        }
+        .background(BeginnerPalette.background)
+        .accessibilityIdentifier("beginner-watchlist-workspace")
+        .task {
+            await model.refreshWatchlist()
+        }
+    }
+
+    private func watchlistRow(_ item: LocalWatchlistSummaryItem) -> some View {
+        HStack(spacing: 14) {
+            Button {
+                onSelect(item)
+            } label: {
+                HStack(spacing: 12) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(item.name ?? item.symbol)
+                            .font(.subheadline.weight(.semibold))
+                        Text("\(item.symbol) · \(marketLabel(item.market)) · \(sourceLabel(item.dataSource))")
+                            .font(.system(.caption, design: .monospaced))
+                            .foregroundStyle(BeginnerPalette.muted)
+                    }
+                    Spacer()
+                    VStack(alignment: .trailing, spacing: 3) {
+                        Text(beginnerPrice(item.price, currency: item.currency))
+                            .font(.subheadline.weight(.semibold))
+                        Text(changeLabel(item))
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle((item.changePercent ?? 0) >= 0 ? BeginnerPalette.green : BeginnerPalette.red)
+                    }
+                    VStack(alignment: .trailing, spacing: 3) {
+                        Text(item.stale ? "갱신 필요" : "정상")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(item.stale ? BeginnerPalette.amber : BeginnerPalette.muted)
+                        Text(item.error ?? beginnerTimestamp(item.quoteAt))
+                            .font(.caption2)
+                            .foregroundStyle(item.error == nil ? BeginnerPalette.muted : BeginnerPalette.red)
+                            .lineLimit(1)
+                    }
+                    .frame(width: 180, alignment: .trailing)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("beginner-watchlist-select-\(item.id)")
+
+            Button(role: .destructive) {
+                Task { await model.removeWatchlistItem(id: item.id) }
+            } label: {
+                Image(systemName: "trash")
+            }
+            .buttonStyle(.borderless)
+            .accessibilityLabel("\(item.symbol) 관심종목에서 제거")
+            .accessibilityIdentifier("beginner-watchlist-remove-\(item.id)")
+        }
+        .padding(.vertical, 11)
+    }
+
+    private func marketLabel(_ market: String) -> String {
+        switch market {
+        case "KR": return "한국"
+        case "US": return "미국"
+        default: return "코인"
+        }
+    }
+
+    private func sourceLabel(_ source: String) -> String {
+        source == "upbit" ? "Upbit 공개 시세" : "Yahoo 보조 시세"
+    }
+
+    private func changeLabel(_ item: LocalWatchlistSummaryItem) -> String {
+        guard let changePercent = item.changePercent else {
+            return item.error == nil ? "등락률 제공 없음" : "시세 확인 실패"
+        }
+        return beginnerPercent(changePercent / 100)
+    }
+}
+
+private enum WatchlistFilter: String, CaseIterable, Identifiable {
+    case all
+    case korea
+    case unitedStates
+    case crypto
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .all: return "전체"
+        case .korea: return "한국"
+        case .unitedStates: return "미국"
+        case .crypto: return "코인"
+        }
+    }
+
+    func includes(_ item: LocalWatchlistSummaryItem) -> Bool {
+        switch self {
+        case .all: return true
+        case .korea: return item.market == "KR"
+        case .unitedStates: return item.market == "US"
+        case .crypto: return item.market == "CRYPTO"
+        }
+    }
+}
+
 struct BeginnerStrategyLanding: View {
     let onOpenSettings: () -> Void
 
@@ -271,7 +465,7 @@ struct BeginnerAutomationWorkspace: View {
                             .foregroundStyle(BeginnerPalette.green)
                         Text("무엇이 자동으로 실행되는지 먼저 확인")
                             .font(.system(size: 27, weight: .bold))
-                        Text("전략 탭에서 활성화한 설정만 실행 대상 카드로 표시합니다. 실행 제어와 주문 점검은 아래 고급 운영 제어에서 확인합니다.")
+                        Text("전략 탭에서 활성화한 설정만 실행 대상 카드로 표시합니다. 실행 제어와 주문 점검은 아래 고급 자동화 제어에서 확인합니다.")
                             .font(.caption)
                             .foregroundStyle(BeginnerPalette.muted)
                     }
@@ -398,7 +592,7 @@ struct BeginnerAutomationWorkspace: View {
 
     private var safetyLabel: String {
         if model.killSwitchEngaged { return "긴급 중지" }
-        if model.workerPausedEffective { return "Worker 일시중지" }
+        if model.workerPausedEffective { return "자동화 일시중지" }
         return "정상 · paper"
     }
 
@@ -513,11 +707,11 @@ struct BeginnerAutomationWorkspace: View {
                 .disabled(model.automationSchedulerState?.enabled == true)
                 .accessibilityIdentifier("beginner-automation-scheduler-interval")
 
-                DisclosureGroup("고급 운영 제어") {
+                DisclosureGroup("고급 자동화 제어") {
                     VStack(alignment: .leading, spacing: 10) {
-                        Button(model.workerPausedEffective ? "Worker 다시 시작" : "Worker 일시중지") {
+                        Button(model.workerPausedEffective ? "자동화 다시 시작" : "자동화 일시중지") {
                             Task {
-                                await model.setWorkerPaused(!model.workerPausedEffective, reason: "Beginner 자동화 화면")
+                                await model.setWorkerPaused(!model.workerPausedEffective, reason: "자동화 화면")
                                 await model.refreshStrategyConfigs(replacingMessage: false)
                             }
                         }
@@ -527,7 +721,7 @@ struct BeginnerAutomationWorkspace: View {
 
                         Button(model.killSwitchEngaged ? "긴급 중지 해제" : "긴급 중지 켜기", role: model.killSwitchEngaged ? nil : .destructive) {
                             Task {
-                                await model.setKillSwitchEngaged(!model.killSwitchEngaged, reason: "Beginner 자동화 화면")
+                                await model.setKillSwitchEngaged(!model.killSwitchEngaged, reason: "자동화 화면")
                                 await model.refreshStrategyConfigs(replacingMessage: false)
                             }
                         }
@@ -535,7 +729,7 @@ struct BeginnerAutomationWorkspace: View {
                         .disabled(model.killSwitchTransitionPending)
                         .accessibilityIdentifier("beginner-automation-kill-switch")
 
-                        Text(model.killSwitchEngaged ? "긴급 중지가 자동화와 모의 주문을 차단하고 있습니다." : model.workerPausedEffective ? "Worker 일시중지가 자동화 실행을 차단하고 있습니다." : "자동화 안전 차단이 해제되어 있습니다.")
+                        Text(model.killSwitchEngaged ? "긴급 중지가 자동화와 모의 주문을 차단하고 있습니다." : model.workerPausedEffective ? "자동화 일시중지가 실행을 차단하고 있습니다." : "자동화 안전 차단이 해제되어 있습니다.")
                             .font(.caption2)
                             .foregroundStyle(model.killSwitchEngaged ? BeginnerPalette.red : model.workerPausedEffective ? BeginnerPalette.amber : BeginnerPalette.muted)
                     }
@@ -670,7 +864,7 @@ struct BeginnerSettingsWorkspace: View {
                 VStack(alignment: .leading, spacing: 5) {
                     Text("설정")
                         .font(.system(size: 26, weight: .bold))
-                    Text("연결, 엔진, 점검과 배포 도구는 일상 분석 화면에서 분리했습니다.")
+                    Text("연결, 알림과 자동화 상태를 관리합니다. 진단·배포 도구는 지원 경로에서만 제공합니다.")
                         .font(.caption)
                         .foregroundStyle(BeginnerPalette.muted)
                 }
@@ -696,33 +890,6 @@ struct BeginnerSettingsWorkspace: View {
                             } else {
                                 model.startSidecar()
                             }
-                        }
-                    )
-                    settingsCard(
-                        icon: "checkmark.shield",
-                        title: "앱 점검",
-                        detail: "sidecar, broker, paper, 자동화 안전 경로를 한 번에 확인합니다.",
-                        actionTitle: "점검 열기",
-                        identifier: "beginner-settings-self-test",
-                        action: { onOpen(.selfTest) }
-                    )
-                    settingsCard(
-                        icon: "shippingbox",
-                        title: "배포·설치 확인",
-                        detail: "앱 번들, 서명, DMG와 설치 검증 상태를 확인합니다.",
-                        actionTitle: "배포 상태",
-                        identifier: "beginner-settings-distribution",
-                        action: { onOpen(.distribution) }
-                    )
-                    settingsCard(
-                        icon: "doc.text.magnifyingglass",
-                        title: "Sidecar 로그",
-                        detail: "오류가 발생했을 때 최근 로컬 로그를 확인합니다.",
-                        actionTitle: "로그 열기",
-                        identifier: "beginner-settings-log",
-                        action: {
-                            model.refreshSidecarLogTail()
-                            onOpen(.sidecarLog)
                         }
                     )
                     settingsCard(

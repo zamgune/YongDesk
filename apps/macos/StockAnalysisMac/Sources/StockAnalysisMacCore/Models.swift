@@ -1514,6 +1514,56 @@ public struct TerminalDashboardSnapshot: Codable, Equatable, Sendable {
     public let playbook: DashboardPlaybook
 }
 
+public struct LocalWatchlistItem: Codable, Identifiable, Equatable, Sendable {
+    public let id: String
+    public let symbol: String
+    public let name: String?
+    public let assetClass: String
+    public let market: String
+    public let addedAt: String
+}
+
+public struct LocalWatchlistSummaryItem: Codable, Identifiable, Equatable, Sendable {
+    public let id: String
+    public let symbol: String
+    public let name: String?
+    public let assetClass: String
+    public let market: String
+    public let addedAt: String
+    public let price: Double?
+    public let changePercent: Double?
+    public let currency: String
+    public let dataSource: String
+    public let quoteAt: String?
+    public let stale: Bool
+    public let error: String?
+}
+
+public struct LocalWatchlistResponse: Codable, Equatable, Sendable {
+    public let maxItems: Int
+    public let items: [LocalWatchlistItem]
+}
+
+public struct LocalWatchlistSummaryResponse: Codable, Equatable, Sendable {
+    public let maxItems: Int
+    public let generatedAt: String
+    public let items: [LocalWatchlistSummaryItem]
+}
+
+public struct LocalWatchlistItemInput: Encodable, Sendable {
+    public let symbol: String
+    public let assetClass: String
+    public let market: String
+    public let name: String?
+
+    public init(symbol: String, assetClass: String, market: String, name: String? = nil) {
+        self.symbol = symbol
+        self.assetClass = assetClass
+        self.market = market
+        self.name = name
+    }
+}
+
 public struct DashboardOrderIntent: Codable, Equatable, Sendable {
     public let id: String
     public let symbol: String

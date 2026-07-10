@@ -17,6 +17,7 @@ struct BeginnerFirstRootView: View {
     @State private var activeSheet: BeginnerSettingsSheet?
     @State private var showingConnectionChooser = false
     @State private var analysisGeneration = 0
+    @State private var selectedSymbolName: String?
 
     private var destination: BeginnerDestination {
         get { BeginnerDestination(rawValue: destinationRawValue) ?? .chart }
@@ -74,6 +75,7 @@ struct BeginnerFirstRootView: View {
                             healthOK: model.health?.ok == true,
                             lastUpdated: model.lastUpdated,
                             isLoading: isLoading,
+                            onSymbolResolved: { selectedSymbolName = $0 },
                             onAnalyze: { Task { await runAnalysis() } }
                         )
 
@@ -152,6 +154,13 @@ struct BeginnerFirstRootView: View {
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
             model.stopSidecar()
         }
+        .onReceive(NotificationCenter.default.publisher(for: .openBeginnerSupportSelfTest)) { _ in
+            activeSheet = .selfTest
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .openBeginnerSupportLog)) { _ in
+            model.refreshSidecarLogTail()
+            activeSheet = .sidecarLog
+        }
     }
 
     @ViewBuilder
@@ -169,8 +178,14 @@ struct BeginnerFirstRootView: View {
                 isLoading: isLoading,
                 compact: compact,
                 onAnalyze: { Task { await runAnalysis() } },
+                onAddToWatchlist: { Task { await addCurrentToWatchlist() } },
                 onOpenOrder: { showingOrderDrawer = true },
                 onRefreshNews: { Task { await refreshNewsAndSentiment() } }
+            )
+        case .watchlist:
+            BeginnerWatchlistWorkspace(
+                onSelect: { item in selectWatchlistItem(item) },
+                onAddCurrent: { Task { await addCurrentToWatchlist() } }
             )
         case .assets:
             BeginnerAssetsWorkspace(
@@ -255,6 +270,7 @@ struct BeginnerFirstRootView: View {
         } else {
             selectedSymbol = stockMarket == .korea ? "005930.KS" : "AAPL"
         }
+        selectedSymbolName = nil
         Task { await runAnalysis() }
     }
 
@@ -263,6 +279,7 @@ struct BeginnerFirstRootView: View {
         stockMarket = next
         guard assetClass == .stock else { return }
         selectedSymbol = next == .korea ? "005930.KS" : "AAPL"
+        selectedSymbolName = nil
         destination = .chart
         Task { await runAnalysis() }
     }
@@ -271,6 +288,7 @@ struct BeginnerFirstRootView: View {
         assetClass = .stock
         stockMarket = .korea
         selectedSymbol = "005930.KS"
+        selectedSymbolName = "삼성전자 · Samsung Electronics"
         destination = .chart
         model.completeOnboarding()
         await runAnalysis()
@@ -331,13 +349,36 @@ struct BeginnerFirstRootView: View {
             market: market ?? (assetClass == .crypto ? "CRYPTO" : selectedSession)
         )
     }
+
+    private func addCurrentToWatchlist() async {
+        let market = assetClass == .crypto ? "CRYPTO" : selectedSession
+        await model.addWatchlistItem(
+            symbol: selectedSymbol,
+            assetClass: assetClass.rawValue,
+            market: market,
+            name: selectedSymbolName
+        )
+    }
+
+    private func selectWatchlistItem(_ item: LocalWatchlistSummaryItem) {
+        if item.assetClass == BeginnerAssetClass.crypto.rawValue {
+            assetClass = .crypto
+        } else {
+            assetClass = .stock
+            stockMarket = item.market == "KR" ? .korea : .unitedStates
+        }
+        selectedSymbol = item.symbol
+        selectedSymbolName = item.name
+        destination = .chart
+        Task { await runAnalysis() }
+    }
 }
 
 private struct BeginnerSidebar: View {
     @Binding var destination: BeginnerDestination
     let compact: Bool
 
-    private let primaryDestinations: [BeginnerDestination] = [.chart, .assets, .strategy, .automation]
+    private let primaryDestinations: [BeginnerDestination] = [.chart, .watchlist, .assets, .strategy, .automation]
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -436,6 +477,7 @@ private struct BeginnerTopBar: View {
     let healthOK: Bool
     let lastUpdated: String
     let isLoading: Bool
+    let onSymbolResolved: (String?) -> Void
     let onAnalyze: () -> Void
 
     var body: some View {
@@ -467,6 +509,7 @@ private struct BeginnerTopBar: View {
             BeginnerSymbolSearch(
                 selectedSymbol: $selectedSymbol,
                 querySession: querySession,
+                onSymbolResolved: onSymbolResolved,
                 onAnalyze: onAnalyze
             )
             .frame(maxWidth: 520)
@@ -516,6 +559,7 @@ private struct BeginnerSymbolSearch: View {
     @EnvironmentObject private var model: AppModel
     @Binding var selectedSymbol: String
     let querySession: String
+    let onSymbolResolved: (String?) -> Void
     let onAnalyze: () -> Void
 
     @State private var query = ""
@@ -631,6 +675,7 @@ private struct BeginnerSymbolSearch: View {
     private func select(_ item: LocalSymbolSearchItem) {
         selectedSymbol = item.symbol
         query = item.displayLabel
+        onSymbolResolved(item.bilingualName)
         matches = []
         showingSuggestions = false
         focused = false
@@ -651,6 +696,7 @@ private struct BeginnerSymbolSearch: View {
         guard !manual.isEmpty else { return }
         selectedSymbol = manual
         query = manual
+        onSymbolResolved(nil)
         showingSuggestions = false
         focused = false
         onAnalyze()

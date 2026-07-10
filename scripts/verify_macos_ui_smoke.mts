@@ -483,54 +483,6 @@ const setScrollPosition = (identifier: string, value: number) => {
   sleep(500);
 };
 
-const sheetExists = () =>
-  osascript([
-    "tell application \"System Events\"",
-    `  tell (first process whose bundle identifier is "${bundleIdentifier}")`,
-    "    repeat with candidateWindow in windows",
-    "      if exists sheet 1 of candidateWindow then return true",
-    "    end repeat",
-    "    return false",
-    "  end tell",
-    "end tell",
-  ], { allowFailure: true }).output === "true";
-
-const waitForNoSheet = (timeoutMs = 15_000) => {
-  const startedAt = Date.now();
-  while (Date.now() - startedAt < timeoutMs) {
-    if (!sheetExists()) return;
-    sleep(250);
-  }
-  throw new Error(`A presented sheet did not close.\n\n${fullAXContents().slice(0, 16_000)}`);
-};
-
-const waitForSheet = (timeoutMs = 15_000) => {
-  const startedAt = Date.now();
-  while (Date.now() - startedAt < timeoutMs) {
-    if (sheetExists()) return;
-    sleep(250);
-  }
-  throw new Error(`A settings sheet did not appear.\n\n${fullAXContents().slice(0, 16_000)}`);
-};
-
-const dismissSheet = (uniqueText?: string) => {
-  pressEscape();
-  const escapeStartedAt = Date.now();
-  while (Date.now() - escapeStartedAt < 3_000) {
-    if (!sheetExists() && (!uniqueText || !axTextContains(uniqueText))) return;
-    sleep(200);
-  }
-  if (axExists("닫기", "AXButton")) {
-    clickAX("닫기", "AXButton");
-  } else if (axExists("취소", "AXButton")) {
-    clickAX("취소", "AXButton");
-  }
-  waitForNoSheet();
-  if (uniqueText) {
-    waitForTextAbsent(uniqueText);
-  }
-};
-
 const windowFrame = (): Frame => {
   const result = osascript([
     "tell application \"System Events\"",
@@ -589,6 +541,7 @@ const verifyWorkspaceLayout = (size: WindowSize) => {
   const actual = setAndVerifyWindowSize(size);
   const destinations = [
     ["beginner-nav-chart", "beginner-chart-workspace"],
+    ["beginner-nav-watchlist", "beginner-watchlist-workspace"],
     ["beginner-nav-assets", "beginner-assets-workspace"],
     ["beginner-nav-strategy", "beginner-strategy-workspace"],
     ["beginner-nav-automation", "beginner-automation-workspace"],
@@ -691,6 +644,15 @@ const verifyCoreFlow = () => {
   waitForText("뉴스와 종목 민심");
   clickAX("beginner-analysis-tab-analysis");
 
+  clickAX("beginner-add-watchlist");
+  clickAX("beginner-nav-watchlist");
+  waitForAX("beginner-watchlist-workspace");
+  waitForAX("beginner-watchlist-filter");
+  waitForAX("beginner-watchlist-refresh");
+  waitForText("관심종목");
+
+  clickAX("beginner-nav-chart");
+  waitForAX("beginner-chart-workspace");
   clickAX("beginner-open-paper-order");
   waitForAX("beginner-paper-order-drawer");
   waitForText("PAPER ONLY");
@@ -752,18 +714,6 @@ const verifyCoreFlow = () => {
   pressEscape();
   waitForTextAbsent("연결할 API 선택");
 
-  clickAX("beginner-settings-self-test");
-  waitForText("핵심 버튼 경로를 주문 제출 없이 점검합니다", 30_000);
-  dismissSheet("핵심 버튼 경로를 주문 제출 없이 점검합니다");
-
-  clickAX("beginner-settings-log");
-  waitForText("로컬 엔진 시작, health check", 30_000);
-  dismissSheet("로컬 엔진 시작, health check");
-
-  clickAX("beginner-settings-distribution");
-  waitForSheet();
-  dismissSheet();
-
   assertNoBrokerSubmitControl();
 };
 
@@ -810,6 +760,7 @@ const main = () => {
       "beginner-onboarding",
       "beginner-onboarding-example",
       "beginner-nav-chart",
+      "beginner-nav-watchlist",
       "beginner-nav-assets",
       "beginner-nav-strategy",
       "beginner-nav-automation",
@@ -817,6 +768,10 @@ const main = () => {
       "beginner-symbol-search",
       "beginner-analyze-button",
       "beginner-chart-workspace",
+      "beginner-add-watchlist",
+      "beginner-watchlist-workspace",
+      "beginner-watchlist-filter",
+      "beginner-watchlist-refresh",
       "beginner-analysis-tab-analysis",
       "beginner-analysis-tab-signals",
       "beginner-analysis-tab-newsSentiment",
@@ -836,9 +791,6 @@ const main = () => {
       "beginner-automation-workspace",
       "beginner-settings-workspace",
       "beginner-settings-api",
-      "beginner-settings-self-test",
-      "beginner-settings-log",
-      "beginner-settings-distribution",
     ];
     const unverifiedIdentifiers = requiredIdentifiers.filter((identifier) => !identifiersUsed.has(identifier));
     if (unverifiedIdentifiers.length > 0) {
@@ -855,6 +807,7 @@ const main = () => {
       checks: {
         beginnerFirstOnboarding: true,
         samsungFixtureAnalysis: true,
+        watchlistWorkspace: true,
         sourceCurrencyTimeframeVisible: true,
         horizonPlans: true,
         signalAndNewsSentimentTabs: true,
@@ -865,9 +818,7 @@ const main = () => {
         automationPaperOnly: true,
         killSwitchReachable: true,
         settingsApiReachable: true,
-        selfTestReachable: true,
-        sidecarLogReachable: true,
-        distributionReachable: true,
+        supportToolsSeparated: true,
         responsiveWindowSizes: true,
       },
     }, null, 2));
