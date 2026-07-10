@@ -74,6 +74,12 @@ struct BeginnerStrategyWorkspace: View {
         return model.strategyConfigs.first { $0.id == draftConfigId }
     }
 
+    private var selectedInstrument: InstrumentDisplayView? {
+        savedConfig?.instrument
+            ?? model.strategyConfigs.first(where: { beginnerCanonicalSymbol($0.symbol) == beginnerCanonicalSymbol(symbol.isEmpty ? selectedSymbol : symbol) })?.instrument
+            ?? model.watchlistItems.first(where: { beginnerCanonicalSymbol($0.symbol) == beginnerCanonicalSymbol(symbol.isEmpty ? selectedSymbol : symbol) })?.instrument
+    }
+
     private var simulationCurrent: Bool {
         guard let savedConfig,
               let currentHash = savedConfig.currentConfigHash,
@@ -213,6 +219,13 @@ struct BeginnerStrategyWorkspace: View {
                 Text("현재 가격을 확인한 뒤 주식은 몇 주, 코인은 얼마를 살지 정합니다. 입력 결과는 오른쪽에서 실제 가격과 최대 투자금으로 확인합니다.")
                     .font(.caption)
                     .foregroundStyle(BeginnerPalette.muted)
+                HStack(spacing: 6) {
+                    Text(beginnerInstrumentPrimary(selectedInstrument, fallbackCode: symbol.isEmpty ? selectedSymbol : symbol))
+                        .font(.subheadline.weight(.semibold))
+                    Text(beginnerInstrumentCode(selectedInstrument, fallbackCode: symbol.isEmpty ? selectedSymbol : symbol))
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundStyle(BeginnerPalette.muted)
+                }
             }
             Spacer()
             Menu {
@@ -220,7 +233,7 @@ struct BeginnerStrategyWorkspace: View {
                     Text("저장된 전략 없음")
                 } else {
                     ForEach(model.strategyConfigs) { config in
-                        Button("\(config.name) · \(strategyStatusLabel(config.status))") {
+                        Button("\(beginnerInstrumentPrimary(config.instrument, fallbackCode: config.symbol)) · \(beginnerInstrumentCode(config.instrument, fallbackCode: config.symbol)) · \(config.name)") {
                             load(config)
                         }
                     }
@@ -292,8 +305,11 @@ struct BeginnerStrategyWorkspace: View {
                     Text(isCrypto ? "코인" : market == "US" ? "미국 주식" : "한국 주식")
                         .font(.caption.weight(.bold))
                         .foregroundStyle(BeginnerPalette.blue)
-                    Text(symbol)
-                        .font(.system(.body, design: .monospaced).weight(.bold))
+                    Text(beginnerInstrumentPrimary(selectedInstrument, fallbackCode: symbol))
+                        .font(.body.weight(.bold))
+                    Text(beginnerInstrumentCode(selectedInstrument, fallbackCode: symbol))
+                        .font(.system(.caption, design: .monospaced).weight(.semibold))
+                        .foregroundStyle(BeginnerPalette.muted)
                     Spacer()
                     TextField("전략 이름", text: $name)
                         .textFieldStyle(.roundedBorder)
@@ -496,8 +512,13 @@ struct BeginnerStrategyWorkspace: View {
                     Spacer()
                     BeginnerStatusBadge(workflowStatusLabel, color: workflowStatusColor)
                 }
-                Text(symbol)
-                    .font(.system(.title3, design: .monospaced).weight(.bold))
+                HStack(spacing: 7) {
+                    Text(beginnerInstrumentPrimary(selectedInstrument, fallbackCode: symbol))
+                        .font(.title3.weight(.bold))
+                    Text(beginnerInstrumentCode(selectedInstrument, fallbackCode: symbol))
+                        .font(.system(.caption, design: .monospaced).weight(.bold))
+                        .foregroundStyle(BeginnerPalette.muted)
+                }
                 Text(strategySentence)
                     .font(.callout)
                     .fixedSize(horizontal: false, vertical: true)

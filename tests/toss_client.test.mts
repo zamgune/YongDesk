@@ -71,6 +71,43 @@ test("toss client calls market data endpoints with bearer token", async () => {
   );
 });
 
+test("toss client reads Toss Securities rankings without an account header", async () => {
+  await withMockFetch(
+    [
+      tokenResponse(),
+      jsonResponse({
+        result: {
+          rankedAt: "2026-07-11T09:30:00+09:00",
+          rankings: [{
+            rank: 4,
+            symbol: "005930",
+            currency: "KRW",
+            price: { lastPrice: "88000", basePrice: "87000", changeRate: "0.0115" },
+            tradingVolume: "1000",
+            tradingAmount: "88000000",
+          }],
+        },
+      }),
+    ],
+    async (calls) => {
+      const client = createTossClient({ clientId: "client-id", clientSecret: "client-secret" });
+      const response = await client.getRankings({
+        type: "TOSS_SECURITIES_TRADING_AMOUNT",
+        marketCountry: "KR",
+        duration: "1d",
+        count: 100,
+      });
+
+      const url = new URL(calls[1]?.url ?? "");
+      assert.equal(url.pathname, "/api/v1/rankings");
+      assert.equal(url.searchParams.get("type"), "TOSS_SECURITIES_TRADING_AMOUNT");
+      assert.equal(url.searchParams.get("marketCountry"), "KR");
+      assert.equal((calls[1]?.init?.headers as Record<string, string>)["X-Tossinvest-Account"], undefined);
+      assert.equal(response.rankings[0]?.rank, 4);
+    },
+  );
+});
+
 test("toss client sends account header for closed order history", async () => {
   await withMockFetch(
     [

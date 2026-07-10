@@ -352,3 +352,30 @@ func beginnerCanonicalSymbol(_ value: String) -> String {
     }
     return symbol
 }
+
+func beginnerInstrumentPrimary(
+    _ instrument: InstrumentDisplayView?,
+    fallbackName: String? = nil,
+    fallbackCode: String
+) -> String {
+    if let name = instrument?.primaryName.trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty {
+        return name
+    }
+    if let name = fallbackName?.trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty {
+        return name
+    }
+    return beginnerCanonicalSymbol(fallbackCode)
+}
+
+func beginnerInstrumentCode(_ instrument: InstrumentDisplayView?, fallbackCode: String) -> String {
+    let code = instrument?.code.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    return code.isEmpty ? beginnerCanonicalSymbol(fallbackCode) : code
+}
+
+func beginnerInstrumentMarketLabel(_ market: String) -> String {
+    switch market {
+    case "KR", "KOSPI", "KOSDAQ": return "한국"
+    case "US": return "미국"
+    default: return "코인"
+    }
+}

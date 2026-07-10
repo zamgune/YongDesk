@@ -69,6 +69,7 @@ import {
   type CryptoExchange,
 } from "../src/lib/crypto-exchange/client.ts";
 import { loadSymbolMaster } from "../src/lib/market/symbol-master.ts";
+import { resolveInstrumentDisplay } from "../src/lib/market/instrument-display.ts";
 import {
   searchSymbolItems,
   type SymbolSearchMarket,
@@ -4325,6 +4326,10 @@ const strategyReadiness = async (config: AutomationStrategyConfig) => {
 
 const strategyResponse = async (config: AutomationStrategyConfig) => ({
   ...config,
+  instrument: await resolveInstrumentDisplay({
+    symbol: config.symbol,
+    market: config.market,
+  }),
   currentConfigHash: getStrategyConfigHash(config),
   automationReadiness: await strategyReadiness(config),
 });

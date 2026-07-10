@@ -271,41 +271,47 @@ struct BeginnerWatchlistWorkspace: View {
     }
 
     private func watchlistRow(_ item: LocalWatchlistSummaryItem) -> some View {
-        HStack(spacing: 14) {
+        HStack(spacing: 12) {
             Button {
                 onSelect(item)
             } label: {
                 HStack(spacing: 12) {
                     VStack(alignment: .leading, spacing: 3) {
-                        Text(item.name ?? item.symbol)
-                            .font(.subheadline.weight(.semibold))
-                        Text("\(item.symbol) · \(marketLabel(item.market)) · \(sourceLabel(item.dataSource))")
+                        Text(beginnerInstrumentPrimary(item.instrument, fallbackName: item.name, fallbackCode: item.symbol))
+                            .font(.system(size: 16, weight: .bold))
+                            .lineLimit(1)
+                        Text("\(beginnerInstrumentCode(item.instrument, fallbackCode: item.symbol)) · \(beginnerInstrumentMarketLabel(item.market))")
                             .font(.system(.caption, design: .monospaced))
                             .foregroundStyle(BeginnerPalette.muted)
                     }
                     Spacer()
                     VStack(alignment: .trailing, spacing: 3) {
                         Text(beginnerPrice(item.price, currency: item.currency))
-                            .font(.subheadline.weight(.semibold))
+                            .font(.system(size: 17, weight: .bold, design: .rounded))
                         Text(changeLabel(item))
                             .font(.caption.weight(.semibold))
                             .foregroundStyle((item.changePercent ?? 0) >= 0 ? BeginnerPalette.green : BeginnerPalette.red)
                     }
-                    VStack(alignment: .trailing, spacing: 3) {
-                        Text(item.stale ? "갱신 필요" : "정상")
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(item.stale ? BeginnerPalette.amber : BeginnerPalette.muted)
-                        Text(item.error ?? beginnerTimestamp(item.quoteAt))
-                            .font(.caption2)
-                            .foregroundStyle(item.error == nil ? BeginnerPalette.muted : BeginnerPalette.red)
-                            .lineLimit(1)
-                    }
-                    .frame(width: 180, alignment: .trailing)
                 }
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .frame(minWidth: 260, maxWidth: .infinity, alignment: .leading)
+            .accessibilityLabel("\(beginnerInstrumentPrimary(item.instrument, fallbackName: item.name, fallbackCode: item.symbol)), \(beginnerInstrumentCode(item.instrument, fallbackCode: item.symbol)), 현재가 \(beginnerPrice(item.price, currency: item.currency)), 등락률 \(changeLabel(item))")
             .accessibilityIdentifier("beginner-watchlist-select-\(item.id)")
+
+            insightChips(item)
+            .contentShape(Rectangle())
+            .onTapGesture { onSelect(item) }
+            .accessibilityIdentifier("beginner-watchlist-insights")
+
+            if item.stale || item.error != nil {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(item.error == nil ? BeginnerPalette.amber : BeginnerPalette.red)
+                    .help(item.error ?? "시세 갱신이 필요합니다.")
+                    .accessibilityLabel(item.error ?? "시세 갱신 필요")
+                    .accessibilityIdentifier("beginner-watchlist-stale-\(item.id)")
+            }
 
             Button(role: .destructive) {
                 Task { await model.removeWatchlistItem(id: item.id) }
@@ -319,16 +325,65 @@ struct BeginnerWatchlistWorkspace: View {
         .padding(.vertical, 11)
     }
 
-    private func marketLabel(_ market: String) -> String {
-        switch market {
-        case "KR": return "한국"
-        case "US": return "미국"
-        default: return "코인"
+    @ViewBuilder
+    private func insightChips(_ item: LocalWatchlistSummaryItem) -> some View {
+        HStack(spacing: 6) {
+            if item.assetClass == "crypto" {
+                insightChip(title: "인사이트", value: "준비 중", detail: "코인 인사이트는 다음 단계에서 제공합니다.", status: "unsupported")
+            } else {
+                insightChip(
+                    title: "기술",
+                    value: item.insights?.technical.label ?? "근거 부족",
+                    detail: item.insights?.technical.error ?? item.insights?.technical.detail ?? "요약 대기",
+                    status: item.insights?.technical.status ?? "low-evidence"
+                )
+                insightChip(
+                    title: "민심",
+                    value: item.insights?.sentiment.label ?? "근거 부족",
+                    detail: sentimentDetail(item),
+                    status: item.insights?.sentiment.status ?? "low-evidence"
+                )
+                insightChip(
+                    title: "관심도",
+                    value: item.insights?.attention.label ?? "근거 부족",
+                    detail: item.insights?.attention.error ?? item.insights?.attention.detail ?? "요약 대기",
+                    status: item.insights?.attention.status ?? "low-evidence"
+                )
+            }
         }
+        .frame(width: item.assetClass == "crypto" ? 92 : 228, alignment: .trailing)
     }
 
-    private func sourceLabel(_ source: String) -> String {
-        source == "upbit" ? "Upbit 공개 시세" : "Yahoo 보조 시세"
+    private func insightChip(title: String, value: String, detail: String, status: String) -> some View {
+        BeginnerStatusBadge(value, color: insightColor(status: status, value: value))
+            .help("\(title): \(detail)")
+            .accessibilityLabel("\(title) \(value), \(detail)")
+    }
+
+    private func sentimentDetail(_ item: LocalWatchlistSummaryItem) -> String {
+        guard let insight = item.insights?.sentiment else {
+            return "요약 대기"
+        }
+        if let error = insight.error {
+            return error
+        }
+        guard let evidenceCount = insight.evidenceCount, let confidence = insight.confidence else {
+            return insight.status == "unsupported" ? "지원 준비" : "근거 확인 필요"
+        }
+        return "근거 \(evidenceCount) · 신뢰 \(confidence)%"
+    }
+
+    private func insightColor(status: String, value: String) -> Color {
+        if status == "error" { return BeginnerPalette.red }
+        if status == "low-evidence" || status == "unavailable" || status == "unsupported" {
+            return BeginnerPalette.amber
+        }
+        if value == "하락 주의" || value == "공포" { return BeginnerPalette.red }
+        if value == "상승 우세" || value == "관심 높음" || value == "토스 체결 관심" {
+            return BeginnerPalette.green
+        }
+        if value == "과열" || value == "의견 분열" { return BeginnerPalette.amber }
+        return BeginnerPalette.muted
     }
 
     private func changeLabel(_ item: LocalWatchlistSummaryItem) -> String {
@@ -604,11 +659,16 @@ struct BeginnerAutomationWorkspace: View {
         return VStack(alignment: .leading, spacing: 11) {
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(config.name)
+                    Text(beginnerInstrumentPrimary(config.instrument, fallbackCode: config.symbol))
                         .font(.headline)
-                    Text("\(config.symbol) · \(venueLabel(config)) · paper 실행")
-                        .font(.caption)
+                    Text("\(beginnerInstrumentCode(config.instrument, fallbackCode: config.symbol)) · \(beginnerInstrumentMarketLabel(config.market)) · paper 실행")
+                        .font(.system(.caption, design: .monospaced))
                         .foregroundStyle(BeginnerPalette.muted)
+                    if config.name != beginnerInstrumentPrimary(config.instrument, fallbackCode: config.symbol) {
+                        Text(config.name)
+                            .font(.caption2)
+                            .foregroundStyle(BeginnerPalette.muted)
+                    }
                 }
                 Spacer()
                 BeginnerStatusBadge(config.automationReadiness?.paperAutomationReady == true ? "실행 가능" : "차단 확인", color: config.automationReadiness?.paperAutomationReady == true ? BeginnerPalette.green : BeginnerPalette.amber)
@@ -776,14 +836,6 @@ struct BeginnerAutomationWorkspace: View {
             isLoading = true
             resultPreview = await operation()
             isLoading = false
-        }
-    }
-
-    private func venueLabel(_ config: StrategyConfigView) -> String {
-        switch config.executionVenue {
-        case "upbit": return "Upbit"
-        case "bithumb": return "Bithumb"
-        default: return "Toss 조회"
         }
     }
 

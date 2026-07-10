@@ -23,6 +23,7 @@ export const TOSS_OPENAPI_REQUIRED_OPERATIONS: readonly TossOpenApiRequiredOpera
   { path: "/api/v1/exchange-rate", method: "get", accountHeader: false, purpose: "exchange rate" },
   { path: "/api/v1/market-calendar/KR", method: "get", accountHeader: false, purpose: "KR market calendar" },
   { path: "/api/v1/market-calendar/US", method: "get", accountHeader: false, purpose: "US market calendar" },
+  { path: "/api/v1/rankings", method: "get", accountHeader: false, purpose: "market and Toss Securities rankings" },
   { path: "/api/v1/buying-power", method: "get", accountHeader: true, purpose: "pre-trade buying power" },
   { path: "/api/v1/sellable-quantity", method: "get", accountHeader: true, purpose: "pre-trade sellable quantity" },
   { path: "/api/v1/commissions", method: "get", accountHeader: true, purpose: "commission schedule" },

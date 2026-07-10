@@ -22,6 +22,10 @@ import type {
   PaginatedOrderResponse,
   Price,
   PriceLimitResponse,
+  TossMarketCountry,
+  TossRankingDuration,
+  TossRankingResponse,
+  TossRankingType,
   SellableQuantityResponse,
   StockInfo,
   StockWarning,
@@ -371,6 +375,17 @@ export const createTossClient = (credentials: TossCredentials) => ({
   getPriceLimit: (symbol: string) =>
     request<PriceLimitResponse>(credentials, "/api/v1/price-limits", {
       query: { symbol },
+    }),
+
+  getRankings: (options: {
+    type: TossRankingType;
+    marketCountry: TossMarketCountry;
+    duration: TossRankingDuration;
+    count?: number;
+    excludeInvestmentCaution?: boolean;
+  }) =>
+    request<TossRankingResponse>(credentials, "/api/v1/rankings", {
+      query: options,
     }),
 
   getStocks: (symbols: string[]) =>

@@ -14,6 +14,14 @@ export type TossOrderSide = "BUY" | "SELL";
 export type TossOrderType = "LIMIT" | "MARKET";
 export type TossTimeInForce = "DAY" | "CLS";
 export type TossCandleInterval = "1m" | "1d";
+export type TossRankingType =
+  | "MARKET_TRADING_AMOUNT"
+  | "MARKET_TRADING_VOLUME"
+  | "TOP_GAINERS"
+  | "TOP_LOSERS"
+  | "TOSS_SECURITIES_TRADING_AMOUNT"
+  | "TOSS_SECURITIES_TRADING_VOLUME";
+export type TossRankingDuration = "realtime" | "1d" | "1w" | "1mo" | "3mo" | "6mo" | "1y";
 
 /** 클라이언트는 unknown 코드를 허용해야 한다 (스펙 명시). */
 export type TossOrderStatus =
@@ -117,6 +125,24 @@ export type PriceLimitResponse = {
   upperLimitPrice: string | null;
   lowerLimitPrice: string | null;
   currency: TossCurrency;
+};
+
+export type TossRankingItem = {
+  rank: number;
+  symbol: string;
+  currency: TossCurrency;
+  price: {
+    lastPrice: string;
+    basePrice: string;
+    changeRate: string;
+  };
+  tradingVolume: string;
+  tradingAmount: string;
+};
+
+export type TossRankingResponse = {
+  rankedAt: string | null;
+  rankings: TossRankingItem[];
 };
 
 export type StockInfo = {

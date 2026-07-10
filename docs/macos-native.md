@@ -39,7 +39,7 @@ curl http://127.0.0.1:38771/health
 | 상태 | `GET /health`, `GET /api/local/self-test` | sidecar와 앱 준비 상태 |
 | 시장 | `GET /api/market/:symbol`, `GET /api/briefing/daily-market` | 분석과 시장 브리핑 |
 | 멀티타임프레임 | `GET /api/local/analysis/workspace` | 1시간·4시간·일봉 분석, metadata와 단타·스윙·장기 계획 |
-| 관심종목 | `GET/POST /api/local/watchlist`, `DELETE /api/local/watchlist/:id`, `GET /api/local/watchlist/summary` | 이 Mac의 관심종목 저장과 한국·미국 주식·코인 시세 요약 |
+| 관심종목 | `GET/POST /api/local/watchlist`, `DELETE /api/local/watchlist/:id`, `GET /api/local/watchlist/summary` | 이 Mac의 관심종목 저장과 시세·일봉 기술 요약·커뮤니티 민심·관심도 요약. 코인은 이번 버전에서 시세만 제공 |
 | 뉴스·민심 | `GET /api/news/events`, `GET /api/community-pain/:symbol` | 공식/RSS 뉴스와 종목별 커뮤니티 근거 |
 | 대시보드 | `GET /api/dashboard/terminal`, `POST /api/dashboard/playbook` | macOS 대시보드와 포지션 메모 |
 | Toss | `/api/local/broker/credentials`, `/api/local/toss/readiness` | credential과 계좌 준비 상태 |

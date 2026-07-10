@@ -560,6 +560,7 @@ let strategyConfigJSON = """
       "name": "NVDA 순환분할",
       "symbol": "NVDA",
       "market": "US",
+      "instrument": {"primaryName":"엔비디아","code":"NVDA","market":"US","source":"symbol-master"},
       "preset": "magic-split",
       "status": "draft",
       "mode": "percent-grid",
@@ -609,6 +610,7 @@ let strategyConfigs = try JSONDecoder().decode(StrategyConfigListResponse.self, 
 assert(strategyConfigs.configs.first?.grid?.rungs.count == 2, "strategy config should decode grid rungs")
 assert(strategyConfigs.configs.first?.riskLimits?.maxLossPct == 10, "strategy config should decode risk limits")
 assert(strategyConfigs.configs.first?.automationReadiness?.nextActions.count == 1, "strategy config should decode readiness actions")
+assert(strategyConfigs.configs.first?.instrument?.primaryName == "엔비디아", "strategy config should decode instrument display")
 let strategyReport = StrategyOperationReport.make(from: StrategyOperationReportInput(
     generatedAt: "2026-07-09T00:00:00.000Z",
     sidecarOK: true,
@@ -1522,7 +1524,13 @@ func verifyWatchlistClientContracts() async throws {
         "dataSource": "yahoo",
         "quoteAt": "2026-07-11T00:00:00.000Z",
         "stale": false,
-        "error": null
+        "error": null,
+        "instrument": {"primaryName":"삼성전자","code":"005930","market":"KR","source":"symbol-master"},
+        "insights": {
+          "technical": {"label":"상승 우세","status":"ok","detail":"SMA20·SMA200 기준","generatedAt":"2026-07-11T00:00:00.000Z","error":null},
+          "sentiment": {"label":"공포","status":"ok","painScore":64,"gajuaScore":8,"confidence":72,"evidenceCount":18,"generatedAt":"2026-07-11T00:00:00.000Z","error":null},
+          "attention": {"label":"토스 체결 관심","status":"ok","source":"toss-rankings","detail":"토스증권 체결 기준 4위","rank":4,"generatedAt":"2026-07-11T00:00:00.000Z","error":null}
+        }
       }]
     }
     """
@@ -1548,6 +1556,10 @@ func verifyWatchlistClientContracts() async throws {
     let loaded = try await client.watchlistSummary()
     assert(loaded.items.first?.symbol == "005930.KS", "watchlist summary should decode a saved Korean stock")
     assert(loaded.items.first?.currency == "KRW", "watchlist summary should preserve row currency")
+    assert(loaded.items.first?.instrument?.primaryName == "삼성전자", "watchlist summary should decode instrument display")
+    assert(loaded.items.first?.insights?.technical.label == "상승 우세", "watchlist summary should decode technical insight")
+    assert(loaded.items.first?.insights?.sentiment.evidenceCount == 18, "watchlist summary should decode sentiment evidence")
+    assert(loaded.items.first?.insights?.attention.rank == 4, "watchlist summary should decode Toss attention rank")
     _ = try await client.addWatchlistItem(LocalWatchlistItemInput(symbol: "005930.KS", assetClass: "stock", market: "KR"))
     let removed = try await client.deleteWatchlistItem(id: "watch-1")
     assert(removed.items.isEmpty, "watchlist delete should decode the updated collection")

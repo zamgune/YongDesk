@@ -650,7 +650,11 @@ const verifyCoreFlow = () => {
   waitForAX("beginner-watchlist-workspace");
   waitForAX("beginner-watchlist-filter");
   waitForAX("beginner-watchlist-refresh");
+  waitForAX("beginner-watchlist-insights");
   waitForText("관심종목");
+  waitForText("상승 우세");
+  waitForText("근거 부족");
+  waitForText("관심 높음");
 
   clickAX("beginner-nav-chart");
   waitForAX("beginner-chart-workspace");
@@ -774,6 +778,7 @@ const main = () => {
       "beginner-watchlist-workspace",
       "beginner-watchlist-filter",
       "beginner-watchlist-refresh",
+      "beginner-watchlist-insights",
       "beginner-analysis-tab-analysis",
       "beginner-analysis-tab-signals",
       "beginner-analysis-tab-newsSentiment",

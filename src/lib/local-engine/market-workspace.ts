@@ -255,7 +255,9 @@ const createOfficialAnalysisProvider = ({
         ? "1wk"
         : primaryTimeframe === "4h" && options.interval === "1h"
           ? "4h"
-          : options.interval;
+          : options.interval === "1h" || options.interval === "1d"
+            ? options.interval
+            : primaryTimeframe;
       const snapshot = await load(requestedTimeframe, options);
       if (requestedTimeframe === primaryTimeframe) {
         primarySnapshot = snapshot;

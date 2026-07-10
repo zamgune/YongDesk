@@ -29,6 +29,10 @@ const {
   WATCHLIST_MAX_ITEMS,
   summarizeWatchlistItems,
 } = await import("../src/lib/local-engine/watchlist.ts");
+const {
+  clearInstrumentDisplayCache,
+  resolveInstrumentDisplay,
+} = await import("../src/lib/market/instrument-display.ts");
 
 type FetchCall = {
   url: string;
@@ -192,6 +196,21 @@ test("local engine searches Korean symbols with bilingual names", async () => {
   assert.equal(payload.matches?.[0]?.nameEn, "Samsung Electronics");
 });
 
+test("instrument display prefers master names and keeps a safe fallback", async () => {
+  clearInstrumentDisplayCache();
+  const korea = await resolveInstrumentDisplay({ symbol: "005930.KS", market: "KR" });
+  const unitedStates = await resolveInstrumentDisplay({ symbol: "AAPL", market: "US" });
+  const stored = await resolveInstrumentDisplay({ symbol: "UNKNOWN", market: "US", storedName: "저장한 이름" });
+  const unknown = await resolveInstrumentDisplay({ symbol: "ZZZZ", market: "US" });
+
+  assert.equal(korea.code, "005930");
+  assert.notEqual(korea.primaryName, "005930");
+  assert.equal(unitedStates.code, "AAPL");
+  assert.ok(unitedStates.primaryName.length > 0);
+  assert.deepEqual(stored, { primaryName: "저장한 이름", code: "UNKNOWN", market: "US", source: "stored-name" });
+  assert.deepEqual(unknown, { primaryName: "ZZZZ", code: "ZZZZ", market: "US", source: "symbol" });
+});
+
 test("local chart returns each requested candle timeframe without external data in fixture mode", async () => {
   const previousFixtureMode = process.env.STOCK_ANALYSIS_MARKET_FIXTURE_MODE;
   process.env.STOCK_ANALYSIS_MARKET_FIXTURE_MODE = "1";
@@ -258,6 +277,39 @@ test("local watchlist stores unique items, enforces its limit, and isolates summ
     getCryptoQuotes: async () => new Map([
       ["KRW-BTC", { price: 150_000_000, quoteAt: "2026-07-11T00:00:00.000Z" }],
     ]),
+    getStockCandles: async (symbol) => {
+      if (symbol === "FAIL") throw new Error("daily candles unavailable");
+      return Array.from({ length: 220 }, (_, index) => ({
+        time: 1_700_000_000 + index * 86_400,
+        open: 100 + index,
+        high: 101 + index,
+        low: 99 + index,
+        close: 100 + index,
+        volume: index === 219 ? 2_000 : 1_000,
+      }));
+    },
+    getSentiment: async (item) => item.symbol === "AAPL" ? {
+      label: "공포" as const,
+      status: "ok" as const,
+      painScore: 64,
+      gajuaScore: 8,
+      confidence: 72,
+      evidenceCount: 18,
+      generatedAt: "2026-07-11T00:00:00.000Z",
+      error: null,
+    } : {
+      label: "근거 부족" as const,
+      status: "low-evidence" as const,
+      painScore: 0,
+      gajuaScore: 0,
+      confidence: 0,
+      evidenceCount: 0,
+      generatedAt: "2026-07-11T00:00:00.000Z",
+      error: null,
+    },
+    getTossRanks: async () => new Map([
+      ["AAPL", { rank: 4, rankedAt: "2026-07-11T00:00:00.000Z" }],
+    ]),
   });
   assert.equal(summary[0]?.price, 200);
   assert.equal(summary[0]?.changePercent, 1.5);
@@ -265,12 +317,53 @@ test("local watchlist stores unique items, enforces its limit, and isolates summ
   assert.equal(summary[1]?.stale, true);
   assert.equal(summary[2]?.dataSource, "upbit");
   assert.equal(summary[2]?.currency, "KRW");
+  assert.equal(summary[0]?.insights.technical.label, "상승 우세");
+  assert.equal(summary[0]?.insights.sentiment.label, "공포");
+  assert.equal(summary[0]?.insights.attention.label, "토스 체결 관심");
+  assert.equal(summary[0]?.insights.attention.rank, 4);
+  assert.equal(summary[1]?.insights.technical.label, "갱신 실패");
+  assert.equal(summary[1]?.insights.sentiment.label, "근거 부족");
+  assert.equal(summary[2]?.insights.sentiment.label, "지원 준비");
+  assert.equal(summary[2]?.insights.attention.label, "지원 준비");
 
   const deleted = await handleLocalEngineRequest(new Request(
     `http://127.0.0.1:38771/api/local/watchlist/${id}`,
     { method: "DELETE" },
   ));
   assert.equal(deleted.status, 200);
+});
+
+test("watchlist insight falls back to volume attention when Toss ranking is unavailable", async () => {
+  const items = await summarizeWatchlistItems([
+    { id: "rate-limit", symbol: "RATELIMIT", name: "Rate Limit", assetClass: "stock", market: "US", addedAt: "2026-07-11T00:00:00.000Z" },
+  ], {
+    now: () => new Date("2026-07-11T00:00:10.000Z"),
+    getStockQuotes: async () => new Map([["RATELIMIT", { symbol: "RATELIMIT", price: 200, changePercent: 1.5 }]]),
+    getCryptoQuotes: async () => new Map(),
+    getStockCandles: async () => Array.from({ length: 220 }, (_, index) => ({
+      time: 1_700_000_000 + index * 86_400,
+      open: 100 + index,
+      high: 101 + index,
+      low: 99 + index,
+      close: 100 + index,
+      volume: index === 219 ? 2_000 : 1_000,
+    })),
+    getSentiment: async () => ({
+      label: "Reddit 연결 필요" as const,
+      status: "unavailable" as const,
+      painScore: null,
+      gajuaScore: null,
+      confidence: null,
+      evidenceCount: null,
+      generatedAt: "2026-07-11T00:00:00.000Z",
+      error: null,
+    }),
+    getTossRanks: async () => { throw new Error("rate-limit-exceeded"); },
+  });
+
+  assert.equal(items[0]?.insights.sentiment.label, "Reddit 연결 필요");
+  assert.equal(items[0]?.insights.attention.source, "volume-ratio");
+  assert.equal(items[0]?.insights.attention.label, "관심 높음");
 });
 
 test("local engine exposes fail-closed crypto exchange setup", async () => {
@@ -2127,6 +2220,7 @@ test("local engine manages local automation strategy configs", async () => {
       name?: string;
       status?: string;
       preset?: string;
+      instrument?: { primaryName?: string; code?: string; market?: string };
       automationReadiness?: { paperAutomationReady?: boolean; liveSubmissionReady?: boolean };
     }>;
   };
@@ -2135,6 +2229,7 @@ test("local engine manages local automation strategy configs", async () => {
     config.name === "ZXSTRAT 분할 전략 수정" &&
     config.status === "draft" &&
     config.preset === "magic-split" &&
+    config.instrument?.code === "ZXSTRAT" &&
     config.automationReadiness?.paperAutomationReady === false &&
     config.automationReadiness?.liveSubmissionReady === false,
   ));

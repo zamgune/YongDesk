@@ -3,8 +3,12 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 
 import { getCryptoTickers } from "@/lib/crypto-exchange/client";
+import { loadDecryptedCredentials } from "@/lib/broker/credential-store";
+import { getCommunityPain } from "../community-pain/service.mts";
 import { stockAnalysisStoragePath } from "@/lib/local-storage";
-import { getMarketDataProvider, type MarketQuote } from "@/lib/market-data";
+import { resolveInstrumentDisplay, type InstrumentDisplay } from "@/lib/market/instrument-display";
+import { getMarketDataProvider, type MarketCandle, type MarketQuote } from "@/lib/market-data";
+import { createTossClient } from "@/lib/toss/client";
 
 export type WatchlistAssetClass = "stock" | "crypto";
 export type WatchlistMarket = "KR" | "US" | "CRYPTO";
@@ -26,6 +30,45 @@ export type WatchlistSummaryItem = WatchlistItem & {
   quoteAt: string | null;
   stale: boolean;
   error: string | null;
+  instrument: InstrumentDisplay;
+  insights: WatchlistInsights;
+};
+
+export type WatchlistInsightStatus = "ok" | "low-evidence" | "unavailable" | "error" | "unsupported";
+
+export type WatchlistTechnicalInsight = {
+  label: "상승 우세" | "중립" | "하락 주의" | "근거 부족" | "지원 준비" | "갱신 실패";
+  status: WatchlistInsightStatus;
+  detail: string;
+  generatedAt: string | null;
+  error: string | null;
+};
+
+export type WatchlistSentimentInsight = {
+  label: "공포" | "과열" | "의견 분열" | "차분" | "근거 부족" | "Reddit 연결 필요" | "지원 준비" | "갱신 실패";
+  status: WatchlistInsightStatus;
+  painScore: number | null;
+  gajuaScore: number | null;
+  confidence: number | null;
+  evidenceCount: number | null;
+  generatedAt: string | null;
+  error: string | null;
+};
+
+export type WatchlistAttentionInsight = {
+  label: "토스 체결 관심" | "관심 높음" | "관심 보통" | "관심 낮음" | "근거 부족" | "지원 준비" | "갱신 실패";
+  status: WatchlistInsightStatus;
+  source: "toss-rankings" | "volume-ratio" | "unavailable";
+  detail: string;
+  rank: number | null;
+  generatedAt: string | null;
+  error: string | null;
+};
+
+export type WatchlistInsights = {
+  technical: WatchlistTechnicalInsight;
+  sentiment: WatchlistSentimentInsight;
+  attention: WatchlistAttentionInsight;
 };
 
 export type WatchlistResponse = {
@@ -49,10 +92,17 @@ type WatchlistPayload = Record<string, unknown>;
 type WatchlistSummaryDependencies = {
   getStockQuotes: (symbols: string[]) => Promise<Map<string, MarketQuote | Error>>;
   getCryptoQuotes: (markets: string[]) => Promise<Map<string, { price: number; quoteAt: string } | Error>>;
+  getStockCandles: (symbol: string) => Promise<MarketCandle[]>;
+  getSentiment: (item: WatchlistItem) => Promise<WatchlistSentimentInsight>;
+  getTossRanks: (markets: WatchlistMarket[]) => Promise<Map<string, { rank: number; rankedAt: string | null }>>;
   now: () => Date;
 };
 
 const WATCHLIST_STORE_PATH = stockAnalysisStoragePath("watchlist", "items.json");
+const WATCHLIST_INSIGHT_TTL_MS = 5 * 60 * 1_000;
+const WATCHLIST_INSIGHT_CONCURRENCY = 3;
+const localUserId = () => process.env.STOCK_ANALYSIS_LOCAL_USER_ID?.trim() || "local-macos-user";
+const insightCache = new Map<string, { expiresAt: number; insight: WatchlistInsights }>();
 
 const asText = (value: unknown, maxLength: number) =>
   typeof value === "string" && value.trim()
@@ -142,11 +192,184 @@ const response = (items: WatchlistItem[]): WatchlistResponse => ({
   items,
 });
 
+const average = (values: number[]) =>
+  values.length ? values.reduce((total, value) => total + value, 0) / values.length : null;
+
+const unavailableTechnical = (): WatchlistTechnicalInsight => ({
+  label: "근거 부족",
+  status: "low-evidence",
+  detail: "일봉 데이터를 충분히 확보하지 못했습니다.",
+  generatedAt: null,
+  error: null,
+});
+
+const unsupportedInsights = (): WatchlistInsights => ({
+  technical: {
+    label: "지원 준비",
+    status: "unsupported",
+    detail: "코인 기술 요약은 다음 단계에서 제공합니다.",
+    generatedAt: null,
+    error: null,
+  },
+  sentiment: {
+    label: "지원 준비",
+    status: "unsupported",
+    painScore: null,
+    gajuaScore: null,
+    confidence: null,
+    evidenceCount: null,
+    generatedAt: null,
+    error: null,
+  },
+  attention: {
+    label: "지원 준비",
+    status: "unsupported",
+    source: "unavailable",
+    detail: "코인 관심도는 다음 단계에서 제공합니다.",
+    rank: null,
+    generatedAt: null,
+    error: null,
+  },
+});
+
+const technicalFromCandles = (candles: MarketCandle[], now: Date): WatchlistTechnicalInsight => {
+  const closes = candles.map((candle) => candle.close).filter(Number.isFinite);
+  if (closes.length < 20) return unavailableTechnical();
+  const latest = closes.at(-1)!;
+  const sma20 = average(closes.slice(-20));
+  const sma200 = closes.length >= 200 ? average(closes.slice(-200)) : null;
+  if (sma20 === null) return unavailableTechnical();
+  const aboveShort = latest >= sma20;
+  const aboveLong = sma200 === null || latest >= sma200;
+  const label = aboveShort && aboveLong ? "상승 우세" : !aboveShort && !aboveLong ? "하락 주의" : "중립";
+  const longDetail = sma200 === null ? "SMA20 기준" : "SMA20·SMA200 기준";
+  return {
+    label,
+    status: "ok",
+    detail: longDetail,
+    generatedAt: now.toISOString(),
+    error: null,
+  };
+};
+
+const attentionFromCandles = (
+  candles: MarketCandle[],
+  now: Date,
+  tossRank?: { rank: number; rankedAt: string | null },
+): WatchlistAttentionInsight => {
+  if (tossRank) {
+    return {
+      label: "토스 체결 관심",
+      status: "ok",
+      source: "toss-rankings",
+      detail: `토스증권 체결 기준 ${tossRank.rank}위`,
+      rank: tossRank.rank,
+      generatedAt: tossRank.rankedAt ?? now.toISOString(),
+      error: null,
+    };
+  }
+  const volumes = candles.map((candle) => candle.volume).filter((volume) => Number.isFinite(volume) && volume >= 0);
+  if (volumes.length < 21) {
+    return {
+      label: "근거 부족",
+      status: "low-evidence",
+      source: "volume-ratio",
+      detail: "거래량 기준 데이터가 부족합니다.",
+      rank: null,
+      generatedAt: null,
+      error: null,
+    };
+  }
+  const latest = volumes.at(-1)!;
+  const baseline = average(volumes.slice(-21, -1));
+  if (!baseline || baseline <= 0) {
+    return {
+      label: "근거 부족",
+      status: "low-evidence",
+      source: "volume-ratio",
+      detail: "평균 거래량을 계산하지 못했습니다.",
+      rank: null,
+      generatedAt: null,
+      error: null,
+    };
+  }
+  const ratio = latest / baseline;
+  const label = ratio >= 1.7 ? "관심 높음" : ratio >= 0.7 ? "관심 보통" : "관심 낮음";
+  return {
+    label,
+    status: "ok",
+    source: "volume-ratio",
+    detail: `20일 평균 대비 ${ratio.toFixed(1)}배`,
+    rank: null,
+    generatedAt: now.toISOString(),
+    error: null,
+  };
+};
+
+const sentimentFromCommunity = async (item: WatchlistItem): Promise<WatchlistSentimentInsight> => {
+  const source = item.market === "KR" ? "paxnet" : "reddit";
+  const response = await getCommunityPain({
+    symbol: item.symbol,
+    market: item.market,
+    requestedSources: [source],
+    limit: 30,
+  });
+  const configurationRequired = response.sourceStats.some((stat) => stat.status === "configuration-required");
+  if (configurationRequired) {
+    return {
+      label: "Reddit 연결 필요",
+      status: "unavailable",
+      painScore: null,
+      gajuaScore: null,
+      confidence: null,
+      evidenceCount: null,
+      generatedAt: response.generatedAt,
+      error: null,
+    };
+  }
+  const label = response.lowEvidence
+    ? "근거 부족"
+    : response.sentimentRegime === "panic"
+      ? "공포"
+      : response.sentimentRegime === "hype"
+        ? "과열"
+        : response.sentimentRegime === "divided"
+          ? "의견 분열"
+          : "차분";
+  return {
+    label,
+    status: response.lowEvidence ? "low-evidence" : "ok",
+    painScore: response.painScore,
+    gajuaScore: response.gajuaScore,
+    confidence: response.confidence,
+    evidenceCount: response.evidenceCount,
+    generatedAt: response.generatedAt,
+    error: null,
+  };
+};
+
+const normalizeTossRankSymbol = (symbol: string, market: WatchlistMarket) =>
+  market === "KR" ? `${symbol.replace(/\.(?:KS|KQ)$/i, "")}.KS` : symbol.toUpperCase();
+
+const mapWithConcurrency = async <T, R>(items: T[], limit: number, task: (item: T) => Promise<R>) => {
+  const results: R[] = new Array(items.length);
+  let cursor = 0;
+  const worker = async () => {
+    while (cursor < items.length) {
+      const index = cursor;
+      cursor += 1;
+      results[index] = await task(items[index]);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return results;
+};
+
 const defaultDependencies = (): WatchlistSummaryDependencies => ({
   getStockQuotes: async (symbols) => {
     const provider = getMarketDataProvider();
     const results = await Promise.allSettled(symbols.map((symbol) => provider.getQuote(symbol)));
-    return new Map(symbols.map((symbol, index) => {
+    return new Map<string, MarketQuote | Error>(symbols.map((symbol, index): [string, MarketQuote | Error] => {
       const result = results[index];
       if (result.status === "fulfilled" && result.value) {
         return [symbol, result.value];
@@ -163,11 +386,56 @@ const defaultDependencies = (): WatchlistSummaryDependencies => ({
         price: quote.tradePrice,
         quoteAt: new Date(quote.timestamp).toISOString(),
       }]));
-      return new Map(markets.map((market) => [market, found.get(market) ?? new Error("현재가를 찾을 수 없습니다.")]));
+      return new Map<string, { price: number; quoteAt: string } | Error>(
+        markets.map((market): [string, { price: number; quoteAt: string } | Error] => [
+          market,
+          found.get(market) ?? new Error("현재가를 찾을 수 없습니다."),
+        ]),
+      );
     } catch (error) {
       const failure = error instanceof Error ? error : new Error(String(error));
-      return new Map(markets.map((market) => [market, failure]));
+      return new Map<string, { price: number; quoteAt: string } | Error>(
+        markets.map((market): [string, { price: number; quoteAt: string } | Error] => [market, failure]),
+      );
     }
+  },
+  getStockCandles: async (symbol) => {
+    const now = new Date();
+    const response = await getMarketDataProvider().getCandles(symbol, {
+      period1: new Date(now.getTime() - 380 * 24 * 60 * 60 * 1_000),
+      period2: now,
+      interval: "1d",
+    });
+    return response.candles;
+  },
+  getSentiment: sentimentFromCommunity,
+  getTossRanks: async (markets) => {
+    const credentials = await loadDecryptedCredentials(localUserId(), "toss").catch(() => null);
+    if (!credentials) return new Map();
+    const client = createTossClient(credentials);
+    const results = await Promise.allSettled(
+      [...new Set(markets.filter((market) => market === "KR" || market === "US"))].map(async (market) => ({
+        market,
+        response: await client.getRankings({
+          type: "TOSS_SECURITIES_TRADING_AMOUNT",
+          marketCountry: market,
+          duration: "1d",
+          count: 100,
+          excludeInvestmentCaution: false,
+        }),
+      })),
+    );
+    const ranks = new Map<string, { rank: number; rankedAt: string | null }>();
+    for (const result of results) {
+      if (result.status !== "fulfilled") continue;
+      for (const item of result.value.response.rankings) {
+        ranks.set(normalizeTossRankSymbol(item.symbol, result.value.market), {
+          rank: item.rank,
+          rankedAt: result.value.response.rankedAt,
+        });
+      }
+    }
+    return ranks;
   },
   now: () => new Date(),
 });
@@ -182,6 +450,25 @@ const fixtureDependencies = (): WatchlistSummaryDependencies => ({
     price: 150_000_000 + index * 1_000_000,
     quoteAt: "2026-07-11T00:00:00.000Z",
   }])),
+  getStockCandles: async () => Array.from({ length: 220 }, (_, index) => ({
+    time: 1_700_000_000 + index * 86_400,
+    open: 100 + index,
+    high: 101 + index,
+    low: 99 + index,
+    close: 100 + index,
+    volume: index === 219 ? 2_000 : 1_000,
+  })),
+  getSentiment: async () => ({
+    label: "근거 부족",
+    status: "low-evidence",
+    painScore: 0,
+    gajuaScore: 0,
+    confidence: 0,
+    evidenceCount: 0,
+    generatedAt: "2026-07-11T00:00:00.000Z",
+    error: null,
+  }),
+  getTossRanks: async () => new Map(),
   now: () => new Date("2026-07-11T00:00:10.000Z"),
 });
 
@@ -236,16 +523,23 @@ export const removeWatchlistItem = async (id: string): Promise<WatchlistResponse
 
 export const summarizeWatchlistItems = async (
   items: WatchlistItem[],
-  dependencies: WatchlistSummaryDependencies = defaultDependencies(),
+  dependencies: Partial<WatchlistSummaryDependencies> = {},
 ): Promise<WatchlistSummaryItem[]> => {
+  const resolvedDependencies: WatchlistSummaryDependencies = {
+    ...defaultDependencies(),
+    ...dependencies,
+  };
   const stockSymbols = items.filter((item) => item.assetClass === "stock").map((item) => item.symbol);
   const cryptoMarkets = items.filter((item) => item.assetClass === "crypto").map((item) => item.symbol);
   const [stockQuotes, cryptoQuotes] = await Promise.all([
-    stockSymbols.length ? dependencies.getStockQuotes(stockSymbols) : Promise.resolve(new Map()),
-    cryptoMarkets.length ? dependencies.getCryptoQuotes(cryptoMarkets) : Promise.resolve(new Map()),
+    stockSymbols.length ? resolvedDependencies.getStockQuotes(stockSymbols) : Promise.resolve(new Map()),
+    cryptoMarkets.length ? resolvedDependencies.getCryptoQuotes(cryptoMarkets) : Promise.resolve(new Map()),
   ]);
-  const generatedAt = dependencies.now().toISOString();
-  return items.map((item) => {
+  const generatedAt = resolvedDependencies.now().toISOString();
+  const tossRanks = await resolvedDependencies.getTossRanks(
+    [...new Set(items.filter((item) => item.assetClass === "stock").map((item) => item.market))],
+  ).catch(() => new Map<string, { rank: number; rankedAt: string | null }>());
+  const baseItems = items.map((item) => {
     const quote = item.assetClass === "crypto" ? cryptoQuotes.get(item.symbol) : stockQuotes.get(item.symbol);
     if (quote instanceof Error || !quote) {
       return {
@@ -257,7 +551,7 @@ export const summarizeWatchlistItems = async (
         quoteAt: null,
         stale: true,
         error: errorText(quote instanceof Error ? quote : new Error("현재가를 찾을 수 없습니다.")),
-      };
+      } satisfies Omit<WatchlistSummaryItem, "instrument" | "insights">;
     }
     if (item.assetClass === "crypto") {
       return {
@@ -269,7 +563,7 @@ export const summarizeWatchlistItems = async (
         quoteAt: quote.quoteAt,
         stale: Date.parse(generatedAt) - Date.parse(quote.quoteAt) > 2 * 60 * 1_000,
         error: null,
-      };
+      } satisfies Omit<WatchlistSummaryItem, "instrument" | "insights">;
     }
     return {
       ...item,
@@ -280,8 +574,67 @@ export const summarizeWatchlistItems = async (
       quoteAt: generatedAt,
       stale: false,
       error: null,
-    };
+    } satisfies Omit<WatchlistSummaryItem, "instrument" | "insights">;
   });
+  const instruments = await mapWithConcurrency(baseItems, WATCHLIST_INSIGHT_CONCURRENCY, (item) =>
+    resolveInstrumentDisplay({
+      symbol: item.symbol,
+      market: item.market,
+      storedName: item.name,
+    }),
+  );
+  const insights = await mapWithConcurrency(baseItems, WATCHLIST_INSIGHT_CONCURRENCY, async (item) => {
+    if (item.assetClass === "crypto") return unsupportedInsights();
+    const cacheKey = `${item.market}:${item.symbol}`;
+    const cached = insightCache.get(cacheKey);
+    if (cached && cached.expiresAt > Date.now()) return cached.insight;
+    const now = resolvedDependencies.now();
+    const [candlesResult, sentimentResult] = await Promise.allSettled([
+      resolvedDependencies.getStockCandles(item.symbol),
+      resolvedDependencies.getSentiment(item),
+    ]);
+    const candles = candlesResult.status === "fulfilled" ? candlesResult.value : [];
+    const technical = candlesResult.status === "fulfilled"
+      ? technicalFromCandles(candles, now)
+      : {
+        label: "갱신 실패" as const,
+        status: "error" as const,
+        detail: "기술 요약을 불러오지 못했습니다.",
+        generatedAt: null,
+        error: errorText(candlesResult.reason instanceof Error ? candlesResult.reason : new Error(String(candlesResult.reason))),
+      };
+    const attention = candlesResult.status === "fulfilled"
+      ? attentionFromCandles(candles, now, tossRanks.get(normalizeTossRankSymbol(item.symbol, item.market)))
+      : {
+        label: "갱신 실패" as const,
+        status: "error" as const,
+        source: "unavailable" as const,
+        detail: "관심도를 불러오지 못했습니다.",
+        rank: null,
+        generatedAt: null,
+        error: technical.error,
+      };
+    const sentiment = sentimentResult.status === "fulfilled"
+      ? sentimentResult.value
+      : {
+        label: "갱신 실패" as const,
+        status: "error" as const,
+        painScore: null,
+        gajuaScore: null,
+        confidence: null,
+        evidenceCount: null,
+        generatedAt: null,
+        error: errorText(sentimentResult.reason instanceof Error ? sentimentResult.reason : new Error(String(sentimentResult.reason))),
+      };
+    const insight = { technical, sentiment, attention } satisfies WatchlistInsights;
+    insightCache.set(cacheKey, { expiresAt: Date.now() + WATCHLIST_INSIGHT_TTL_MS, insight });
+    return insight;
+  });
+  return baseItems.map((item, index) => ({
+    ...item,
+    instrument: instruments[index],
+    insights: insights[index],
+  }));
 };
 
 export const getWatchlistSummary = async (): Promise<WatchlistSummaryResponse> => {

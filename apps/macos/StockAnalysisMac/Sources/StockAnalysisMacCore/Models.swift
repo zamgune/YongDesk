@@ -1450,6 +1450,7 @@ public struct StrategyConfigView: Codable, Identifiable, Equatable, Sendable {
     public let name: String
     public let symbol: String
     public let market: String
+    public let instrument: InstrumentDisplayView?
     public let executionVenue: String?
     public let preset: String?
     public let status: String
@@ -1620,6 +1621,50 @@ public struct LocalWatchlistSummaryItem: Codable, Identifiable, Equatable, Senda
     public let dataSource: String
     public let quoteAt: String?
     public let stale: Bool
+    public let error: String?
+    public let instrument: InstrumentDisplayView?
+    public let insights: LocalWatchlistInsights?
+}
+
+public struct InstrumentDisplayView: Codable, Equatable, Sendable {
+    public let primaryName: String
+    public let code: String
+    public let market: String
+    public let source: String
+}
+
+public struct LocalWatchlistInsights: Codable, Equatable, Sendable {
+    public let technical: LocalWatchlistTechnicalInsight
+    public let sentiment: LocalWatchlistSentimentInsight
+    public let attention: LocalWatchlistAttentionInsight
+}
+
+public struct LocalWatchlistTechnicalInsight: Codable, Equatable, Sendable {
+    public let label: String
+    public let status: String
+    public let detail: String
+    public let generatedAt: String?
+    public let error: String?
+}
+
+public struct LocalWatchlistSentimentInsight: Codable, Equatable, Sendable {
+    public let label: String
+    public let status: String
+    public let painScore: Int?
+    public let gajuaScore: Int?
+    public let confidence: Int?
+    public let evidenceCount: Int?
+    public let generatedAt: String?
+    public let error: String?
+}
+
+public struct LocalWatchlistAttentionInsight: Codable, Equatable, Sendable {
+    public let label: String
+    public let status: String
+    public let source: String
+    public let detail: String
+    public let rank: Int?
+    public let generatedAt: String?
     public let error: String?
 }
 

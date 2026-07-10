@@ -206,7 +206,10 @@ export class TossMarketDataProvider {
   }
 
   async getCandles(symbol: string, options: GetCandlesOptions): Promise<MarketCandleResponse> {
-    const snapshot = await this.loadSeries(symbol, options.interval, options);
+    const timeframe: OfficialTimeframe = options.interval === "5m" || options.interval === "15m" || options.interval === "30m"
+      ? "1h"
+      : options.interval;
+    const snapshot = await this.loadSeries(symbol, timeframe, options);
     return {
       candles: snapshot.candles
         .filter((candle) => candle.isClosed && !candle.isPartialSessionBar)
