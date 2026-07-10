@@ -3,6 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="icon" href="data:," />
   <title>StockAnalysis — 초보자 중심 macOS 시안</title>
   <style>
     :root {
@@ -543,6 +544,148 @@
     .focus-card { padding: 18px; border: 1px solid var(--line-soft); border-radius: var(--radius-md); background: var(--surface); }
     .focus-card h2 { margin-bottom: 8px; font-size: 16px; }
     .focus-card > p { color: var(--muted); line-height: 1.55; }
+    .strategy-heading-actions { display: flex; align-items: center; gap: 8px; }
+    .draft-status { padding: 6px 9px; border-radius: 999px; color: var(--muted); background: #0a1118; font-size: 11px; font-weight: 700; }
+    .strategy-intro {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 18px;
+      padding: 16px 18px;
+      border: 1px solid rgba(106, 169, 255, 0.22);
+      border-radius: var(--radius-md);
+      background: linear-gradient(110deg, rgba(106, 169, 255, 0.09), rgba(66, 211, 170, 0.04));
+    }
+    .strategy-intro strong { display: block; margin-bottom: 5px; font-size: 14px; }
+    .strategy-intro p { max-width: 780px; margin: 0; color: var(--muted); font-size: 12px; line-height: 1.55; }
+    .paper-badge { flex: 0 0 auto; padding: 5px 8px; border-radius: 999px; color: var(--blue); background: var(--blue-soft); font-size: 10px; font-weight: 760; }
+    .template-picker { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 9px; }
+    .template-card {
+      min-width: 0;
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr);
+      gap: 9px 10px;
+      padding: 13px;
+      border: 1px solid var(--line-soft);
+      border-radius: var(--radius-sm);
+      color: var(--text);
+      background: var(--surface);
+      cursor: pointer;
+      text-align: left;
+    }
+    .template-card:hover { border-color: var(--line); background: var(--surface-raised); }
+    .template-card[aria-pressed="true"] { border-color: rgba(66, 211, 170, 0.48); background: var(--mint-soft); }
+    .template-number { width: 27px; height: 27px; display: grid; place-items: center; border-radius: 8px; color: var(--mint); background: var(--mint-soft); font-size: 11px; font-weight: 800; }
+    .template-card[aria-pressed="true"] .template-number { color: #07100d; background: var(--mint); }
+    .template-card strong { display: block; margin-bottom: 3px; font-size: 13px; }
+    .template-card span:last-child { color: var(--muted); font-size: 11px; line-height: 1.45; }
+    .strategy-builder { display: grid; grid-template-columns: minmax(0, 1.18fr) minmax(320px, 0.82fr); gap: 14px; align-items: start; }
+    .strategy-editor, .strategy-preview { min-width: 0; border: 1px solid var(--line-soft); border-radius: var(--radius-md); background: var(--surface); }
+    .strategy-editor { padding: 15px; }
+    .strategy-preview { position: sticky; top: 12px; overflow: hidden; }
+    .builder-section-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 13px; }
+    .builder-section-head h2 { margin: 0 0 4px; font-size: 15px; }
+    .builder-section-head p { margin: 0; color: var(--muted); font-size: 11px; }
+    .fixed-order { color: var(--faint); font-size: 10px; white-space: nowrap; }
+    .strategy-context { display: grid; grid-template-columns: minmax(0, 1fr) minmax(140px, 0.55fr); gap: 9px; margin-bottom: 12px; }
+    .strategy-context .field { margin: 0; }
+    .strategy-context .field input { height: 40px; }
+    .block-flow { display: grid; gap: 0; }
+    .sentence-block {
+      position: relative;
+      display: grid;
+      grid-template-columns: 78px minmax(0, 1fr);
+      align-items: center;
+      gap: 10px;
+      min-height: 61px;
+      padding: 10px 12px;
+      border: 1px solid var(--line-soft);
+      border-radius: var(--radius-sm);
+      background: #0a1118;
+    }
+    .sentence-block + .sentence-block { margin-top: 16px; }
+    .sentence-block + .sentence-block::before {
+      content: "↓";
+      position: absolute;
+      top: -17px;
+      left: 37px;
+      color: var(--faint);
+      font-size: 12px;
+    }
+    .sentence-block[data-block="trigger"] { border-left: 3px solid var(--blue); }
+    .sentence-block[data-block="guard"] { border-left: 3px solid var(--faint); background: rgba(102, 120, 135, 0.06); }
+    .sentence-block[data-block="entry"] { border-left: 3px solid var(--red); }
+    .sentence-block[data-block="exit"] { border-left: 3px solid var(--mint); }
+    .sentence-block[data-block="repeat"] { border-left: 3px solid var(--orange); }
+    .block-label { color: var(--muted); font-size: 10px; font-weight: 780; letter-spacing: 0.05em; }
+    .block-sentence { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; color: #dce5eb; font-size: 12px; line-height: 1.6; }
+    .inline-control {
+      height: 32px;
+      min-width: 72px;
+      padding: 0 8px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      color: var(--text);
+      background: var(--surface-raised);
+      font-size: 12px;
+      font-weight: 700;
+    }
+    select.inline-control { padding-right: 25px; }
+    .inline-control.short { width: 68px; min-width: 0; }
+    .inline-control.money { width: 112px; }
+    .rung-table { display: grid; gap: 7px; width: 100%; max-height: 480px; overflow-y: auto; padding-right: 3px; }
+    .rung-row { display: grid; grid-template-columns: 40px repeat(3, minmax(72px, 1fr)) 32px; gap: 6px; align-items: center; }
+    .rung-row > span { color: var(--muted); font-size: 10px; }
+    .rung-row .inline-control { width: 100%; min-width: 0; }
+    .rung-delete { width: 30px; height: 30px; border: 1px solid var(--line); border-radius: 7px; color: var(--muted); background: transparent; cursor: pointer; }
+    .rung-delete:hover { color: var(--red); border-color: rgba(255, 107, 120, 0.35); background: var(--red-soft); }
+    .rung-delete:disabled { cursor: not-allowed; opacity: 0.3; }
+    .rung-actions { display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; padding-top: 5px; }
+    .add-rung { min-height: 34px; padding: 0 11px; }
+    .add-rung:disabled { cursor: not-allowed; opacity: 0.45; }
+    .rung-limit { color: var(--faint); font-size: 10px; }
+    .block-lock { padding: 4px 7px; border-radius: 999px; color: var(--muted); background: rgba(102, 120, 135, 0.12); font-size: 10px; font-weight: 700; }
+    .safety-block { margin-top: 15px; padding: 13px; border: 1px solid rgba(255, 180, 84, 0.28); border-radius: var(--radius-sm); background: rgba(255, 180, 84, 0.055); }
+    .safety-block.invalid { border-color: rgba(255, 107, 120, 0.48); background: var(--red-soft); }
+    .safety-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+    .safety-title { display: flex; gap: 9px; }
+    .safety-lock { width: 27px; height: 27px; display: grid; place-items: center; border-radius: 8px; color: var(--orange); background: rgba(255, 180, 84, 0.12); font-size: 12px; }
+    .safety-title strong { display: block; margin-bottom: 3px; font-size: 12px; }
+    .safety-title span { color: var(--muted); font-size: 10px; }
+    .safety-summary { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 11px; }
+    .safety-chip { padding: 5px 7px; border-radius: 6px; color: #d7c5ab; background: rgba(255, 180, 84, 0.08); font-size: 10px; }
+    .advanced-toggle { min-height: 31px; padding: 0 9px; font-size: 10px; }
+    .advanced-settings { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 9px; margin-top: 12px; padding-top: 12px; border-top: 1px solid rgba(255, 180, 84, 0.15); }
+    .advanced-settings .field { margin: 0; }
+    .advanced-settings .field input, .advanced-settings .field select { width: 100%; height: 37px; padding: 0 9px; border: 1px solid var(--line); border-radius: 7px; color: var(--text); background: #0a1118; }
+    .preview-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; padding: 14px; border-bottom: 1px solid var(--line-soft); }
+    .preview-head h2 { margin: 0 0 3px; font-size: 15px; }
+    .preview-head p { margin: 0; color: var(--muted); font-size: 10px; }
+    .builder-state { padding: 4px 7px; border-radius: 999px; color: var(--orange); background: rgba(255, 180, 84, 0.12); font-size: 10px; font-weight: 760; white-space: nowrap; }
+    .builder-state.valid { color: var(--blue); background: var(--blue-soft); }
+    .builder-state.passed, .builder-state.completed { color: var(--mint); background: var(--mint-soft); }
+    .builder-state.invalid { color: var(--red); background: var(--red-soft); }
+    .preview-body { display: grid; gap: 12px; padding: 14px; }
+    .strategy-sentence { margin: 0; padding: 12px; border-radius: var(--radius-sm); color: #dce6ec; background: #0a1118; font-size: 13px; font-weight: 650; line-height: 1.65; }
+    .strategy-sentence strong { color: var(--mint); }
+    .preview-metrics { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; }
+    .preview-metric { min-width: 0; padding: 10px; border: 1px solid var(--line-soft); border-radius: 8px; background: #0b1219; }
+    .preview-metric span { display: block; margin-bottom: 4px; color: var(--muted); font-size: 10px; }
+    .preview-metric strong { display: block; overflow: hidden; font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
+    .price-preview { width: 100%; border-collapse: collapse; font-size: 11px; }
+    .price-preview-wrap { max-height: 360px; overflow-y: auto; border-radius: 7px; }
+    .price-preview th, .price-preview td { padding: 8px 6px; border-bottom: 1px solid var(--line-soft); text-align: right; }
+    .price-preview th:first-child, .price-preview td:first-child { text-align: left; }
+    .price-preview th { color: var(--muted); font-size: 10px; font-weight: 650; }
+    .price-preview tbody tr:last-child td { border-bottom: 0; }
+    .preview-note { margin: 0; color: var(--faint); font-size: 10px; line-height: 1.5; }
+    .validation-box { padding: 10px; border: 1px solid var(--line-soft); border-radius: 8px; color: var(--muted); background: #0a1118; font-size: 11px; line-height: 1.5; }
+    .validation-box.invalid { border-color: rgba(255, 107, 120, 0.35); color: #ffb6bd; background: var(--red-soft); }
+    .validation-box.passed { border-color: rgba(66, 211, 170, 0.3); color: #a8f0da; background: var(--mint-soft); }
+    .strategy-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+    .strategy-actions button { width: 100%; }
+    .strategy-actions button:disabled { cursor: not-allowed; opacity: 0.43; }
+    .draft-disclaimer { margin: 0; color: var(--faint); font-size: 10px; line-height: 1.5; text-align: center; }
     .setup-list { display: grid; gap: 9px; margin-top: 15px; }
     .setup-item { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 12px; border-radius: var(--radius-sm); background: #0b1219; }
     .setup-item span { color: var(--muted); font-size: 12px; }
@@ -608,6 +751,9 @@
       .market-chart { height: 270px; }
       .analysis-layout { grid-template-columns: minmax(0, 1.2fr) minmax(240px, 0.8fr); }
       .basis-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .template-picker { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .strategy-builder { grid-template-columns: minmax(0, 1fr) minmax(290px, 0.72fr); }
+      .advanced-settings { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     }
 
     @media (max-width: 736px) {
@@ -659,6 +805,9 @@
       .plan-decision { padding-top: 11px; padding-left: 0; border-top: 1px solid var(--line-soft); border-left: 0; }
       .provider-cards { grid-template-columns: 1fr; }
       .crypto-lock { min-height: 460px; padding: 22px 14px; }
+      .template-picker { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .strategy-builder { grid-template-columns: 1fr; }
+      .strategy-preview { position: static; }
       .drawer-scrim { position: fixed; inset: 0; }
       .order-drawer { position: fixed; top: auto; width: 100%; max-height: 88vh; border-top: 1px solid var(--line); border-left: 0; border-radius: 16px 16px 0 0; }
     }
@@ -700,6 +849,16 @@
       .basis-item + .basis-item { border-top: 1px solid var(--line-soft); }
       .applied-plan-levels { grid-template-columns: 1fr; }
       .page-heading { align-items: flex-start; flex-direction: column; }
+      .strategy-heading-actions { width: 100%; justify-content: space-between; }
+      .strategy-intro { flex-direction: column; }
+      .strategy-context, .advanced-settings { grid-template-columns: 1fr; }
+      .sentence-block { grid-template-columns: 1fr; gap: 5px; }
+      .sentence-block + .sentence-block::before { left: 15px; }
+      .rung-row { grid-template-columns: 34px 1fr; }
+      .rung-row > .inline-control { grid-column: 2; }
+      .rung-row > .rung-delete { grid-column: 2; justify-self: end; }
+      .preview-metrics, .strategy-actions { grid-template-columns: 1fr; }
+      .template-picker { grid-template-columns: 1fr; }
       .toast { white-space: normal; text-align: center; }
     }
   </style>
@@ -709,13 +868,21 @@
     <section class="review-bar" aria-label="시안 상태 선택기">
       <div class="review-copy">
         <strong>리뷰 컨트롤 · 제품 화면 아님</strong>
-        <span>네 가지 핵심 상태를 즉시 비교하거나 제품 안에서 직접 진행할 수 있습니다.</span>
+        <span>연결·차트와 전략 조립기의 핵심 상태를 즉시 비교할 수 있습니다.</span>
       </div>
       <div class="review-states">
         <button class="review-state" type="button" data-review="onboarding" aria-pressed="true">첫 실행</button>
         <button class="review-state" type="button" data-review="stock" aria-pressed="false">주식 차트</button>
         <button class="review-state" type="button" data-review="crypto" aria-pressed="false">코인 잠금</button>
         <button class="review-state" type="button" data-review="order" aria-pressed="false">주문 서랍</button>
+        <button class="review-state" type="button" data-review="strategy-start" aria-pressed="false">템플릿 선택</button>
+        <button class="review-state" type="button" data-review="strategy-loop" aria-pressed="false">1% 반복</button>
+        <button class="review-state" type="button" data-review="strategy-split" aria-pressed="false">분할차수</button>
+        <button class="review-state" type="button" data-review="strategy-support" aria-pressed="false">지지선 반등</button>
+        <button class="review-state" type="button" data-review="strategy-custom" aria-pressed="false">직접 만들기</button>
+        <button class="review-state" type="button" data-review="strategy-invalid" aria-pressed="false">설정 오류</button>
+        <button class="review-state" type="button" data-review="strategy-passed" aria-pressed="false">모의검증 통과</button>
+        <button class="review-state" type="button" data-review="strategy-complete" aria-pressed="false">10회 완료</button>
       </div>
     </section>
 
@@ -914,7 +1081,71 @@
             </section>
 
             <section id="assets-page" class="secondary-view" hidden><div class="page-heading"><div><h1>내 자산</h1><p>보유 종목과 오늘의 변화를 간단히 확인합니다.</p></div></div><article class="focus-card"><h2>계좌는 아직 연결하지 않았어요</h2><p>Toss API 등록은 시세 확인용입니다. 보유 자산을 보려면 계좌 접근을 별도로 승인하세요.</p><button class="secondary" type="button" data-page="automation">계좌 연결 준비 보기</button></article></section>
-            <section id="strategies-page" class="secondary-view" hidden><div class="page-heading"><div><h1>전략</h1><p>매직스플릿 같은 나만의 규칙을 만들고 모의 검증합니다.</p></div><button class="primary" type="button">새 전략</button></div><article class="focus-card"><h2>아직 실행 중인 전략이 없습니다</h2><p>조건, 분할 횟수, 간격, 손실 한도를 정한 뒤 모의 운용부터 시작하세요.</p></article></section>
+            <section id="strategies-page" class="secondary-view" hidden>
+              <div class="page-heading">
+                <div><h1>전략 조립기</h1><p>규칙을 문장처럼 조립하고 실제 주문 없이 먼저 확인합니다.</p></div>
+                <div class="strategy-heading-actions"><span id="strategy-draft-status" class="draft-status">저장된 초안 없음</span><button id="new-strategy" class="secondary" type="button">새 전략</button></div>
+              </div>
+
+              <div class="strategy-intro">
+                <div><strong>코드를 몰라도 순서대로 설정하세요</strong><p>템플릿을 고른 뒤 파란 조건, 빨간 매수, 초록 매도, 주황 반복 블록의 숫자만 바꾸면 됩니다. 안전 제한 블록은 제거할 수 없습니다.</p></div>
+                <span class="paper-badge">모의검증 전용</span>
+              </div>
+
+              <div id="strategy-template-picker" class="template-picker" aria-label="전략 템플릿">
+                <button class="template-card" type="button" data-strategy-template="one-percent-loop" aria-pressed="false"><span class="template-number">01</span><span><strong>1% 반복</strong><span>내리면 사고, 오르면 팔고, 정한 횟수만큼 반복</span></span></button>
+                <button class="template-card" type="button" data-strategy-template="magic-split" aria-pressed="false"><span class="template-number">02</span><span><strong>분할차수</strong><span>원하는 만큼 차수를 추가해 가격별로 나누어 매수·매도</span></span></button>
+                <button class="template-card" type="button" data-strategy-template="support-rebound" aria-pressed="false"><span class="template-number">03</span><span><strong>지지선 반등</strong><span>정한 지지선에서 사고 저항선이나 목표가에서 매도</span></span></button>
+                <button class="template-card" type="button" data-strategy-template="custom" aria-pressed="false"><span class="template-number">04</span><span><strong>직접 만들기</strong><span>진입·청산·반복 블록을 안전한 범위에서 직접 선택</span></span></button>
+              </div>
+
+              <div id="strategy-empty" class="focus-card">
+                <h2>어떤 방식으로 자동매매할까요?</h2>
+                <p>위 네 가지 방식 중 하나를 선택하면 필요한 규칙만 표시됩니다. 처음이라면 `1% 반복`으로 가격 흐름을 확인해 보세요.</p>
+              </div>
+
+              <div id="strategy-builder" class="strategy-builder" hidden>
+                <section class="strategy-editor" aria-label="전략 블록 편집기">
+                  <div class="builder-section-head"><div><h2 id="builder-template-title">1% 반복</h2><p id="builder-template-description">하락 매수와 상승 매도를 한 사이클로 반복합니다.</p></div><span class="fixed-order">순서 고정 · 드래그 없음</span></div>
+                  <div class="strategy-context">
+                    <div class="field"><label for="strategy-symbol">종목</label><input id="strategy-symbol" value="삼성전자 (005930)" aria-describedby="strategy-context-note" /></div>
+                    <div class="field"><label for="strategy-anchor">기준가</label><input id="strategy-anchor" type="number" min="1" step="100" value="100000" inputmode="numeric" /></div>
+                  </div>
+                  <span id="strategy-context-note" class="sr-only">이 시안의 종목과 가격은 실제 주문에 사용되지 않습니다.</span>
+                  <div id="strategy-blocks" class="block-flow"></div>
+
+                  <section id="strategy-safety" class="safety-block" aria-labelledby="safety-title">
+                    <div class="safety-head">
+                      <div class="safety-title"><span class="safety-lock" aria-hidden="true">⌁</span><div><strong id="safety-title">안전 제한 · 제거할 수 없음</strong><span>전략보다 먼저 적용되는 공통 중지 조건</span></div></div>
+                      <button id="strategy-advanced-toggle" class="secondary advanced-toggle" type="button" aria-expanded="false" aria-controls="strategy-advanced">고급 설정</button>
+                    </div>
+                    <div id="safety-summary" class="safety-summary"></div>
+                    <div id="strategy-advanced" class="advanced-settings" hidden>
+                      <div class="field"><label for="risk-daily-buys">일일 최대 매수</label><input id="risk-daily-buys" type="number" min="1" step="1" data-risk-field="maxDailyBuys" /></div>
+                      <div class="field"><label for="risk-daily-sells">일일 최대 매도</label><input id="risk-daily-sells" type="number" min="1" step="1" data-risk-field="maxDailySells" /></div>
+                      <div class="field"><label for="risk-position">최대 보유 금액</label><input id="risk-position" type="number" min="1" step="10000" data-risk-field="maxPositionValue" /></div>
+                      <div class="field"><label for="risk-loss">최대 손실률 (%)</label><input id="risk-loss" type="number" min="0.1" max="80" step="0.1" data-risk-field="maxLossPct" /></div>
+                      <div class="field"><label for="risk-hold">최대 보유 시간</label><input id="risk-hold" type="number" min="1" step="1" data-risk-field="maxHoldHours" /></div>
+                      <div class="field"><label for="risk-cooldown">체결 후 대기 (분)</label><input id="risk-cooldown" type="number" min="0" step="1" data-risk-field="cooldownMinutes" /></div>
+                      <div class="field"><label for="risk-exit">종료 시 처리</label><select id="risk-exit" data-risk-field="rescueMode"><option value="disable-only">전략만 중지</option><option value="cancel-and-liquidate">미체결 취소·청산 의도</option></select></div>
+                    </div>
+                  </section>
+                </section>
+
+                <aside class="strategy-preview" aria-label="전략 계산 미리보기">
+                  <div class="preview-head"><div><h2>전략 미리보기</h2><p>시안 데이터 · Toss 호가 단위 미적용</p></div><span id="builder-state" class="builder-state">편집 중</span></div>
+                  <div class="preview-body">
+                    <p id="strategy-sentence" class="strategy-sentence"></p>
+                    <div id="preview-metrics" class="preview-metrics"></div>
+                    <div class="price-preview-wrap"><table class="price-preview"><thead><tr><th>단계</th><th>발동 가격</th><th>금액</th></tr></thead><tbody id="strategy-price-rows"></tbody></table></div>
+                    <p class="preview-note">계산 가격은 조건 이해를 위한 예시입니다. 실제 앱에서는 호가 단위, 수수료, 슬리피지와 미체결 가능성을 다시 계산합니다.</p>
+                    <div id="strategy-validation" class="validation-box" role="status" aria-live="polite">값을 확인한 뒤 모의검증을 실행하세요.</div>
+                    <div class="strategy-actions"><button id="simulate-strategy" class="secondary" type="button">모의검증 실행</button><button id="save-strategy" class="primary" type="button" disabled>전략 초안 저장</button></div>
+                    <p class="draft-disclaimer">초안 저장과 주문 제출은 분리됩니다. 이 화면에서는 주문이 전송되지 않습니다.</p>
+                  </div>
+                </aside>
+              </div>
+            </section>
             <section id="automation-page" class="secondary-view" hidden><div class="page-heading"><div><h1>자동화</h1><p>차트 연결과 분리된 실거래 준비 단계를 확인합니다.</p></div></div><article class="focus-card"><h2>실거래 준비</h2><div class="setup-list"><div class="setup-item"><div><strong>Toss API</strong><br/><span>시세 연결 완료</span></div><span class="check">완료</span></div><div class="setup-item"><div><strong>계좌와 허용 IP</strong><br/><span>주문 계좌와 실행 환경 확인</span></div><button class="secondary" type="button">설정</button></div><div class="setup-item"><div><strong>RiskCheck</strong><br/><span>1회·1일 손실 한도 설정</span></div><button class="secondary" type="button">설정</button></div><div class="setup-item"><div><strong>실거래 게이트</strong><br/><span>모든 검증 후에만 활성화</span></div><button id="toggle-live" class="danger" type="button">데모: 실거래 켜기</button></div></div></article></section>
             <section id="settings-page" class="secondary-view" hidden><div class="page-heading"><div><h1>API 연결 · 설정</h1><p>평소에는 숨겨 둔 연결 및 진단 정보를 관리합니다.</p></div></div><article class="focus-card"><h2>연결</h2><div class="setup-list"><div class="setup-item"><div><strong>Toss</strong><br/><span>연결됨 · Keychain 보관</span></div><button id="expire-toss" class="danger" type="button">인증 삭제</button></div><div class="setup-item"><div><strong>코인 거래소</strong><br/><span id="crypto-setting-state">미연결</span></div><div class="setup-actions"><button class="secondary quick-provider" type="button" data-quick-provider="upbit">Upbit</button><button class="secondary quick-provider" type="button" data-quick-provider="bithumb">Bithumb</button></div></div></div></article><article class="focus-card"><h2>연결 및 진단</h2><details><summary>Sidecar 상태</summary><p>정상 · 로컬 서비스와 앱이 연결되어 있습니다.</p></details><details><summary>허용 IP와 실거래 게이트</summary><p>자동화 화면에서 계좌와 RiskCheck를 먼저 준비한 뒤 활성화합니다.</p></details><details><summary>로그 및 배포 정보</summary><p>문제 해결이 필요할 때만 최근 로그와 앱 빌드 정보를 확인합니다.</p></details></article></section>
           </div>
@@ -957,6 +1188,63 @@
       marketBriefingOpen: false,
       page: "chart",
       liveTrading: false,
+      strategyTemplate: null,
+      strategyAdvancedOpen: false,
+      strategySimulation: "idle",
+      strategySaved: false,
+      strategyCompletedCycles: 0,
+    };
+
+    const strategyDrafts = {
+      "one-percent-loop": {
+        symbol: "삼성전자 (005930)",
+        anchorPrice: 100000,
+        buyDropPct: 1,
+        sellRisePct: 1,
+        notional: 100000,
+        repeatMode: "count",
+        maxCycles: 10,
+      },
+      "magic-split": {
+        symbol: "삼성전자 (005930)",
+        anchorPrice: 100000,
+        rungs: [
+          { buyDropPct: 2, sellRisePct: 2, notional: 100000 },
+          { buyDropPct: 4, sellRisePct: 2.5, notional: 100000 },
+          { buyDropPct: 7, sellRisePct: 3, notional: 100000 },
+        ],
+      },
+      "support-rebound": {
+        symbol: "삼성전자 (005930)",
+        anchorPrice: 100000,
+        supportPrice: 97000,
+        resistancePrice: 105000,
+        notional: 100000,
+        stopLossPct: 2,
+      },
+      custom: {
+        symbol: "삼성전자 (005930)",
+        anchorPrice: 100000,
+        entryType: "relative",
+        entryDropPct: 1,
+        entryFixedPrice: 99000,
+        notional: 100000,
+        exitType: "relative",
+        exitRisePct: 1,
+        exitFixedPrice: 101000,
+        repeatMode: "count",
+        maxCycles: 10,
+      },
+    };
+
+    const strategyRisk = {
+      maxDailyBuys: 5,
+      maxDailySells: 5,
+      maxPositionValue: 500000,
+      maxLossPct: 3,
+      maxHoldHours: 24,
+      cooldownMinutes: 5,
+      rescueMode: "disable-only",
     };
 
     const marketContexts = {
@@ -1323,6 +1611,348 @@
       };
     }
 
+    const strategyTemplateMeta = {
+      "one-percent-loop": {
+        title: "1% 반복",
+        description: "하락 매수와 상승 매도를 한 사이클로 반복합니다.",
+      },
+      "magic-split": {
+        title: "분할차수",
+        description: "기준가 아래 원하는 차수를 추가하고 차수별 목표에서 매도합니다.",
+      },
+      "support-rebound": {
+        title: "지지선 반등",
+        description: "지지선에서 진입하고 저항선 또는 손실 제한에서 종료합니다.",
+      },
+      custom: {
+        title: "직접 만들기",
+        description: "진입·청산·반복 조건을 선택하고 안전 제한 안에서 조립합니다.",
+      },
+    };
+
+    const formatWon = (value) => Number.isFinite(value) ? `${Math.round(value).toLocaleString("ko-KR")}원` : "-";
+    const formatPercent = (value) => Number.isFinite(value) ? `${Number(value).toLocaleString("ko-KR")}%` : "-";
+
+    function currentStrategyDraft() {
+      return state.strategyTemplate ? strategyDrafts[state.strategyTemplate] : null;
+    }
+
+    function resetStrategyMock() {
+      Object.assign(strategyDrafts["one-percent-loop"], {
+        symbol: "삼성전자 (005930)", anchorPrice: 100000, buyDropPct: 1, sellRisePct: 1,
+        notional: 100000, repeatMode: "count", maxCycles: 10,
+      });
+      Object.assign(strategyDrafts["magic-split"], {
+        symbol: "삼성전자 (005930)", anchorPrice: 100000,
+        rungs: [
+          { buyDropPct: 2, sellRisePct: 2, notional: 100000 },
+          { buyDropPct: 4, sellRisePct: 2.5, notional: 100000 },
+          { buyDropPct: 7, sellRisePct: 3, notional: 100000 },
+        ],
+      });
+      Object.assign(strategyDrafts["support-rebound"], {
+        symbol: "삼성전자 (005930)", anchorPrice: 100000, supportPrice: 97000,
+        resistancePrice: 105000, notional: 100000, stopLossPct: 2,
+      });
+      Object.assign(strategyDrafts.custom, {
+        symbol: "삼성전자 (005930)", anchorPrice: 100000,
+        entryType: "relative", entryDropPct: 1, entryFixedPrice: 99000,
+        notional: 100000, exitType: "relative", exitRisePct: 1,
+        exitFixedPrice: 101000, repeatMode: "count", maxCycles: 10,
+      });
+      Object.assign(strategyRisk, {
+        maxDailyBuys: 5, maxDailySells: 5, maxPositionValue: 500000,
+        maxLossPct: 3, maxHoldHours: 24, cooldownMinutes: 5, rescueMode: "disable-only",
+      });
+      state.strategyTemplate = null;
+      state.strategyAdvancedOpen = false;
+      state.strategySimulation = "idle";
+      state.strategySaved = false;
+      state.strategyCompletedCycles = 0;
+    }
+
+    function strategyValidationErrors() {
+      const draft = currentStrategyDraft();
+      if (!draft) return ["전략 템플릿을 선택해 주세요."];
+      const errors = [];
+      if (!draft.symbol.trim()) errors.push("종목을 입력해 주세요.");
+      if (!Number.isFinite(draft.anchorPrice) || draft.anchorPrice <= 0) errors.push("기준가는 0보다 커야 합니다.");
+      if (!Number.isInteger(strategyRisk.maxDailyBuys) || strategyRisk.maxDailyBuys < 1) errors.push("일일 최대 매수 횟수가 필요합니다.");
+      if (!Number.isInteger(strategyRisk.maxDailySells) || strategyRisk.maxDailySells < 1) errors.push("일일 최대 매도 횟수가 필요합니다.");
+      if (!Number.isFinite(strategyRisk.maxPositionValue) || strategyRisk.maxPositionValue <= 0) errors.push("최대 보유 금액이 필요합니다.");
+      if (!Number.isFinite(strategyRisk.maxLossPct) || strategyRisk.maxLossPct <= 0 || strategyRisk.maxLossPct > 80) errors.push("최대 손실률은 0보다 크고 80% 이하여야 합니다.");
+      if (!Number.isFinite(strategyRisk.maxHoldHours) || strategyRisk.maxHoldHours < 1) errors.push("최대 보유 시간은 1시간 이상이어야 합니다.");
+      if (!Number.isFinite(strategyRisk.cooldownMinutes) || strategyRisk.cooldownMinutes < 0) errors.push("체결 후 대기 시간은 0분 이상이어야 합니다.");
+
+      if (state.strategyTemplate === "one-percent-loop") {
+        if (!Number.isFinite(draft.buyDropPct) || draft.buyDropPct <= 0 || draft.buyDropPct > 80) errors.push("매수 하락률은 0보다 크고 80% 이하여야 합니다.");
+        if (!Number.isFinite(draft.sellRisePct) || draft.sellRisePct <= 0 || draft.sellRisePct > 80) errors.push("매도 상승률은 0보다 크고 80% 이하여야 합니다.");
+        if (!Number.isFinite(draft.notional) || draft.notional <= 0) errors.push("1회 매수 금액이 필요합니다.");
+        if (draft.notional > strategyRisk.maxPositionValue) errors.push("1회 매수 금액이 최대 보유 금액을 초과합니다.");
+        if (draft.repeatMode === "count" && (!Number.isInteger(draft.maxCycles) || draft.maxCycles < 1 || draft.maxCycles > 999)) errors.push("반복 횟수는 1~999회 정수로 입력해 주세요.");
+      }
+
+      if (state.strategyTemplate === "magic-split") {
+        let previousDrop = 0;
+        let totalNotional = 0;
+        draft.rungs.forEach((rung, index) => {
+          if (!Number.isFinite(rung.buyDropPct) || rung.buyDropPct <= previousDrop || rung.buyDropPct > 80) errors.push(`${index + 1}차 하락률은 이전 차수보다 크고 80% 이하여야 합니다.`);
+          if (!Number.isFinite(rung.sellRisePct) || rung.sellRisePct <= 0 || rung.sellRisePct > 80) errors.push(`${index + 1}차 익절률은 0보다 커야 합니다.`);
+          if (!Number.isFinite(rung.notional) || rung.notional <= 0) errors.push(`${index + 1}차 매수 금액이 필요합니다.`);
+          if (Number.isFinite(rung.buyDropPct)) previousDrop = rung.buyDropPct;
+          if (Number.isFinite(rung.notional)) totalNotional += rung.notional;
+        });
+        if (totalNotional > strategyRisk.maxPositionValue) errors.push("분할 매수 총액이 최대 보유 금액을 초과합니다.");
+        if (draft.rungs.length > strategyRisk.maxDailyBuys) errors.push("분할 차수가 일일 최대 매수 횟수를 초과합니다.");
+      }
+
+      if (state.strategyTemplate === "support-rebound") {
+        if (!Number.isFinite(draft.supportPrice) || draft.supportPrice <= 0) errors.push("지지선 가격이 필요합니다.");
+        if (!Number.isFinite(draft.resistancePrice) || draft.resistancePrice <= draft.supportPrice) errors.push("저항선은 지지선보다 높아야 합니다.");
+        if (!Number.isFinite(draft.notional) || draft.notional <= 0) errors.push("매수 금액이 필요합니다.");
+        if (draft.notional > strategyRisk.maxPositionValue) errors.push("매수 금액이 최대 보유 금액을 초과합니다.");
+        if (!Number.isFinite(draft.stopLossPct) || draft.stopLossPct <= 0 || draft.stopLossPct > 80) errors.push("지지선 이탈률은 0보다 크고 80% 이하여야 합니다.");
+      }
+      if (state.strategyTemplate === "custom") {
+        if (draft.entryType === "relative") {
+          if (!Number.isFinite(draft.entryDropPct) || draft.entryDropPct <= 0 || draft.entryDropPct > 80) errors.push("진입 하락률은 0보다 크고 80% 이하여야 합니다.");
+        } else if (!Number.isFinite(draft.entryFixedPrice) || draft.entryFixedPrice <= 0) {
+          errors.push("고정 매수 가격이 필요합니다.");
+        }
+        if (draft.exitType === "relative") {
+          if (!Number.isFinite(draft.exitRisePct) || draft.exitRisePct <= 0 || draft.exitRisePct > 80) errors.push("청산 상승률은 0보다 크고 80% 이하여야 합니다.");
+        } else if (!Number.isFinite(draft.exitFixedPrice) || draft.exitFixedPrice <= 0) {
+          errors.push("고정 매도 가격이 필요합니다.");
+        }
+        if (!Number.isFinite(draft.notional) || draft.notional <= 0) errors.push("직접 만들기 매수 금액이 필요합니다.");
+        if (draft.notional > strategyRisk.maxPositionValue) errors.push("매수 금액이 최대 보유 금액을 초과합니다.");
+        const entryPrice = draft.entryType === "relative"
+          ? draft.anchorPrice * (1 - draft.entryDropPct / 100)
+          : draft.entryFixedPrice;
+        const exitPrice = draft.exitType === "relative"
+          ? entryPrice * (1 + draft.exitRisePct / 100)
+          : draft.exitFixedPrice;
+        if (Number.isFinite(entryPrice) && Number.isFinite(exitPrice) && exitPrice <= entryPrice) errors.push("매도 가격은 예상 매수 가격보다 높아야 합니다.");
+        const fixedPriceMode = draft.entryType === "fixed" || draft.exitType === "fixed";
+        if (fixedPriceMode && draft.repeatMode !== "once") errors.push("고정 가격 조건은 1회 실행만 지원합니다.");
+        if (draft.repeatMode === "count" && (!Number.isInteger(draft.maxCycles) || draft.maxCycles < 1 || draft.maxCycles > 999)) errors.push("반복 횟수는 1~999회 정수로 입력해 주세요.");
+      }
+      return errors;
+    }
+
+    function renderStrategyBlocks() {
+      const draft = currentStrategyDraft();
+      if (!draft) return;
+      if (state.strategyTemplate === "one-percent-loop") {
+        const repeatControl = draft.repeatMode === "count"
+          ? `<input class="inline-control short" type="number" min="1" max="999" step="1" aria-label="반복 횟수" data-draft-field="maxCycles" value="${draft.maxCycles}"> 회 반복`
+          : `<strong>계속 반복</strong><span>· 안전 제한 도달 시 자동 중지</span>`;
+        $("#strategy-blocks").innerHTML = `
+          <div class="sentence-block" data-block="trigger"><span class="block-label">조건 WHEN</span><span class="block-sentence">기준가에서 <input class="inline-control short" type="number" min="0.1" max="80" step="0.1" aria-label="매수 하락률" data-draft-field="buyDropPct" value="${draft.buyDropPct}"> % 하락하면</span></div>
+          <div class="sentence-block" data-block="entry"><span class="block-label">매수 BUY</span><span class="block-sentence"><input class="inline-control money" type="number" min="1" step="10000" aria-label="1회 매수 금액" data-draft-field="notional" value="${draft.notional}"> 원만큼 지정가 매수</span></div>
+          <div class="sentence-block" data-block="exit"><span class="block-label">매도 SELL</span><span class="block-sentence">실제 매수가에서 <input class="inline-control short" type="number" min="0.1" max="80" step="0.1" aria-label="매도 상승률" data-draft-field="sellRisePct" value="${draft.sellRisePct}"> % 상승하면 전량 매도</span></div>
+          <div class="sentence-block" data-block="repeat"><span class="block-label">반복 REPEAT</span><span class="block-sentence"><select class="inline-control" aria-label="반복 방식" data-draft-field="repeatMode"><option value="count" ${draft.repeatMode === "count" ? "selected" : ""}>횟수 지정</option><option value="continuous" ${draft.repeatMode === "continuous" ? "selected" : ""}>계속 반복</option></select>${repeatControl}<span>· 매도가를 다음 기준가로 갱신</span></span></div>`;
+        return;
+      }
+
+      if (state.strategyTemplate === "magic-split") {
+        const rungInputs = draft.rungs.map((rung, index) => `<div class="rung-row"><span>${index + 1}차</span><input class="inline-control" type="number" min="0.1" max="80" step="0.1" aria-label="${index + 1}차 누적 하락률" data-rung-index="${index}" data-rung-field="buyDropPct" value="${rung.buyDropPct}"><input class="inline-control" type="number" min="1" step="10000" aria-label="${index + 1}차 매수 금액" data-rung-index="${index}" data-rung-field="notional" value="${rung.notional}"><input class="inline-control" type="number" min="0.1" max="80" step="0.1" aria-label="${index + 1}차 익절률" data-rung-index="${index}" data-rung-field="sellRisePct" value="${rung.sellRisePct}"><button class="rung-delete" type="button" data-delete-rung="${index}" aria-label="${index + 1}차 삭제" ${draft.rungs.length === 1 ? "disabled" : ""}>×</button></div>`).join("");
+        $("#strategy-blocks").innerHTML = `
+          <div class="sentence-block" data-block="trigger"><span class="block-label">조건 WHEN</span><span class="block-sentence">기준가 아래의 차수별 가격에 도달하면</span></div>
+          <div class="sentence-block" data-block="entry"><span class="block-label">분할 BUY</span><span class="block-sentence"><span class="rung-table"><span class="rung-row"><span></span><span>누적 하락 %</span><span>매수 금액</span><span>익절 %</span><span></span></span>${rungInputs}</span><span class="rung-actions"><button class="secondary add-rung" type="button" data-add-rung ${draft.rungs.length >= 20 ? "disabled" : ""}>+ 차수 추가</button><span class="rung-limit">${draft.rungs.length}/20차</span></span></span></div>
+          <div class="sentence-block" data-block="exit"><span class="block-label">매도 SELL</span><span class="block-sentence">각 차수의 실제 매수가에서 설정한 익절률만큼 오르면 해당 차수 매도</span></div>
+          <div class="sentence-block" data-block="repeat"><span class="block-label">종료 STOP</span><span class="block-sentence">모든 차수가 끝나거나 공통 안전 제한에 도달하면 신규 매수 중지</span></div>`;
+        return;
+      }
+
+      if (state.strategyTemplate === "custom") {
+        const fixedPriceMode = draft.entryType === "fixed" || draft.exitType === "fixed";
+        const entryValue = draft.entryType === "relative"
+          ? `<input class="inline-control short" type="number" min="0.1" max="80" step="0.1" aria-label="진입 하락률" data-draft-field="entryDropPct" value="${draft.entryDropPct}"> % 하락하면`
+          : `<input class="inline-control money" type="number" min="1" step="100" aria-label="고정 매수 가격" data-draft-field="entryFixedPrice" value="${draft.entryFixedPrice}"> 원 이하가 되면`;
+        const exitValue = draft.exitType === "relative"
+          ? `실제 매수가에서 <input class="inline-control short" type="number" min="0.1" max="80" step="0.1" aria-label="청산 상승률" data-draft-field="exitRisePct" value="${draft.exitRisePct}"> % 상승하면`
+          : `<input class="inline-control money" type="number" min="1" step="100" aria-label="고정 매도 가격" data-draft-field="exitFixedPrice" value="${draft.exitFixedPrice}"> 원 이상이 되면`;
+        const repeatValue = fixedPriceMode
+          ? `<span class="block-lock">고정 가격 · 1회 실행</span>`
+          : `<select class="inline-control" aria-label="직접 만들기 반복 방식" data-draft-field="repeatMode"><option value="once" ${draft.repeatMode === "once" ? "selected" : ""}>1회 실행</option><option value="count" ${draft.repeatMode === "count" ? "selected" : ""}>횟수 지정</option><option value="continuous" ${draft.repeatMode === "continuous" ? "selected" : ""}>계속 반복</option></select>${draft.repeatMode === "count" ? `<input class="inline-control short" type="number" min="1" max="999" step="1" aria-label="직접 만들기 반복 횟수" data-draft-field="maxCycles" value="${draft.maxCycles}"> 회` : ""}`;
+        $("#strategy-blocks").innerHTML = `
+          <div class="sentence-block" data-block="trigger"><span class="block-label">진입 WHEN</span><span class="block-sentence"><select class="inline-control" aria-label="진입 조건 종류" data-draft-field="entryType"><option value="relative" ${draft.entryType === "relative" ? "selected" : ""}>기준가 대비 하락</option><option value="fixed" ${draft.entryType === "fixed" ? "selected" : ""}>고정 가격 이하</option></select>${entryValue}</span></div>
+          <div class="sentence-block" data-block="guard"><span class="block-label">보유 CHECK</span><span class="block-sentence"><span class="block-lock">자동 안전 조건</span>현재 보유 수량이 없을 때만 매수</span></div>
+          <div class="sentence-block" data-block="entry"><span class="block-label">매수 BUY</span><span class="block-sentence"><input class="inline-control money" type="number" min="1" step="10000" aria-label="직접 만들기 매수 금액" data-draft-field="notional" value="${draft.notional}"> 원만큼 지정가 매수</span></div>
+          <div class="sentence-block" data-block="trigger"><span class="block-label">청산 WHEN</span><span class="block-sentence"><select class="inline-control" aria-label="청산 조건 종류" data-draft-field="exitType"><option value="relative" ${draft.exitType === "relative" ? "selected" : ""}>매수가 대비 상승</option><option value="fixed" ${draft.exitType === "fixed" ? "selected" : ""}>고정 가격 이상</option></select>${exitValue}</span></div>
+          <div class="sentence-block" data-block="exit"><span class="block-label">매도 SELL</span><span class="block-sentence"><span class="block-lock">보유 중일 때만</span>보유 수량 전량 매도</span></div>
+          <div class="sentence-block" data-block="repeat"><span class="block-label">반복 REPEAT</span><span class="block-sentence">${repeatValue}${draft.repeatMode === "continuous" && !fixedPriceMode ? "<span>· 안전 제한 도달 시 자동 중지</span>" : ""}</span></div>`;
+        return;
+      }
+
+      $("#strategy-blocks").innerHTML = `
+        <div class="sentence-block" data-block="trigger"><span class="block-label">조건 WHEN</span><span class="block-sentence">가격이 지지선 <input class="inline-control money" type="number" min="1" step="100" aria-label="지지선 가격" data-draft-field="supportPrice" value="${draft.supportPrice}"> 원에 도달하면</span></div>
+        <div class="sentence-block" data-block="entry"><span class="block-label">매수 BUY</span><span class="block-sentence"><input class="inline-control money" type="number" min="1" step="10000" aria-label="매수 금액" data-draft-field="notional" value="${draft.notional}"> 원만큼 지정가 매수</span></div>
+        <div class="sentence-block" data-block="exit"><span class="block-label">매도 SELL</span><span class="block-sentence">저항선 <input class="inline-control money" type="number" min="1" step="100" aria-label="저항선 가격" data-draft-field="resistancePrice" value="${draft.resistancePrice}"> 원에 도달하면 전량 매도</span></div>
+        <div class="sentence-block" data-block="repeat"><span class="block-label">중지 STOP</span><span class="block-sentence">지지선에서 <input class="inline-control short" type="number" min="0.1" max="80" step="0.1" aria-label="지지선 이탈률" data-draft-field="stopLossPct" value="${draft.stopLossPct}"> % 더 하락하면 신규 매수 중지·종료 규칙 적용</span></div>`;
+    }
+
+    function strategyPreviewData() {
+      const draft = currentStrategyDraft();
+      if (state.strategyTemplate === "one-percent-loop") {
+        const buyPrice = draft.anchorPrice * (1 - draft.buyDropPct / 100);
+        const sellPrice = buyPrice * (1 + draft.sellRisePct / 100);
+        const repeatText = draft.repeatMode === "count" ? `${draft.maxCycles}회 반복` : "계속 반복 · 안전 제한 적용";
+        const repeatSentence = draft.repeatMode === "count" ? `${draft.maxCycles}회 반복합니다.` : "안전 제한이 적용된 상태로 계속 반복합니다.";
+        return {
+          sentence: `기준가에서 <strong>${formatPercent(draft.buyDropPct)}</strong> 하락하면 <strong>${formatWon(draft.notional)}</strong> 매수하고, 실제 매수가에서 <strong>${formatPercent(draft.sellRisePct)}</strong> 상승하면 전량 매도한 뒤 ${repeatSentence}`,
+          metrics: [["1회 매수", formatWon(draft.notional)], ["반복", repeatText], ["완료 사이클", `${state.strategyCompletedCycles}/${draft.repeatMode === "count" ? draft.maxCycles : "계속"}`], ["다음 기준가", "매도 체결가"]],
+          rows: [["매수", buyPrice, draft.notional], ["매도", sellPrice, draft.notional]],
+        };
+      }
+      if (state.strategyTemplate === "magic-split") {
+        const total = draft.rungs.reduce((sum, rung) => sum + (Number.isFinite(rung.notional) ? rung.notional : 0), 0);
+        return {
+          sentence: `기준가 아래 <strong>${draft.rungs.length}개 차수</strong>에 나누어 최대 <strong>${formatWon(total)}</strong> 매수하고, 각 차수의 실제 매수가에서 정한 익절률만큼 오르면 개별 매도합니다.`,
+          metrics: [["분할 차수", `${draft.rungs.length}차`], ["최대 필요 자금", formatWon(total)], ["매수 기준", "기준가 누적 하락"], ["청산 방식", "차수별 개별 매도"]],
+          rows: draft.rungs.flatMap((rung, index) => {
+            const buyPrice = draft.anchorPrice * (1 - rung.buyDropPct / 100);
+            return [[`${index + 1}차 매수`, buyPrice, rung.notional], [`${index + 1}차 매도`, buyPrice * (1 + rung.sellRisePct / 100), rung.notional]];
+          }),
+        };
+      }
+      if (state.strategyTemplate === "custom") {
+        const entryPrice = draft.entryType === "relative"
+          ? draft.anchorPrice * (1 - draft.entryDropPct / 100)
+          : draft.entryFixedPrice;
+        const exitPrice = draft.exitType === "relative"
+          ? entryPrice * (1 + draft.exitRisePct / 100)
+          : draft.exitFixedPrice;
+        const fixedPriceMode = draft.entryType === "fixed" || draft.exitType === "fixed";
+        const repeatText = fixedPriceMode || draft.repeatMode === "once"
+          ? "1회 실행"
+          : draft.repeatMode === "count" ? `${draft.maxCycles}회 반복` : "계속 반복 · 안전 제한 적용";
+        const entryText = draft.entryType === "relative"
+          ? `기준가에서 <strong>${formatPercent(draft.entryDropPct)}</strong> 하락하면`
+          : `<strong>${formatWon(draft.entryFixedPrice)}</strong> 이하가 되면`;
+        const exitText = draft.exitType === "relative"
+          ? `실제 매수가에서 <strong>${formatPercent(draft.exitRisePct)}</strong> 상승하면`
+          : `<strong>${formatWon(draft.exitFixedPrice)}</strong> 이상이 되면`;
+        return {
+          sentence: `${entryText} 미보유 상태에서 <strong>${formatWon(draft.notional)}</strong> 매수하고, ${exitText} 전량 매도합니다. 실행 방식은 ${repeatText}입니다.`,
+          metrics: [["변환 방식", fixedPriceMode ? "고정가격 1회" : "상대가격 반복"], ["1회 매수", formatWon(draft.notional)], ["반복", repeatText], ["보유 확인", "자동 적용"]],
+          rows: [["진입 조건", entryPrice, 0], ["지정가 매수", entryPrice, draft.notional], ["전량 매도", exitPrice, draft.notional]],
+        };
+      }
+      const invalidationPrice = draft.supportPrice * (1 - draft.stopLossPct / 100);
+      return {
+        sentence: `가격이 지지선 <strong>${formatWon(draft.supportPrice)}</strong>에 도달하면 <strong>${formatWon(draft.notional)}</strong> 매수하고, 저항선 <strong>${formatWon(draft.resistancePrice)}</strong>에서 매도합니다.`,
+        metrics: [["지지선", formatWon(draft.supportPrice)], ["저항선", formatWon(draft.resistancePrice)], ["이탈 판단", formatPercent(draft.stopLossPct)], ["종료 처리", strategyRisk.rescueMode === "disable-only" ? "전략만 중지" : "취소·청산 의도"]],
+        rows: [["지지선 매수", draft.supportPrice, draft.notional], ["저항선 매도", draft.resistancePrice, draft.notional], ["무효화", invalidationPrice, 0]],
+      };
+    }
+
+    function renderStrategyPreview() {
+      const draft = currentStrategyDraft();
+      if (!draft) return;
+      const errors = strategyValidationErrors();
+      const completed = errors.length === 0 && state.strategyTemplate === "one-percent-loop" && draft.repeatMode === "count" && state.strategyCompletedCycles >= draft.maxCycles;
+      const preview = strategyPreviewData();
+      $("#strategy-sentence").innerHTML = preview.sentence;
+      $("#preview-metrics").innerHTML = preview.metrics.map(([label, value]) => `<div class="preview-metric"><span>${label}</span><strong>${value}</strong></div>`).join("");
+      $("#strategy-price-rows").innerHTML = preview.rows.map(([label, price, notional]) => `<tr><td>${label}</td><td>${formatWon(price)}</td><td>${notional ? formatWon(notional) : "조건"}</td></tr>`).join("");
+
+      $("#safety-summary").innerHTML = [
+        `매수 ${strategyRisk.maxDailyBuys}회/일`, `매도 ${strategyRisk.maxDailySells}회/일`,
+        `최대 ${formatWon(strategyRisk.maxPositionValue)}`, `손실 ${formatPercent(strategyRisk.maxLossPct)} 중지`,
+        `${strategyRisk.maxHoldHours}시간`, `${strategyRisk.cooldownMinutes}분 대기`,
+      ].map((label) => `<span class="safety-chip">${label}</span>`).join("");
+      $("#strategy-safety").classList.toggle("invalid", errors.length > 0);
+
+      const builderState = $("#builder-state");
+      const validation = $("#strategy-validation");
+      builderState.className = "builder-state";
+      validation.className = "validation-box";
+      if (completed) {
+        builderState.textContent = `${draft.maxCycles}회 완료`;
+        builderState.classList.add("completed");
+        validation.textContent = `${draft.maxCycles}번째 매도 체결로 전략이 완료되었습니다. 다음 매수는 만들지 않습니다.`;
+        validation.classList.add("passed");
+      } else if (errors.length) {
+        builderState.textContent = "설정 확인 필요";
+        builderState.classList.add("invalid");
+        validation.textContent = errors.join(" ");
+        validation.classList.add("invalid");
+      } else if (state.strategySimulation === "checking") {
+        builderState.textContent = "검증 중";
+        builderState.classList.add("valid");
+        validation.textContent = "가격 계산과 안전 제한 충돌을 확인하고 있습니다…";
+      } else if (state.strategySimulation === "passed") {
+        builderState.textContent = "모의검증 통과";
+        builderState.classList.add("passed");
+        validation.textContent = "모의검증을 통과했습니다. 주문의도 초안만 생성되며 주문은 제출되지 않습니다.";
+        validation.classList.add("passed");
+      } else {
+        builderState.textContent = "편집 중";
+        validation.textContent = "설정값은 유효합니다. 저장 전에 모의검증을 실행하세요.";
+      }
+      $("#simulate-strategy").disabled = errors.length > 0 || state.strategySimulation === "checking" || completed;
+      $("#simulate-strategy").textContent = state.strategySimulation === "checking" ? "검증 중…" : "모의검증 실행";
+      $("#save-strategy").disabled = errors.length > 0 || state.strategySimulation !== "passed" || state.strategySaved || completed;
+      $("#save-strategy").textContent = state.strategySaved ? "초안 저장됨" : "전략 초안 저장";
+      $("#strategy-draft-status").textContent = completed ? `전략 완료 · ${draft.maxCycles}/${draft.maxCycles}` : state.strategySaved ? "초안 저장됨 · 주문 없음" : "저장된 초안 없음";
+    }
+
+    function renderStrategyBuilder() {
+      $$("[data-strategy-template]").forEach((button) => button.setAttribute("aria-pressed", String(button.dataset.strategyTemplate === state.strategyTemplate)));
+      const draft = currentStrategyDraft();
+      $("#strategy-empty").hidden = Boolean(draft);
+      $("#strategy-builder").hidden = !draft;
+      if (!draft) {
+        $("#strategy-draft-status").textContent = "저장된 초안 없음";
+        return;
+      }
+      const meta = strategyTemplateMeta[state.strategyTemplate];
+      $("#builder-template-title").textContent = meta.title;
+      $("#builder-template-description").textContent = meta.description;
+      $("#strategy-symbol").value = draft.symbol;
+      $("#strategy-anchor").value = draft.anchorPrice;
+      $("#strategy-advanced-toggle").setAttribute("aria-expanded", String(state.strategyAdvancedOpen));
+      $("#strategy-advanced").hidden = !state.strategyAdvancedOpen;
+      $$('[data-risk-field]').forEach((input) => { input.value = strategyRisk[input.dataset.riskField]; });
+      renderStrategyBlocks();
+      renderStrategyPreview();
+    }
+
+    function selectStrategyTemplate(template) {
+      state.strategyTemplate = template;
+      state.strategySimulation = "idle";
+      state.strategySaved = false;
+      state.strategyCompletedCycles = 0;
+      renderStrategyBuilder();
+      window.setTimeout(() => $("#strategy-symbol").focus(), 0);
+    }
+
+    function applyStrategyReviewState(view) {
+      resetStrategyMock();
+      if (view === "strategy-start") return;
+      const templateByView = {
+        "strategy-loop": "one-percent-loop",
+        "strategy-split": "magic-split",
+        "strategy-support": "support-rebound",
+        "strategy-custom": "custom",
+        "strategy-invalid": "one-percent-loop",
+        "strategy-passed": "one-percent-loop",
+        "strategy-complete": "one-percent-loop",
+      };
+      state.strategyTemplate = templateByView[view];
+      if (view === "strategy-invalid") {
+        strategyRisk.maxPositionValue = 50000;
+        state.strategyAdvancedOpen = true;
+      }
+      if (view === "strategy-passed" || view === "strategy-complete") state.strategySimulation = "passed";
+      if (view === "strategy-complete") {
+        state.strategyCompletedCycles = 10;
+        state.strategySaved = true;
+      }
+    }
+
     function showProductView(view) {
       $$(".review-state").forEach((button) => button.setAttribute("aria-pressed", String(button.dataset.review === view)));
       if (view === "onboarding") {
@@ -1337,7 +1967,17 @@
       state.appliedExitPlan = null;
       onboarding.hidden = true;
       app.hidden = false;
-      setPage("chart");
+      const isStrategyReview = view.startsWith("strategy-");
+      setPage(isStrategyReview ? "strategies" : "chart");
+      if (isStrategyReview) {
+        state.selectedAssetClass = "stock";
+        state.selectedSymbol = "005930";
+        state.orderDrawerOpen = false;
+        applyStrategyReviewState(view);
+        renderApp();
+        renderStrategyBuilder();
+        return;
+      }
       if (view === "crypto") {
         state.selectedAssetClass = "crypto";
         state.cryptoConnections = { upbit: false, bithumb: false };
@@ -1354,6 +1994,152 @@
     }
 
     $$(".review-state").forEach((button) => button.addEventListener("click", () => showProductView(button.dataset.review)));
+
+    $$('[data-strategy-template]').forEach((button) => button.addEventListener("click", () => selectStrategyTemplate(button.dataset.strategyTemplate)));
+
+    $("#new-strategy").addEventListener("click", () => {
+      resetStrategyMock();
+      renderStrategyBuilder();
+      announce("새 전략을 시작합니다. 템플릿을 선택해 주세요.");
+    });
+
+    $("#strategy-advanced-toggle").addEventListener("click", () => {
+      state.strategyAdvancedOpen = !state.strategyAdvancedOpen;
+      $("#strategy-advanced-toggle").setAttribute("aria-expanded", String(state.strategyAdvancedOpen));
+      $("#strategy-advanced").hidden = !state.strategyAdvancedOpen;
+    });
+
+    function markStrategyDirty() {
+      state.strategySimulation = "idle";
+      state.strategySaved = false;
+      state.strategyCompletedCycles = 0;
+    }
+
+    $("#strategy-symbol").addEventListener("input", (event) => {
+      const draft = currentStrategyDraft();
+      if (!draft) return;
+      draft.symbol = event.target.value;
+      markStrategyDirty();
+      renderStrategyPreview();
+    });
+
+    $("#strategy-anchor").addEventListener("input", (event) => {
+      const draft = currentStrategyDraft();
+      if (!draft) return;
+      draft.anchorPrice = Number(event.target.value);
+      markStrategyDirty();
+      renderStrategyPreview();
+    });
+
+    $("#strategy-blocks").addEventListener("input", (event) => {
+      const input = event.target.closest("[data-draft-field], [data-rung-field]");
+      const draft = currentStrategyDraft();
+      if (!input || !draft) return;
+      if (input.dataset.rungField) {
+        draft.rungs[Number(input.dataset.rungIndex)][input.dataset.rungField] = Number(input.value);
+      } else if (!["repeatMode", "entryType", "exitType"].includes(input.dataset.draftField)) {
+        draft[input.dataset.draftField] = Number(input.value);
+      }
+      markStrategyDirty();
+      renderStrategyPreview();
+    });
+
+    $("#strategy-blocks").addEventListener("change", (event) => {
+      const input = event.target.closest("[data-draft-field]");
+      const draft = currentStrategyDraft();
+      if (!input || !draft || !["repeatMode", "entryType", "exitType"].includes(input.dataset.draftField)) return;
+      draft[input.dataset.draftField] = input.value;
+      if (state.strategyTemplate === "custom" && (draft.entryType === "fixed" || draft.exitType === "fixed")) {
+        draft.repeatMode = "once";
+      }
+      markStrategyDirty();
+      renderStrategyBlocks();
+      renderStrategyPreview();
+    });
+
+    $("#strategy-blocks").addEventListener("click", (event) => {
+      const draft = currentStrategyDraft();
+      if (!draft || state.strategyTemplate !== "magic-split") return;
+      const addButton = event.target.closest("[data-add-rung]");
+      if (addButton) {
+        if (draft.rungs.length >= 20) {
+          announce("분할차수는 최대 20차까지 추가할 수 있습니다.");
+          return;
+        }
+        const last = draft.rungs.at(-1);
+        const previous = draft.rungs.at(-2);
+        const rawGap = previous ? last.buyDropPct - previous.buyDropPct : last.buyDropPct;
+        const gap = Number.isFinite(rawGap) && rawGap > 0 ? rawGap : 1;
+        const nextDropPct = Number((last.buyDropPct + gap).toFixed(2));
+        if (nextDropPct > 80) {
+          announce("다음 차수의 누적 하락률이 80%를 넘어 추가할 수 없습니다.");
+          return;
+        }
+        draft.rungs.push({
+          buyDropPct: nextDropPct,
+          sellRisePct: last.sellRisePct,
+          notional: last.notional,
+        });
+        markStrategyDirty();
+        renderStrategyBlocks();
+        renderStrategyPreview();
+        const nextIndex = draft.rungs.length - 1;
+        window.setTimeout(() => $(`[data-rung-index="${nextIndex}"][data-rung-field="buyDropPct"]`).focus(), 0);
+        return;
+      }
+      const deleteButton = event.target.closest("[data-delete-rung]");
+      if (!deleteButton) return;
+      if (draft.rungs.length <= 1) {
+        announce("분할차수는 최소 1차가 필요합니다.");
+        return;
+      }
+      const deletedIndex = Number(deleteButton.dataset.deleteRung);
+      draft.rungs.splice(deletedIndex, 1);
+      markStrategyDirty();
+      renderStrategyBlocks();
+      renderStrategyPreview();
+      const focusIndex = Math.min(deletedIndex, draft.rungs.length - 1);
+      window.setTimeout(() => $(`[data-rung-index="${focusIndex}"][data-rung-field="buyDropPct"]`).focus(), 0);
+    });
+
+    $("#strategy-advanced").addEventListener("input", (event) => {
+      const input = event.target.closest("[data-risk-field]");
+      if (!input || input.tagName === "SELECT") return;
+      strategyRisk[input.dataset.riskField] = Number(input.value);
+      markStrategyDirty();
+      renderStrategyPreview();
+    });
+
+    $("#strategy-advanced").addEventListener("change", (event) => {
+      const input = event.target.closest("[data-risk-field]");
+      if (!input || input.tagName !== "SELECT") return;
+      strategyRisk[input.dataset.riskField] = input.value;
+      markStrategyDirty();
+      renderStrategyPreview();
+    });
+
+    $("#simulate-strategy").addEventListener("click", () => {
+      const errors = strategyValidationErrors();
+      if (errors.length) {
+        renderStrategyPreview();
+        announce("안전 제한 오류를 먼저 수정해 주세요.");
+        return;
+      }
+      state.strategySimulation = "checking";
+      renderStrategyPreview();
+      window.setTimeout(() => {
+        state.strategySimulation = "passed";
+        renderStrategyPreview();
+        announce("모의검증을 통과했습니다. 실제 주문은 제출되지 않았습니다.");
+      }, 520);
+    });
+
+    $("#save-strategy").addEventListener("click", () => {
+      if (state.strategySimulation !== "passed" || strategyValidationErrors().length) return;
+      state.strategySaved = true;
+      renderStrategyPreview();
+      announce("전략 초안을 저장했습니다. 주문이나 자동화는 시작되지 않았습니다.");
+    });
 
     $("#toss-form").addEventListener("submit", (event) => {
       event.preventDefault();
@@ -1405,6 +2191,7 @@
         else button.removeAttribute("aria-current");
       });
       $$(".settings-button").forEach((button) => button.toggleAttribute("data-active", page === "settings"));
+      if (page === "strategies") renderStrategyBuilder();
     }
 
     $$('[data-page]').forEach((button) => button.addEventListener("click", () => setPage(button.dataset.page)));
