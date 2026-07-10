@@ -1,5 +1,7 @@
 # macOS Terminal Dashboard Goal
 
+> Archive · 2026-07-10: 기존 터미널형 macOS UX의 목표와 수용 기준을 보존한 문서다. 현재 기능과 다음 UI 방향은 [기능 상태](../features.md)와 [이어서 개발하기](../continuation-guide.md)를 우선한다.
+
 이 문서는 macOS 네이티브 앱의 v1 목표 UX와 구현 체크리스트를 고정한다. 기준 화면은 `docs/ux-prototypes/macos-native/terminal-dense-detail.html`의 탭형 터미널 대시보드다.
 
 ## 제품 목표

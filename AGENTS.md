@@ -2,34 +2,45 @@
 # Guidance for agentic coding assistants in this repo.
 
 ## Project Overview
-- Next.js App Router project with TypeScript and CSS Modules.
-- Main app lives in `src/app` with API routes under `src/app/api`.
+- YongStockDesk is a SwiftUI macOS app backed by a bundled TypeScript sidecar; the Next.js app remains available for fallback/admin workflows.
+- The native app lives in `apps/macos/StockAnalysisMac`, and the local engine entrypoint is `scripts/local_engine.mts`.
+- Web routes and pages live in `src/app`; shared domain and execution rules live below `src/domain`, `src/use-cases`, and `src/ports`.
 - Strategy and domain rules live in `STRATEGY_V2.md` and `.agent/skills/stock-analysis/SKILL.md`.
+- Read `docs/continuation-guide.md`, `docs/features.md`, and `docs/macos-native.md` before changing app architecture or user-visible feature status.
 - Performance rules for React/Next.js live in `.agent/rules/react-code-guide.md`.
 - No Cursor rules (`.cursor/rules` or `.cursorrules`) found.
 - No Copilot rules (`.github/copilot-instructions.md`) found.
 
 ## Commands (Build/Lint/Test)
-Use `npm` (repo includes `package-lock.json`).
+Use Yarn 1.22.22 (the repo includes `yarn.lock` and declares `packageManager`).
 
-- Install deps: `npm install`
-- Dev server: `npm run dev` (Next.js dev server)
-- Build: `npm run build`
-- Start (prod): `npm run start`
-- Lint: `npm run lint`
-- Refresh symbol master cache: `npm run refresh:symbol-master`
+- Install deps: `yarn install --frozen-lockfile`
+- Dev server: `yarn dev` (Next.js fallback/admin server)
+- Build: `yarn build`
+- Start (prod): `yarn start`
+- Lint: `yarn lint`
+- Refresh symbol master cache: `yarn refresh:symbol-master`
+- macOS smoke test: `yarn mac:test`
+- Build app bundle: `yarn mac:app`
+- Verify app bundle and sidecar: `yarn mac:verify`
+- Verify Finder-style launch: `yarn mac:verify:launch`
 
 Testing
 - There is no aggregate `test` script yet; use the focused Node test scripts below.
-- Crypto buy signal: `npm run test:crypto-buy`
-- Community pain signal: `npm run test:community-pain`
-- Market briefing: `npm run test:market-briefing`
-- Portfolio daily action: `npm run test:portfolio-daily-action`
-- Signal reliability: `npm run test:signal-reliability`
-- Symbol autocomplete: `npm run test:symbol-search`
-- Trading risk policy: `npm run test:trading`
+- Automation strategy and safety: `yarn test:automation`
+- Local engine: `yarn test:local-engine`
+- Toss client and contract: `yarn test:toss`
+- Crypto buy signal: `yarn test:crypto-buy`
+- Community pain signal: `yarn test:community-pain`
+- Market briefing: `yarn test:market-briefing`
+- Portfolio daily action: `yarn test:portfolio-daily-action`
+- Signal reliability: `yarn test:signal-reliability`
+- Symbol autocomplete: `yarn test:symbol-search`
+- Trading risk policy: `yarn test:trading`
 
 ## Repo Layout
+- `apps/macos/StockAnalysisMac` contains the SwiftUI app and Swift smoke tests.
+- `scripts/local_engine.mts` exposes the local sidecar contract bundled into the app.
 - `src/app` contains routes and pages (App Router).
 - `src/app/api/**/route.ts` contains serverless API handlers.
 - `src/domain` contains service-ready domain types such as market, portfolio, strategy, execution, user, and trading.
@@ -39,6 +50,7 @@ Testing
 - `src/app/**/*.module.css` contains CSS Modules for pages.
 - `src/app/globals.css` defines global CSS variables and base styles.
 - `public/` contains static assets.
+- `docs/README.md` is the documentation index; `docs/archive` is historical and not authoritative for current behavior.
 
 ## Tooling & Config
 - TypeScript config: `tsconfig.json` uses `strict: true` and `moduleResolution: "bundler"`.

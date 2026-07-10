@@ -5,18 +5,16 @@
 ## 처음 읽을 문서
 
 1. [이어서 개발하기](continuation-guide.md) — 저장소, 실행 환경, 안전 경계와 다음 우선순위
-2. [현재 기능](current-main-features.md) — 현재 코드에 들어간 기능과 사용 조건
+2. [현재 기능](features.md) — 실제 구현, 외부 설정, 시안과 후속 작업의 상태
 3. [macOS 네이티브 앱](macos-native.md) — SwiftUI, sidecar, 패키징과 배포 구조
 4. [기능 확장 가이드](feature-extension-guide.md) — 새 기능을 추가할 때 지켜야 할 계층과 검증 순서
 5. [전략 V2](../STRATEGY_V2.md) — 분석 지표와 신호 로직의 기준 계약
 
 ## 제품·기능 명세
 
-- [자동매매 플랫폼 목표](automation-platform-goals.md)
 - [초보자용 전략 조립기](automation-strategy-builder-spec.md)
 - [보유 기간별 익절·손절](ux-prototypes/macos-native/horizon-exit-plan-spec.md)
 - [신고가 돌파 보조 룰](breakout-rule.md)
-- [서비스형 신호·브리핑 로드맵](service-signal-briefing-roadmap.md)
 
 명세와 로드맵은 현재 앱에 구현됐다는 뜻이 아니다. 실제 제공 여부는 현재 기능 문서의 상태를 우선한다.
 
@@ -37,6 +35,15 @@ HTML 시안은 사용자 흐름을 검토하기 위한 독립 프로토타입이
 - [크립토 매수 신호 백테스트 사양](../crypto_buy_signal_backtest_spec.md)
 
 이 자료들은 설계 근거와 실험 기록이다. 수익률 보장이나 현재 제품 기능 목록으로 사용하지 않는다.
+
+## Archive
+
+다음 문서는 구현 당시의 목표와 의사결정을 보존하는 기록이다. 현재 기능과 작업 순서는 [기능 상태](features.md)와 [이어서 개발하기](continuation-guide.md)를 우선한다.
+
+- [자동매매 플랫폼 목표](archive/automation-platform-goals.md)
+- [macOS 터미널 대시보드 목표](archive/macos-terminal-dashboard-goal.md)
+- [보안·서버 리팩토링 메모](archive/security-server-refactor.md)
+- [서비스형 신호·브리핑 로드맵](archive/service-signal-briefing-roadmap.md)
 
 ## 문서 갱신 원칙
 
