@@ -1,0 +1,7 @@
+배포순서
+
+GitHub에 private repo 만들기
+Vercel 로그인 → New Project
+GitHub 연결 허용 (private repo 권한 포함)
+방금 repo 선택 → Framework 자동 감지(Next.js)
+Deploy 클릭

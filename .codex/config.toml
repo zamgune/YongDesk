@@ -1,0 +1,10 @@
+sandbox_mode = "workspace-write"
+[mcp_servers.next-devtools]
+args = [
+    "-y",
+    "next-devtools-mcp@latest",
+]
+command = "npx"
+
+[sandbox_workspace_write]
+network_access = true

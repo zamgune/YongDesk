@@ -1,0 +1,1784 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>StockAnalysis — 초보자 중심 macOS 시안</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --canvas: #090d12;
+      --canvas-soft: #0d131b;
+      --surface: #111923;
+      --surface-raised: #16212d;
+      --surface-hover: #1b2937;
+      --line: #263544;
+      --line-soft: #1c2834;
+      --text: #f2f6f8;
+      --muted: #94a4b3;
+      --faint: #667887;
+      --mint: #42d3aa;
+      --mint-soft: rgba(66, 211, 170, 0.14);
+      --blue: #6aa9ff;
+      --blue-soft: rgba(106, 169, 255, 0.14);
+      --orange: #ffb454;
+      --red: #ff6b78;
+      --red-soft: rgba(255, 107, 120, 0.12);
+      --shadow: 0 24px 80px rgba(0, 0, 0, 0.44);
+      --radius-lg: 18px;
+      --radius-md: 12px;
+      --radius-sm: 9px;
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Pretendard", sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+    html { background: var(--canvas); }
+    body {
+      min-width: 0;
+      margin: 0;
+      color: var(--text);
+      background:
+        radial-gradient(circle at 20% -10%, rgba(66, 211, 170, 0.11), transparent 36rem),
+        radial-gradient(circle at 92% 20%, rgba(106, 169, 255, 0.08), transparent 32rem),
+        var(--canvas);
+    }
+
+    button, input, select { font: inherit; }
+    button, a, input, select { -webkit-tap-highlight-color: transparent; }
+    button { color: inherit; }
+    button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible, summary:focus-visible {
+      outline: 3px solid rgba(106, 169, 255, 0.62);
+      outline-offset: 2px;
+    }
+    [hidden] { display: none !important; }
+    .sr-only {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      white-space: nowrap;
+      border: 0;
+    }
+
+    .prototype-page {
+      width: min(1480px, 100%);
+      margin: 0 auto;
+      padding: 18px;
+    }
+
+    .review-bar {
+      position: relative;
+      z-index: 40;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      margin-bottom: 14px;
+      padding: 12px 14px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius-md);
+      background: rgba(17, 25, 35, 0.86);
+      backdrop-filter: blur(18px);
+    }
+    .review-copy { min-width: 0; }
+    .review-copy strong { display: block; font-size: 14px; }
+    .review-copy span { display: block; margin-top: 3px; color: var(--muted); font-size: 12px; }
+    .review-states { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 7px; }
+    .review-state {
+      min-height: 34px;
+      padding: 0 12px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: var(--canvas-soft);
+      color: var(--muted);
+      cursor: pointer;
+    }
+    .review-state[aria-pressed="true"] {
+      color: var(--text);
+      border-color: rgba(66, 211, 170, 0.46);
+      background: var(--mint-soft);
+    }
+
+    .mac-window {
+      position: relative;
+      min-height: 760px;
+      overflow: hidden;
+      border: 1px solid #2c3b49;
+      border-radius: var(--radius-lg);
+      background: var(--canvas-soft);
+      box-shadow: var(--shadow);
+    }
+    .titlebar {
+      height: 42px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 0 15px;
+      border-bottom: 1px solid var(--line-soft);
+      background: #0d141c;
+    }
+    .traffic { width: 12px; height: 12px; border-radius: 50%; }
+    .traffic.red { background: #ff5f57; }
+    .traffic.yellow { background: #febc2e; }
+    .traffic.green { background: #28c840; }
+    .titlebar-label {
+      position: absolute;
+      left: 50%;
+      transform: translateX(-50%);
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 650;
+    }
+
+    .onboarding {
+      min-height: 716px;
+      display: grid;
+      grid-template-columns: minmax(0, 0.9fr) minmax(400px, 0.72fr);
+      align-items: stretch;
+    }
+    .onboarding-intro {
+      position: relative;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      min-width: 0;
+      padding: clamp(34px, 6vw, 80px);
+      overflow: hidden;
+      background:
+        radial-gradient(circle at 18% 12%, rgba(66, 211, 170, 0.22), transparent 20rem),
+        linear-gradient(145deg, #101b26, #0b1118 68%);
+    }
+    .brand { display: flex; align-items: center; gap: 11px; font-weight: 760; letter-spacing: -0.02em; }
+    .brand-mark {
+      width: 34px;
+      height: 34px;
+      display: grid;
+      place-items: center;
+      border-radius: 10px;
+      color: #07100d;
+      background: var(--mint);
+      box-shadow: 0 0 28px rgba(66, 211, 170, 0.22);
+    }
+    .intro-copy { max-width: 610px; }
+    .eyebrow {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      margin-bottom: 16px;
+      color: var(--mint);
+      font-size: 13px;
+      font-weight: 700;
+    }
+    .eyebrow::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+    h1, h2, h3, p { margin-top: 0; }
+    .intro-copy h1 {
+      margin-bottom: 18px;
+      font-size: clamp(34px, 5vw, 62px);
+      line-height: 1.06;
+      letter-spacing: -0.045em;
+    }
+    .intro-copy p { max-width: 540px; margin-bottom: 0; color: var(--muted); font-size: 16px; line-height: 1.7; }
+    .intro-steps { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-top: 38px; }
+    .intro-step {
+      padding: 14px;
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: var(--radius-md);
+      background: rgba(255,255,255,0.035);
+    }
+    .intro-step b { display: block; margin-bottom: 6px; color: var(--mint); font-size: 12px; }
+    .intro-step span { font-size: 13px; line-height: 1.45; }
+    .intro-foot { color: var(--faint); font-size: 12px; }
+
+    .credential-pane {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: clamp(28px, 5vw, 68px);
+      border-left: 1px solid var(--line-soft);
+      background: var(--surface);
+    }
+    .credential-card { width: min(440px, 100%); }
+    .step-label { margin-bottom: 12px; color: var(--mint); font-size: 12px; font-weight: 760; letter-spacing: 0.08em; text-transform: uppercase; }
+    .credential-card h2 { margin-bottom: 10px; font-size: 27px; letter-spacing: -0.035em; }
+    .credential-card > p { margin-bottom: 25px; color: var(--muted); line-height: 1.55; }
+    .field { display: grid; gap: 8px; margin-bottom: 16px; }
+    .field label { font-size: 13px; font-weight: 690; }
+    .field input {
+      width: 100%;
+      height: 46px;
+      padding: 0 13px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius-sm);
+      color: var(--text);
+      background: #0c131a;
+    }
+    .field input::placeholder { color: #5c6d7a; }
+    .field input:focus { border-color: var(--blue); }
+    .secure-note {
+      display: flex;
+      gap: 10px;
+      margin: 5px 0 19px;
+      padding: 12px;
+      border-radius: var(--radius-sm);
+      color: var(--muted);
+      background: rgba(106, 169, 255, 0.08);
+      font-size: 12px;
+      line-height: 1.5;
+    }
+    .secure-note b { display: block; margin-bottom: 2px; color: var(--text); font-size: 13px; }
+    .primary, .secondary, .danger, .ghost {
+      min-height: 40px;
+      border-radius: var(--radius-sm);
+      cursor: pointer;
+      font-weight: 700;
+    }
+    .primary { border: 0; color: #06100d; background: var(--mint); }
+    .primary:hover { background: #5de0ba; }
+    .primary:disabled { cursor: wait; opacity: 0.62; }
+    .secondary { border: 1px solid var(--line); background: var(--surface-raised); }
+    .secondary:hover, .ghost:hover { background: var(--surface-hover); }
+    .ghost { border: 1px solid transparent; color: var(--muted); background: transparent; }
+    .danger { border: 1px solid rgba(255,107,120,0.38); color: var(--red); background: var(--red-soft); }
+    .full { width: 100%; }
+    .form-status {
+      min-height: 0;
+      margin-bottom: 14px;
+      padding: 12px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius-sm);
+      font-size: 13px;
+      line-height: 1.5;
+    }
+    .form-status.error { border-color: rgba(255,107,120,0.35); color: #ffb6bd; background: var(--red-soft); }
+    .form-status.success { border-color: rgba(66,211,170,0.36); color: #a8f0da; background: var(--mint-soft); }
+    .form-status.verifying { color: #b9d7ff; background: var(--blue-soft); }
+    .docs-link { display: inline-block; margin-top: 16px; color: var(--blue); font-size: 13px; text-decoration: none; }
+    .docs-link:hover { text-decoration: underline; }
+
+    .app-shell { min-height: 716px; display: grid; grid-template-columns: 210px minmax(0, 1fr); }
+    .sidebar {
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      padding: 18px 12px 13px;
+      border-right: 1px solid var(--line-soft);
+      background: #0c131b;
+    }
+    .sidebar .brand { padding: 0 9px 22px; font-size: 14px; }
+    .sidebar .brand-mark { width: 28px; height: 28px; border-radius: 8px; font-size: 13px; }
+    .nav-list { display: grid; gap: 5px; }
+    .nav-button, .settings-button {
+      width: 100%;
+      min-height: 43px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 0 12px;
+      border: 0;
+      border-radius: var(--radius-sm);
+      color: var(--muted);
+      background: transparent;
+      cursor: pointer;
+      text-align: left;
+    }
+    .nav-button:hover, .settings-button:hover { color: var(--text); background: var(--surface-raised); }
+    .nav-button[aria-current="page"] { color: var(--text); background: var(--mint-soft); }
+    .nav-icon { width: 20px; text-align: center; color: var(--faint); }
+    .nav-button[aria-current="page"] .nav-icon { color: var(--mint); }
+    .sidebar-bottom { margin-top: auto; padding-top: 14px; border-top: 1px solid var(--line-soft); }
+    .mini-status { display: flex; align-items: center; gap: 8px; padding: 0 12px 10px; color: var(--muted); font-size: 11px; }
+    .status-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--mint); box-shadow: 0 0 10px rgba(66,211,170,0.5); }
+
+    .app-main { min-width: 0; display: flex; flex-direction: column; background: var(--canvas-soft); }
+    .topbar {
+      min-height: 62px;
+      display: grid;
+      grid-template-columns: auto minmax(220px, 560px) auto;
+      align-items: center;
+      justify-content: space-between;
+      gap: 14px;
+      padding: 10px 18px;
+      border-bottom: 1px solid var(--line-soft);
+      background: rgba(13, 19, 27, 0.94);
+    }
+    .segmented { display: inline-flex; padding: 3px; border-radius: 10px; background: #080e14; }
+    .segment {
+      min-height: 34px;
+      padding: 0 14px;
+      border: 0;
+      border-radius: 7px;
+      color: var(--muted);
+      background: transparent;
+      cursor: pointer;
+      font-size: 13px;
+      font-weight: 700;
+    }
+    .segment[aria-pressed="true"] { color: var(--text); background: var(--surface-raised); box-shadow: 0 2px 9px rgba(0,0,0,0.28); }
+    .search-wrap { position: relative; min-width: 0; }
+    .search-wrap input {
+      width: 100%;
+      height: 39px;
+      padding: 0 14px 0 38px;
+      border: 1px solid var(--line-soft);
+      border-radius: var(--radius-sm);
+      color: var(--text);
+      background: #0a1118;
+    }
+    .search-icon { position: absolute; left: 13px; top: 10px; color: var(--faint); pointer-events: none; }
+    .search-results {
+      position: absolute;
+      z-index: 8;
+      top: 45px;
+      left: 0;
+      right: 0;
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: var(--radius-sm);
+      background: var(--surface-raised);
+      box-shadow: 0 14px 36px rgba(0,0,0,0.4);
+    }
+    .search-result { width: 100%; display: flex; justify-content: space-between; padding: 11px 13px; border: 0; color: var(--text); background: transparent; cursor: pointer; text-align: left; }
+    .search-result:hover { background: var(--surface-hover); }
+    .search-result span { color: var(--muted); }
+    .connection-pill { display: flex; align-items: center; gap: 8px; white-space: nowrap; color: var(--muted); font-size: 12px; }
+    .emergency-global { min-height: 34px; padding: 0 11px; margin-left: 8px; border-radius: 8px; }
+
+    .workspace { min-width: 0; flex: 1; padding: 18px; }
+    .chart-view { min-width: 0; display: grid; gap: 14px; }
+    #stock-content { min-width: 0; display: grid; gap: 14px; }
+    .market-pulse {
+      overflow: hidden;
+      border: 1px solid rgba(106, 169, 255, 0.2);
+      border-radius: var(--radius-md);
+      background: linear-gradient(100deg, rgba(106, 169, 255, 0.09), rgba(66, 211, 170, 0.035));
+    }
+    .market-pulse-button {
+      width: 100%;
+      min-height: 58px;
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 14px;
+      padding: 10px 13px;
+      border: 0;
+      color: var(--text);
+      background: transparent;
+      cursor: pointer;
+      text-align: left;
+    }
+    .market-pulse-button:hover { background: rgba(255, 255, 255, 0.025); }
+    .market-pulse-title { display: flex; align-items: center; gap: 8px; white-space: nowrap; }
+    .market-tone-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--orange); box-shadow: 0 0 12px rgba(255, 180, 84, 0.42); }
+    .market-pulse-title strong { font-size: 13px; }
+    .market-tone { padding: 3px 7px; border-radius: 999px; color: var(--orange); background: rgba(255, 180, 84, 0.11); font-size: 11px; font-weight: 700; }
+    .market-pulse[data-tone="constructive"] .market-tone-dot { background: var(--mint); box-shadow: 0 0 12px rgba(66, 211, 170, 0.42); }
+    .market-pulse[data-tone="constructive"] .market-tone { color: var(--mint); background: var(--mint-soft); }
+    .market-pulse[data-tone="cautious"] .market-tone-dot { background: var(--red); box-shadow: 0 0 12px rgba(255, 107, 120, 0.42); }
+    .market-pulse[data-tone="cautious"] .market-tone { color: var(--red); background: var(--red-soft); }
+    .market-headline { min-width: 0; margin: 0; overflow: hidden; color: #c7d2dc; font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
+    .market-pulse-meta { display: flex; align-items: center; justify-content: flex-end; gap: 10px; color: var(--muted); font-size: 11px; white-space: nowrap; }
+    .market-pulse-meta b { color: var(--text); font-weight: 700; }
+    .market-chevron { width: 24px; height: 24px; display: grid; place-items: center; border-radius: 7px; background: rgba(255, 255, 255, 0.04); transition: transform 160ms ease; }
+    .market-pulse-button[aria-expanded="true"] .market-chevron { transform: rotate(180deg); }
+    .market-briefing-detail { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); border-top: 1px solid rgba(106, 169, 255, 0.16); }
+    .market-briefing-item { min-width: 0; padding: 12px 14px; border-right: 1px solid rgba(106, 169, 255, 0.12); }
+    .market-briefing-item:last-child { border-right: 0; }
+    .market-briefing-item span { display: block; margin-bottom: 5px; color: var(--muted); font-size: 11px; }
+    .market-briefing-item strong { display: block; font-size: 13px; line-height: 1.45; }
+    .quote-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; }
+    .symbol-line { display: flex; align-items: center; flex-wrap: wrap; gap: 9px; }
+    .symbol-line h1 { margin: 0; font-size: 21px; letter-spacing: -0.025em; }
+    .symbol-code { color: var(--muted); font-size: 12px; }
+    .provider-select { height: 30px; padding: 0 26px 0 9px; border: 1px solid var(--line); border-radius: 7px; color: var(--text); background: var(--surface); }
+    .price-line { display: flex; align-items: baseline; gap: 10px; margin-top: 9px; }
+    .price { font-size: 28px; font-weight: 760; letter-spacing: -0.035em; }
+    .change-up { color: var(--red); font-size: 13px; font-weight: 700; }
+    .quote-actions { display: flex; align-items: center; gap: 8px; }
+    .order-button { min-width: 92px; }
+    .intervals { display: flex; padding: 3px; border: 1px solid var(--line-soft); border-radius: 9px; background: #0a1117; }
+    .interval {
+      min-height: 31px;
+      padding: 0 11px;
+      border: 0;
+      border-radius: 6px;
+      color: var(--muted);
+      background: transparent;
+      cursor: pointer;
+      font-size: 12px;
+    }
+    .interval[aria-pressed="true"] { color: var(--text); background: var(--surface-raised); }
+    .chart-card { min-width: 0; overflow: hidden; border: 1px solid var(--line-soft); border-radius: var(--radius-md); background: #0a1118; }
+    .chart-meta { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 11px 14px 0; color: var(--faint); font-size: 11px; }
+    .chart-legend { display: flex; flex-wrap: wrap; gap: 12px; }
+    .legend-item::before { content: ""; display: inline-block; width: 7px; height: 7px; margin-right: 5px; border-radius: 50%; background: var(--mint); }
+    .legend-item.signal::before { background: var(--blue); }
+    .market-chart { display: block; width: 100%; height: 300px; }
+    .detail-panel { border: 1px solid var(--line-soft); border-radius: var(--radius-md); background: var(--surface); }
+    .tabs { display: flex; gap: 2px; padding: 6px; border-bottom: 1px solid var(--line-soft); }
+    .tab { min-height: 34px; padding: 0 14px; border: 0; border-radius: 7px; color: var(--muted); background: transparent; cursor: pointer; font-size: 13px; font-weight: 700; }
+    .tab[aria-selected="true"] { color: var(--text); background: var(--surface-raised); }
+    .tab-panel { min-height: 103px; padding: 15px 17px; }
+    .analysis-layout { display: grid; grid-template-columns: minmax(0, 1.55fr) minmax(280px, 0.8fr); gap: 18px; }
+    .analysis-main { min-width: 0; }
+    .analysis-heading { display: flex; align-items: center; gap: 8px; margin-bottom: 9px; }
+    .analysis-stance { padding: 4px 8px; border-radius: 999px; color: var(--orange); background: rgba(255, 180, 84, 0.12); font-size: 11px; font-weight: 760; }
+    .analysis-stance[data-tone="constructive"] { color: var(--mint); background: var(--mint-soft); }
+    .analysis-stance[data-tone="cautious"] { color: var(--red); background: var(--red-soft); }
+    .analysis-updated { color: var(--faint); font-size: 11px; }
+    .analysis-main h2 { margin-bottom: 7px; font-size: 16px; line-height: 1.42; letter-spacing: -0.018em; }
+    .analysis-main > p { margin-bottom: 12px; color: var(--muted); font-size: 12px; line-height: 1.55; }
+    .analysis-reasons { display: flex; flex-wrap: wrap; gap: 7px; }
+    .analysis-reason { padding: 6px 9px; border-radius: 7px; color: #bdc9d3; background: #0b1219; font-size: 11px; }
+    .analysis-conditions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-content: start; border-left: 1px solid var(--line-soft); }
+    .analysis-condition { min-width: 0; padding: 7px 12px 11px; }
+    .analysis-condition.wide { grid-column: 1 / -1; border-top: 1px solid var(--line-soft); }
+    .analysis-condition span { display: block; margin-bottom: 5px; color: var(--muted); font-size: 11px; }
+    .analysis-condition strong { display: block; font-size: 13px; line-height: 1.4; }
+    .analysis-condition .valid { color: #a8f0da; }
+    .analysis-condition .invalid { color: #ffb6bd; }
+    .analysis-note { margin: 12px 0 0; padding-top: 10px; border-top: 1px solid var(--line-soft); color: var(--faint); font-size: 11px; }
+    .horizon-section { margin-top: 15px; padding-top: 14px; border-top: 1px solid var(--line-soft); }
+    .horizon-toolbar { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; margin-bottom: 11px; }
+    .horizon-toolbar h3 { margin: 0 0 4px; font-size: 14px; }
+    .horizon-toolbar p { margin: 0; color: var(--muted); font-size: 11px; }
+    .risk-preset-wrap { display: flex; align-items: center; gap: 8px; }
+    .risk-preset-label { color: var(--muted); font-size: 11px; white-space: nowrap; }
+    .risk-presets { display: inline-flex; padding: 3px; border-radius: 9px; background: #0a1118; }
+    .risk-preset {
+      min-height: 29px;
+      padding: 0 9px;
+      border: 0;
+      border-radius: 6px;
+      color: var(--muted);
+      background: transparent;
+      cursor: pointer;
+      font-size: 11px;
+      font-weight: 700;
+    }
+    .risk-preset[aria-pressed="true"] { color: var(--text); background: var(--surface-hover); }
+    .horizon-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+    .horizon-card {
+      min-width: 0;
+      display: grid;
+      gap: 9px;
+      padding: 12px;
+      border: 1px solid var(--line-soft);
+      border-radius: var(--radius-sm);
+      color: var(--text);
+      background: #0b1219;
+      cursor: pointer;
+      text-align: left;
+    }
+    .horizon-card:hover { border-color: var(--line); background: #0e1720; }
+    .horizon-card[aria-pressed="true"] { border-color: rgba(106, 169, 255, 0.48); background: var(--blue-soft); }
+    .horizon-card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+    .horizon-name strong { display: block; margin-bottom: 3px; font-size: 13px; }
+    .horizon-name span { color: var(--muted); font-size: 10px; }
+    .plan-status { padding: 3px 6px; border-radius: 999px; font-size: 10px; font-weight: 760; white-space: nowrap; }
+    .plan-status.actionable { color: var(--mint); background: var(--mint-soft); }
+    .plan-status.wait { color: var(--orange); background: rgba(255, 180, 84, 0.12); }
+    .plan-status.unavailable { color: var(--red); background: var(--red-soft); }
+    .horizon-levels { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px 9px; }
+    .horizon-level span { display: block; margin-bottom: 3px; color: var(--muted); font-size: 10px; }
+    .horizon-level strong { display: block; overflow: hidden; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+    .horizon-level .profit { color: #a8f0da; }
+    .horizon-level .stop { color: #ffb6bd; }
+    .horizon-foot { display: flex; justify-content: space-between; gap: 8px; padding-top: 8px; border-top: 1px solid var(--line-soft); color: var(--muted); font-size: 10px; }
+    .horizon-detail { margin-top: 9px; border: 1px solid var(--line-soft); border-radius: var(--radius-sm); background: #0a1118; }
+    .horizon-detail-toggle { width: 100%; min-height: 42px; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 0 12px; border: 0; color: var(--text); background: transparent; cursor: pointer; text-align: left; }
+    .horizon-detail-toggle span:first-child { font-size: 12px; font-weight: 700; }
+    .horizon-detail-toggle span:last-child { color: var(--muted); font-size: 11px; }
+    .horizon-detail-body { padding: 0 12px 13px; border-top: 1px solid var(--line-soft); }
+    .basis-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0; }
+    .basis-item { min-width: 0; padding: 11px 10px 10px 0; }
+    .basis-item span { display: block; margin-bottom: 4px; color: var(--muted); font-size: 10px; }
+    .basis-item strong { display: block; font-size: 12px; line-height: 1.4; }
+    .explanation-grid { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(230px, 0.75fr); gap: 16px; padding-top: 11px; border-top: 1px solid var(--line-soft); }
+    .formula-title { margin-bottom: 7px; font-size: 11px; font-weight: 760; }
+    .formula-steps { display: grid; gap: 5px; margin: 0; padding-left: 18px; color: var(--muted); font-size: 11px; line-height: 1.5; }
+    .formula-steps strong { color: var(--text); }
+    .plan-decision { padding-left: 14px; border-left: 1px solid var(--line-soft); }
+    .plan-decision p { margin: 0 0 10px; color: var(--muted); font-size: 11px; line-height: 1.55; }
+    .plan-blockers { display: grid; gap: 5px; margin-bottom: 10px; color: #ffcf91; font-size: 11px; }
+    .apply-plan { width: 100%; }
+    .apply-plan:disabled { cursor: not-allowed; opacity: 0.45; }
+    .risk-budget-note { margin-top: 8px; color: var(--faint); font-size: 10px; line-height: 1.45; }
+    .signal-row, .news-row { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 8px 0; border-bottom: 1px solid var(--line-soft); font-size: 13px; }
+    .signal-row:last-child, .news-row:last-child { border-bottom: 0; }
+    .tag { padding: 4px 7px; border-radius: 999px; color: var(--mint); background: var(--mint-soft); font-size: 11px; font-weight: 700; }
+    .news-row time { flex: 0 0 auto; color: var(--faint); font-size: 11px; }
+
+    .crypto-lock {
+      min-height: 520px;
+      display: grid;
+      place-items: center;
+      padding: 28px;
+      border: 1px solid var(--line-soft);
+      border-radius: var(--radius-md);
+      background:
+        radial-gradient(circle at 50% 30%, rgba(106,169,255,0.09), transparent 22rem),
+        #0a1118;
+    }
+    .crypto-lock-inner { width: min(660px, 100%); text-align: center; }
+    .lock-icon { width: 52px; height: 52px; display: grid; place-items: center; margin: 0 auto 17px; border-radius: 16px; color: var(--blue); background: var(--blue-soft); font-size: 24px; }
+    .crypto-lock h2 { margin-bottom: 9px; font-size: 23px; letter-spacing: -0.03em; }
+    .crypto-lock p { max-width: 530px; margin: 0 auto 22px; color: var(--muted); line-height: 1.55; }
+    .provider-cards { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 11px; text-align: left; }
+    .provider-card { padding: 16px; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--surface); }
+    .provider-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+    .provider-logo { width: 28px; height: 28px; display: grid; place-items: center; border-radius: 9px; color: #fff; background: #2367ef; font-size: 11px; font-weight: 800; }
+    .provider-card.bithumb .provider-logo { background: #f07422; }
+    .provider-card p { margin: 0 0 14px; font-size: 12px; }
+    .provider-connect { width: 100%; }
+    .provider-form { display: grid; gap: 8px; margin-top: 12px; }
+    .provider-form input { width: 100%; height: 36px; padding: 0 9px; border: 1px solid var(--line); border-radius: 7px; color: var(--text); background: #091017; }
+
+    .secondary-view { display: grid; gap: 14px; }
+    .page-heading { display: flex; align-items: flex-end; justify-content: space-between; gap: 14px; padding: 6px 0 4px; }
+    .page-heading h1 { margin-bottom: 5px; font-size: 23px; }
+    .page-heading p { margin: 0; color: var(--muted); font-size: 13px; }
+    .focus-card { padding: 18px; border: 1px solid var(--line-soft); border-radius: var(--radius-md); background: var(--surface); }
+    .focus-card h2 { margin-bottom: 8px; font-size: 16px; }
+    .focus-card > p { color: var(--muted); line-height: 1.55; }
+    .setup-list { display: grid; gap: 9px; margin-top: 15px; }
+    .setup-item { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 12px; border-radius: var(--radius-sm); background: #0b1219; }
+    .setup-item span { color: var(--muted); font-size: 12px; }
+    .setup-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
+    .check { color: var(--mint); }
+    details { padding: 11px 0; border-top: 1px solid var(--line-soft); }
+    details:first-of-type { border-top: 0; }
+    summary { cursor: pointer; font-weight: 690; }
+    details p { margin: 9px 0 0; color: var(--muted); font-size: 12px; line-height: 1.55; }
+
+    .drawer-scrim { position: absolute; z-index: 18; inset: 42px 0 0; background: rgba(2, 6, 10, 0.52); }
+    .order-drawer {
+      position: absolute;
+      z-index: 20;
+      top: 42px;
+      right: 0;
+      bottom: 0;
+      width: min(390px, calc(100% - 54px));
+      display: flex;
+      flex-direction: column;
+      border-left: 1px solid var(--line);
+      background: #101821;
+      box-shadow: -20px 0 60px rgba(0,0,0,0.42);
+    }
+    .drawer-head { display: flex; align-items: center; justify-content: space-between; padding: 17px; border-bottom: 1px solid var(--line-soft); }
+    .drawer-head h2 { margin: 0; font-size: 17px; }
+    .icon-button { width: 34px; height: 34px; border: 1px solid var(--line); border-radius: 8px; color: var(--muted); background: transparent; cursor: pointer; }
+    .order-body { flex: 1; overflow-y: auto; padding: 17px; }
+    .order-side { display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px; margin-bottom: 18px; }
+    .order-side .segment { border: 1px solid var(--line); }
+    .order-side .segment.buy[aria-pressed="true"] { color: var(--red); border-color: rgba(255,107,120,0.35); background: var(--red-soft); }
+    .order-side .segment.sell[aria-pressed="true"] { color: var(--blue); border-color: rgba(106,169,255,0.35); background: var(--blue-soft); }
+    .order-quote { display: flex; justify-content: space-between; margin-bottom: 16px; padding: 12px; border-radius: var(--radius-sm); background: #0a1118; }
+    .order-quote span { color: var(--muted); font-size: 12px; }
+    .applied-plan { margin-bottom: 16px; padding: 12px; border: 1px solid rgba(106, 169, 255, 0.28); border-radius: var(--radius-sm); background: var(--blue-soft); }
+    .applied-plan-head { display: flex; justify-content: space-between; gap: 10px; margin-bottom: 9px; }
+    .applied-plan-head strong { font-size: 13px; }
+    .applied-plan-head span { color: var(--muted); font-size: 10px; }
+    .applied-plan-levels { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+    .applied-plan-levels span { display: block; margin-bottom: 3px; color: var(--muted); font-size: 10px; }
+    .applied-plan-levels strong { display: block; font-size: 12px; }
+    .execution-warning { margin-top: 10px; color: #ffcf91; font-size: 10px; line-height: 1.5; }
+    .risk-check { margin-top: 16px; padding: 13px; border: 1px solid rgba(66,211,170,0.28); border-radius: var(--radius-sm); background: var(--mint-soft); }
+    .risk-check strong { display: block; margin-bottom: 6px; font-size: 13px; }
+    .risk-check ul { margin: 0; padding-left: 18px; color: var(--muted); font-size: 12px; line-height: 1.7; }
+    .drawer-foot { padding: 14px 17px 18px; border-top: 1px solid var(--line-soft); }
+
+    .toast { position: absolute; z-index: 30; left: 50%; bottom: 22px; transform: translateX(-50%); max-width: calc(100% - 32px); padding: 10px 15px; border: 1px solid var(--line); border-radius: 999px; color: var(--text); background: #17232f; box-shadow: 0 10px 32px rgba(0,0,0,0.38); font-size: 12px; white-space: nowrap; }
+
+    @media (max-width: 1024px) {
+      .prototype-page { padding: 12px; }
+      .mac-window { min-height: 720px; }
+      .onboarding { min-height: 676px; grid-template-columns: minmax(0, 0.85fr) minmax(360px, 0.7fr); }
+      .onboarding-intro { padding: 42px; }
+      .intro-steps { grid-template-columns: 1fr; }
+      .intro-step { display: flex; align-items: center; gap: 10px; }
+      .intro-step b { margin: 0; }
+      .app-shell { min-height: 676px; grid-template-columns: 168px minmax(0, 1fr); }
+      .topbar { grid-template-columns: auto minmax(160px, 1fr) auto; padding-inline: 13px; }
+      .workspace { padding: 14px; }
+      .market-pulse-button { grid-template-columns: auto minmax(0, 1fr); }
+      .market-pulse-meta { grid-column: 1 / -1; justify-content: flex-start; padding-left: 16px; }
+      .market-chart { height: 270px; }
+      .analysis-layout { grid-template-columns: minmax(0, 1.2fr) minmax(240px, 0.8fr); }
+      .basis-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+
+    @media (max-width: 736px) {
+      .prototype-page { padding: 8px; }
+      .review-bar { align-items: flex-start; flex-direction: column; }
+      .review-states { justify-content: flex-start; }
+      .mac-window { min-height: 0; overflow: visible; }
+      .titlebar-label { display: none; }
+      .onboarding { min-height: 0; grid-template-columns: 1fr; }
+      .onboarding-intro { min-height: 400px; padding: 30px 24px; }
+      .intro-copy h1 { font-size: 38px; }
+      .intro-steps { margin-top: 26px; }
+      .credential-pane { padding: 34px 24px; border-top: 1px solid var(--line-soft); border-left: 0; }
+      .app-shell { min-height: 0; grid-template-columns: 1fr; }
+      .sidebar { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 8px; padding: 8px; border-right: 0; border-bottom: 1px solid var(--line-soft); }
+      .sidebar .brand { padding: 0; }
+      .sidebar .brand span:last-child { display: none; }
+      .nav-list { display: flex; min-width: 0; overflow-x: auto; gap: 2px; }
+      .nav-button { width: auto; flex: 0 0 auto; min-height: 38px; padding: 0 9px; font-size: 12px; }
+      .nav-icon { display: none; }
+      .sidebar-bottom { margin: 0; padding: 0; border: 0; }
+      .mini-status { display: none; }
+      .settings-button { width: 38px; min-height: 38px; padding: 0; justify-content: center; }
+      .settings-button span:last-child { display: none; }
+      .topbar { grid-template-columns: auto 1fr; gap: 8px; }
+      .search-wrap { grid-column: 1 / -1; grid-row: 2; }
+      .connection-pill { justify-self: end; }
+      .workspace { padding: 12px; }
+      .market-pulse-button { grid-template-columns: 1fr auto; gap: 8px; }
+      .market-pulse-title { grid-column: 1; }
+      .market-headline { grid-column: 1 / -1; grid-row: 2; white-space: normal; line-height: 1.5; }
+      .market-pulse-meta { grid-column: 1 / -1; grid-row: 3; padding-left: 0; }
+      .market-chevron { grid-column: 2; grid-row: 1; }
+      .market-briefing-detail { grid-template-columns: 1fr; }
+      .market-briefing-item { border-right: 0; border-bottom: 1px solid rgba(106, 169, 255, 0.12); }
+      .market-briefing-item:last-child { border-bottom: 0; }
+      .quote-header { align-items: stretch; flex-direction: column; }
+      .quote-actions { justify-content: space-between; }
+      .market-chart { height: 240px; }
+      .analysis-layout { grid-template-columns: 1fr; }
+      .analysis-conditions { border-top: 1px solid var(--line-soft); border-left: 0; padding-top: 8px; }
+      .horizon-toolbar { align-items: stretch; flex-direction: column; }
+      .risk-preset-wrap { justify-content: space-between; }
+      .horizon-grid { grid-template-columns: 1fr; }
+      .horizon-card { grid-template-columns: minmax(0, 0.72fr) minmax(0, 1.28fr); align-items: center; }
+      .horizon-card-head { align-self: stretch; flex-direction: column; }
+      .horizon-foot { grid-column: 1 / -1; }
+      .explanation-grid { grid-template-columns: 1fr; }
+      .plan-decision { padding-top: 11px; padding-left: 0; border-top: 1px solid var(--line-soft); border-left: 0; }
+      .provider-cards { grid-template-columns: 1fr; }
+      .crypto-lock { min-height: 460px; padding: 22px 14px; }
+      .drawer-scrim { position: fixed; inset: 0; }
+      .order-drawer { position: fixed; top: auto; width: 100%; max-height: 88vh; border-top: 1px solid var(--line); border-left: 0; border-radius: 16px 16px 0 0; }
+    }
+
+    @media (max-width: 420px) {
+      .prototype-page { padding: 0; }
+      .review-bar { margin: 0; border-width: 0 0 1px; border-radius: 0; }
+      .review-states { display: grid; grid-template-columns: repeat(2, 1fr); width: 100%; }
+      .review-state { padding: 0 8px; font-size: 12px; }
+      .mac-window { border: 0; border-radius: 0; }
+      .onboarding-intro { min-height: 360px; padding: 25px 18px; }
+      .intro-copy h1 { font-size: 32px; }
+      .intro-copy p { font-size: 14px; }
+      .intro-steps { display: none; }
+      .credential-pane { padding: 28px 18px; }
+      .nav-button { padding: 0 7px; font-size: 11px; }
+      .topbar { padding-inline: 9px; }
+      .topbar .segment { padding: 0 10px; }
+      .connection-pill .connection-label { display: none; }
+      .workspace { padding: 10px; }
+      .price { font-size: 24px; }
+      .quote-actions { flex-wrap: wrap; }
+      .order-button { flex: 1; }
+      .market-pulse-meta { align-items: flex-start; flex-wrap: wrap; gap: 5px 10px; }
+      .market-pulse-meta .market-theme { width: 100%; }
+      .chart-meta { align-items: flex-start; flex-direction: column; }
+      .market-chart { height: 210px; }
+      .tabs { overflow-x: auto; }
+      .tab { flex: 1 0 auto; }
+      .analysis-conditions { grid-template-columns: 1fr; }
+      .analysis-condition.wide { grid-column: auto; }
+      .analysis-condition + .analysis-condition { border-top: 1px solid var(--line-soft); }
+      .risk-preset-wrap { align-items: flex-start; flex-direction: column; }
+      .risk-presets { width: 100%; }
+      .risk-preset { flex: 1; }
+      .horizon-card { grid-template-columns: 1fr; }
+      .horizon-levels { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .basis-grid { grid-template-columns: 1fr; }
+      .basis-item + .basis-item { border-top: 1px solid var(--line-soft); }
+      .applied-plan-levels { grid-template-columns: 1fr; }
+      .page-heading { align-items: flex-start; flex-direction: column; }
+      .toast { white-space: normal; text-align: center; }
+    }
+  </style>
+</head>
+<body>
+  <main class="prototype-page">
+    <section class="review-bar" aria-label="시안 상태 선택기">
+      <div class="review-copy">
+        <strong>리뷰 컨트롤 · 제품 화면 아님</strong>
+        <span>네 가지 핵심 상태를 즉시 비교하거나 제품 안에서 직접 진행할 수 있습니다.</span>
+      </div>
+      <div class="review-states">
+        <button class="review-state" type="button" data-review="onboarding" aria-pressed="true">첫 실행</button>
+        <button class="review-state" type="button" data-review="stock" aria-pressed="false">주식 차트</button>
+        <button class="review-state" type="button" data-review="crypto" aria-pressed="false">코인 잠금</button>
+        <button class="review-state" type="button" data-review="order" aria-pressed="false">주문 서랍</button>
+      </div>
+    </section>
+
+    <section class="mac-window" aria-label="StockAnalysis macOS 앱 시안">
+      <div class="titlebar" aria-hidden="true">
+        <span class="traffic red"></span><span class="traffic yellow"></span><span class="traffic green"></span>
+        <span class="titlebar-label">StockAnalysis</span>
+      </div>
+
+      <section id="onboarding" class="onboarding">
+        <div class="onboarding-intro">
+          <div class="brand"><span class="brand-mark">SA</span><span>StockAnalysis</span></div>
+          <div class="intro-copy">
+            <span class="eyebrow">첫 설정 · 약 1분</span>
+            <h1>연결부터 차근차근,<br />투자는 한눈에.</h1>
+            <p>먼저 Toss API를 연결하면 실시간 주식 차트가 열립니다. 계좌 선택과 자동거래는 나중에 자동화 화면에서 별도로 준비합니다.</p>
+            <div class="intro-steps" aria-label="시작 단계">
+              <div class="intro-step"><b>01</b><span>Toss API 연결</span></div>
+              <div class="intro-step"><b>02</b><span>실시간 차트 확인</span></div>
+              <div class="intro-step"><b>03</b><span>원할 때 자동화 설정</span></div>
+            </div>
+          </div>
+          <div class="intro-foot">인증 정보는 이 Mac의 Keychain에만 보관됩니다.</div>
+        </div>
+
+        <div class="credential-pane">
+          <form id="toss-form" class="credential-card" novalidate>
+            <div class="step-label">필수 연결</div>
+            <h2>Toss API를 연결하세요</h2>
+            <p>주식 시세를 불러오기 위해 필요합니다. 실거래 권한은 지금 활성화되지 않습니다.</p>
+            <div class="field">
+              <label for="toss-client-id">Client ID</label>
+              <input id="toss-client-id" name="clientId" autocomplete="username" placeholder="발급받은 Client ID" required />
+            </div>
+            <div class="field">
+              <label for="toss-client-secret">Client Secret</label>
+              <input id="toss-client-secret" name="clientSecret" type="password" autocomplete="current-password" placeholder="발급받은 Client Secret" required />
+            </div>
+            <div class="secure-note"><span aria-hidden="true">⌁</span><div><b>macOS Keychain에 암호화 저장</b>브라우저 저장소나 로그에는 인증 정보를 남기지 않습니다.</div></div>
+            <div id="toss-status" class="form-status" role="status" aria-live="polite" hidden></div>
+            <button id="toss-submit" class="primary full" type="submit">검증하고 시작하기</button>
+            <button id="enter-app" class="secondary full" type="button" hidden>실시간 차트 시작</button>
+            <a class="docs-link" href="https://developers.tossinvest.com/docs" target="_blank" rel="noreferrer">Toss 개발자 문서에서 키 발급 방법 보기 ↗</a>
+          </form>
+        </div>
+      </section>
+
+      <section id="app" class="app-shell" hidden>
+        <aside class="sidebar" aria-label="주요 탐색">
+          <div class="brand"><span class="brand-mark">SA</span><span>StockAnalysis</span></div>
+          <nav class="nav-list">
+            <button class="nav-button" type="button" data-page="chart" aria-current="page"><span class="nav-icon" aria-hidden="true">⌁</span><span>차트</span></button>
+            <button class="nav-button" type="button" data-page="assets"><span class="nav-icon" aria-hidden="true">◫</span><span>내 자산</span></button>
+            <button class="nav-button" type="button" data-page="strategies"><span class="nav-icon" aria-hidden="true">◇</span><span>전략</span></button>
+            <button class="nav-button" type="button" data-page="automation"><span class="nav-icon" aria-hidden="true">↻</span><span>자동화</span></button>
+          </nav>
+          <div class="sidebar-bottom">
+            <div class="mini-status"><span class="status-dot"></span>Toss API 연결됨</div>
+            <button class="settings-button" type="button" data-page="settings"><span class="nav-icon" aria-hidden="true">⚙</span><span>API 연결 · 설정</span></button>
+          </div>
+        </aside>
+
+        <div class="app-main">
+          <header class="topbar">
+            <div class="segmented" aria-label="자산 종류">
+              <button class="segment asset-toggle" type="button" data-asset="stock" aria-pressed="true">주식</button>
+              <button class="segment asset-toggle" type="button" data-asset="crypto" aria-pressed="false">코인</button>
+            </div>
+            <div class="search-wrap">
+              <span class="search-icon" aria-hidden="true">⌕</span>
+              <label class="sr-only" for="asset-search">종목 검색</label>
+              <input id="asset-search" type="search" autocomplete="off" placeholder="종목명 또는 티커 검색" />
+              <div id="search-results" class="search-results" role="listbox" hidden></div>
+            </div>
+            <div class="connection-pill"><span class="status-dot"></span><span class="connection-label">Toss 연결됨</span><button id="emergency-stop" class="danger emergency-global" type="button" hidden>긴급 중지</button></div>
+          </header>
+
+          <div class="workspace">
+            <section id="chart-page" class="chart-view" aria-label="차트">
+              <div id="stock-content">
+                <section id="market-pulse" class="market-pulse" aria-label="오늘의 시장 상황">
+                  <button id="market-briefing-toggle" class="market-pulse-button" type="button" aria-expanded="false" aria-controls="market-briefing-detail">
+                    <span class="market-pulse-title"><span class="market-tone-dot" aria-hidden="true"></span><strong id="market-session">KR 시장</strong><span id="market-tone" class="market-tone">중립 · 선별 접근</span></span>
+                    <span id="market-headline" class="market-headline">시장 전체보다 20일선을 지키는 강한 종목에 수급이 모이는 구간입니다.</span>
+                    <span class="market-pulse-meta"><span>시장폭 <b id="market-breadth">58%</b></span><span class="market-theme">주도 <b id="market-theme">반도체 · 전력기기</b></span><span id="market-updated">시안 데이터 · 10:32</span><span class="market-chevron" aria-hidden="true">⌄</span></span>
+                  </button>
+                  <div id="market-briefing-detail" class="market-briefing-detail" hidden>
+                    <div class="market-briefing-item"><span>시장 환경</span><strong id="market-environment">관심 종목 50개 중 29개가 20일선 위</strong></div>
+                    <div class="market-briefing-item"><span>접근 기준</span><strong id="market-opportunity">지수 추격보다 주도주의 눌림과 지지 확인</strong></div>
+                    <div class="market-briefing-item"><span>주의 요소</span><strong id="market-risk">상승 종목 확산이 제한적이라 약한 종목은 후순위</strong></div>
+                  </div>
+                </section>
+
+                <div class="quote-header">
+                  <div>
+                    <div class="symbol-line"><h1 id="symbol-name">삼성전자</h1><span id="symbol-code" class="symbol-code">005930 · KRX</span></div>
+                    <div class="price-line"><span id="current-price" class="price">84,200원</span><span id="price-change" class="change-up">+1.32%</span></div>
+                  </div>
+                  <div class="quote-actions">
+                    <div class="intervals" aria-label="차트 주기">
+                      <button class="interval" type="button" data-interval="1m" aria-pressed="true">1분</button>
+                      <button class="interval" type="button" data-interval="15m" aria-pressed="false">15분</button>
+                      <button class="interval" type="button" data-interval="1d" aria-pressed="false">일봉</button>
+                    </div>
+                    <button id="open-order" class="primary order-button" type="button">주문</button>
+                  </div>
+                </div>
+
+                <div class="chart-card">
+                  <div class="chart-meta"><div class="chart-legend"><span class="legend-item">가격</span><span class="legend-item signal">전략 신호</span></div><span id="interval-note">Toss 1분봉 · 실시간</span></div>
+                  <svg id="market-chart" class="market-chart" viewBox="0 0 1000 330" role="img" aria-labelledby="chart-title chart-desc" preserveAspectRatio="none">
+                    <title id="chart-title">삼성전자 1분 가격 차트</title>
+                    <desc id="chart-desc">최근 가격 흐름과 매수 전략 신호를 보여주는 모의 차트입니다.</desc>
+                    <defs>
+                      <linearGradient id="area-fill" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#42d3aa" stop-opacity="0.22"/><stop offset="1" stop-color="#42d3aa" stop-opacity="0"/></linearGradient>
+                    </defs>
+                    <g id="chart-grid"></g>
+                    <path id="chart-area" fill="url(#area-fill)"></path>
+                    <path id="chart-line" fill="none" stroke="#42d3aa" stroke-width="2.5" vector-effect="non-scaling-stroke"></path>
+                    <g id="chart-signals"></g>
+                  </svg>
+                </div>
+
+                <section class="detail-panel">
+                  <div class="tabs" role="tablist" aria-label="종목 세부 정보">
+                    <button class="tab" id="tab-analysis" type="button" role="tab" data-tab="analysis" aria-selected="true" aria-controls="panel-analysis">분석</button>
+                    <button class="tab" id="tab-signals" type="button" role="tab" data-tab="signals" aria-selected="false" aria-controls="panel-signals">신호</button>
+                    <button class="tab" id="tab-news" type="button" role="tab" data-tab="news" aria-selected="false" aria-controls="panel-news">뉴스</button>
+                  </div>
+                  <div id="panel-analysis" class="tab-panel" role="tabpanel" aria-labelledby="tab-analysis">
+                    <div class="analysis-layout">
+                      <div class="analysis-main">
+                        <div class="analysis-heading"><span id="analysis-stance" class="analysis-stance">관찰</span><span id="analysis-updated" class="analysis-updated">분석 기준 10:31</span></div>
+                        <h2 id="analysis-headline">추세는 유지 중이지만 현재가 추격보다 지지 확인이 우선입니다.</h2>
+                        <p id="analysis-plan">83,500원 부근을 지키고 거래량이 유지되면 상승 흐름이 유효한 것으로 봅니다.</p>
+                        <div id="analysis-reasons" class="analysis-reasons"><span class="analysis-reason">시장폭 58% · 중립</span><span class="analysis-reason">HMA 상승 전환</span><span class="analysis-reason">RSI 58 · 과열 아님</span></div>
+                      </div>
+                      <div class="analysis-conditions">
+                        <div class="analysis-condition"><span>유효 조건</span><strong id="analysis-valid" class="valid">83,500원 위 유지</strong></div>
+                        <div class="analysis-condition"><span>무효 조건</span><strong id="analysis-invalid" class="invalid">82,900원 종가 이탈</strong></div>
+                        <div class="analysis-condition wide"><span>근거 신뢰도</span><strong id="analysis-reliability">B · 표본 42개 · 1.8R</strong></div>
+                      </div>
+                    </div>
+                    <section class="horizon-section" aria-labelledby="horizon-title">
+                      <div class="horizon-toolbar">
+                        <div><h3 id="horizon-title">지금 산다면, 기간별 계획</h3><p>현재가를 진입가로 가정한 시안 계산입니다. 세 계획을 비교한 뒤 하나를 선택하세요.</p></div>
+                        <div class="risk-preset-wrap">
+                          <span class="risk-preset-label">거래당 허용 손실</span>
+                          <div class="risk-presets" aria-label="위험 성향">
+                            <button class="risk-preset" type="button" data-risk-preset="conservative" aria-pressed="false">보수 0.5%</button>
+                            <button class="risk-preset" type="button" data-risk-preset="balanced" aria-pressed="true">균형 1.0%</button>
+                            <button class="risk-preset" type="button" data-risk-preset="aggressive" aria-pressed="false">공격 1.5%</button>
+                          </div>
+                        </div>
+                      </div>
+                      <div id="horizon-plans" class="horizon-grid" aria-label="보유 기간별 익절 손절 계획"></div>
+                      <div class="horizon-detail">
+                        <button id="horizon-detail-toggle" class="horizon-detail-toggle" type="button" aria-expanded="false" aria-controls="horizon-detail-body"><span>왜 이렇게 계산됐나요?</span><span id="horizon-detail-summary">스윙 · 일봉/4시간봉 기준 ⌄</span></button>
+                        <div id="horizon-detail-body" class="horizon-detail-body" hidden>
+                          <div id="basis-grid" class="basis-grid"></div>
+                          <div class="explanation-grid">
+                            <div><div class="formula-title">판정과 계산 과정</div><ol id="formula-steps" class="formula-steps"></ol></div>
+                            <div class="plan-decision"><p id="plan-decision-copy"></p><div id="plan-blockers" class="plan-blockers"></div><button id="apply-plan" class="primary apply-plan" type="button">선택 계획을 주문에 적용</button><div id="risk-budget-note" class="risk-budget-note"></div></div>
+                          </div>
+                        </div>
+                      </div>
+                    </section>
+                    <p class="analysis-note">분석은 조건별 관찰을 돕는 참고 정보이며 주문을 자동으로 실행하지 않습니다.</p>
+                  </div>
+                  <div id="panel-signals" class="tab-panel" role="tabpanel" aria-labelledby="tab-signals" hidden><div class="signal-row"><span>HMA 추세 전환</span><span class="tag">긍정</span></div><div class="signal-row"><span>RSI 58.4</span><span class="tag">중립</span></div></div>
+                  <div id="panel-news" class="tab-panel" role="tabpanel" aria-labelledby="tab-news" hidden><div class="news-row"><span>반도체 업종 수급 개선 흐름</span><time>12분 전</time></div><div class="news-row"><span>외국인 순매수 전환</span><time>38분 전</time></div></div>
+                </section>
+              </div>
+
+              <div id="crypto-lock" class="crypto-lock" hidden>
+                <div class="crypto-lock-inner">
+                  <div class="lock-icon" aria-hidden="true">◇</div>
+                  <h2>코인 실시간 차트를 연결하세요</h2>
+                  <p>Upbit 또는 Bithumb 중 하나를 연결하면 코인 차트가 열립니다. 주식 차트와 다른 기능은 계속 사용할 수 있습니다.</p>
+                  <div class="provider-cards">
+                    <article class="provider-card" data-provider-card="upbit">
+                      <div class="provider-head"><div class="provider-logo">UP</div><span class="tag provider-state">미연결</span></div>
+                      <strong>Upbit</strong><p>실시간 캔들과 호가를 확인합니다.</p>
+                      <button class="secondary provider-connect" type="button" data-provider="upbit">연결하기</button>
+                      <form class="provider-form" data-provider-form="upbit" hidden><label class="sr-only" for="upbit-key">Upbit Access Key</label><input id="upbit-key" placeholder="Access Key" required /><label class="sr-only" for="upbit-secret">Upbit Secret Key</label><input id="upbit-secret" type="password" placeholder="Secret Key" required /><button class="primary" type="submit">검증 후 연결</button></form>
+                    </article>
+                    <article class="provider-card bithumb" data-provider-card="bithumb">
+                      <div class="provider-head"><div class="provider-logo">BT</div><span class="tag provider-state">미연결</span></div>
+                      <strong>Bithumb</strong><p>실시간 캔들과 호가를 확인합니다.</p>
+                      <button class="secondary provider-connect" type="button" data-provider="bithumb">연결하기</button>
+                      <form class="provider-form" data-provider-form="bithumb" hidden><label class="sr-only" for="bithumb-key">Bithumb API Key</label><input id="bithumb-key" placeholder="API Key" required /><label class="sr-only" for="bithumb-secret">Bithumb Secret Key</label><input id="bithumb-secret" type="password" placeholder="Secret Key" required /><button class="primary" type="submit">검증 후 연결</button></form>
+                    </article>
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            <section id="assets-page" class="secondary-view" hidden><div class="page-heading"><div><h1>내 자산</h1><p>보유 종목과 오늘의 변화를 간단히 확인합니다.</p></div></div><article class="focus-card"><h2>계좌는 아직 연결하지 않았어요</h2><p>Toss API 등록은 시세 확인용입니다. 보유 자산을 보려면 계좌 접근을 별도로 승인하세요.</p><button class="secondary" type="button" data-page="automation">계좌 연결 준비 보기</button></article></section>
+            <section id="strategies-page" class="secondary-view" hidden><div class="page-heading"><div><h1>전략</h1><p>매직스플릿 같은 나만의 규칙을 만들고 모의 검증합니다.</p></div><button class="primary" type="button">새 전략</button></div><article class="focus-card"><h2>아직 실행 중인 전략이 없습니다</h2><p>조건, 분할 횟수, 간격, 손실 한도를 정한 뒤 모의 운용부터 시작하세요.</p></article></section>
+            <section id="automation-page" class="secondary-view" hidden><div class="page-heading"><div><h1>자동화</h1><p>차트 연결과 분리된 실거래 준비 단계를 확인합니다.</p></div></div><article class="focus-card"><h2>실거래 준비</h2><div class="setup-list"><div class="setup-item"><div><strong>Toss API</strong><br/><span>시세 연결 완료</span></div><span class="check">완료</span></div><div class="setup-item"><div><strong>계좌와 허용 IP</strong><br/><span>주문 계좌와 실행 환경 확인</span></div><button class="secondary" type="button">설정</button></div><div class="setup-item"><div><strong>RiskCheck</strong><br/><span>1회·1일 손실 한도 설정</span></div><button class="secondary" type="button">설정</button></div><div class="setup-item"><div><strong>실거래 게이트</strong><br/><span>모든 검증 후에만 활성화</span></div><button id="toggle-live" class="danger" type="button">데모: 실거래 켜기</button></div></div></article></section>
+            <section id="settings-page" class="secondary-view" hidden><div class="page-heading"><div><h1>API 연결 · 설정</h1><p>평소에는 숨겨 둔 연결 및 진단 정보를 관리합니다.</p></div></div><article class="focus-card"><h2>연결</h2><div class="setup-list"><div class="setup-item"><div><strong>Toss</strong><br/><span>연결됨 · Keychain 보관</span></div><button id="expire-toss" class="danger" type="button">인증 삭제</button></div><div class="setup-item"><div><strong>코인 거래소</strong><br/><span id="crypto-setting-state">미연결</span></div><div class="setup-actions"><button class="secondary quick-provider" type="button" data-quick-provider="upbit">Upbit</button><button class="secondary quick-provider" type="button" data-quick-provider="bithumb">Bithumb</button></div></div></div></article><article class="focus-card"><h2>연결 및 진단</h2><details><summary>Sidecar 상태</summary><p>정상 · 로컬 서비스와 앱이 연결되어 있습니다.</p></details><details><summary>허용 IP와 실거래 게이트</summary><p>자동화 화면에서 계좌와 RiskCheck를 먼저 준비한 뒤 활성화합니다.</p></details><details><summary>로그 및 배포 정보</summary><p>문제 해결이 필요할 때만 최근 로그와 앱 빌드 정보를 확인합니다.</p></details></article></section>
+          </div>
+        </div>
+      </section>
+
+      <div id="drawer-scrim" class="drawer-scrim" hidden></div>
+      <aside id="order-drawer" class="order-drawer" aria-label="주문" aria-hidden="true" hidden>
+        <div class="drawer-head"><h2 id="order-title">삼성전자 주문</h2><button id="close-order" class="icon-button" type="button" aria-label="주문 서랍 닫기">×</button></div>
+        <div class="order-body">
+          <div class="order-side"><button class="segment buy" type="button" data-order-side="buy" aria-pressed="true">매수</button><button class="segment sell" type="button" data-order-side="sell" aria-pressed="false">매도</button></div>
+          <div class="order-quote"><span>현재가</span><strong id="order-current-price">84,200원</strong></div>
+          <div id="applied-plan" class="applied-plan" hidden><div class="applied-plan-head"><strong id="applied-plan-title">스윙 계획 적용됨</strong><span id="applied-plan-time">분석 기준 10:31</span></div><div class="applied-plan-levels"><div><span>1차 익절</span><strong id="applied-tp1">-</strong></div><div><span>2차 익절</span><strong id="applied-tp2">-</strong></div><div><span>손절·무효선</span><strong id="applied-stop">-</strong></div><div><span>발동 기준</span><strong id="applied-trigger">-</strong></div></div><div id="execution-warning" class="execution-warning">분석값만 복사했습니다. 주문은 아직 제출되지 않았습니다.</div></div>
+          <div class="field"><label for="order-price">주문 가격</label><input id="order-price" inputmode="numeric" value="84,200" /></div>
+          <div class="field"><label for="order-take-profit">1차 익절 가격</label><input id="order-take-profit" inputmode="numeric" placeholder="계획 적용 시 입력" /></div>
+          <div class="field"><label for="order-stop">손절·무효 가격</label><input id="order-stop" inputmode="numeric" placeholder="계획 적용 시 입력" /></div>
+          <div class="field"><label for="order-quantity">수량</label><input id="order-quantity" inputmode="numeric" value="1" /></div>
+          <div class="risk-check"><strong>사전 검증 통과</strong><ul><li id="order-estimate">예상 주문 금액 84,200원</li><li id="order-risk-budget">위험 예산은 계좌 연결 후 수량에 반영</li><li>실거래 게이트는 아직 꺼져 있음</li></ul></div>
+        </div>
+        <div class="drawer-foot"><button id="review-order" class="primary full" type="button">주문 내용 검토</button></div>
+      </aside>
+
+      <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+    </section>
+  </main>
+
+  <script>
+    const state = {
+      tossConnection: "disconnected",
+      cryptoConnections: { upbit: false, bithumb: false },
+      selectedAssetClass: "stock",
+      selectedProvider: null,
+      selectedSymbol: "005930",
+      selectedHorizon: "swing",
+      riskPreset: "balanced",
+      analysisDetailsOpen: false,
+      appliedExitPlan: null,
+      interval: "1m",
+      orderDrawerOpen: false,
+      marketBriefingOpen: false,
+      page: "chart",
+      liveTrading: false,
+    };
+
+    const marketContexts = {
+      KR: {
+        session: "KR 시장",
+        tone: "중립 · 선별 접근",
+        toneKey: "neutral",
+        breadth: "58%",
+        headline: "시장 전체보다 20일선을 지키는 강한 종목에 수급이 모이는 구간입니다.",
+        theme: "반도체 · 전력기기",
+        environment: "관심 종목 50개 중 29개가 20일선 위",
+        opportunity: "지수 추격보다 주도주의 눌림과 지지 확인",
+        risk: "상승 종목 확산이 제한적이라 약한 종목은 후순위",
+        updatedAt: "시안 데이터 · 장중 10:32",
+      },
+      US: {
+        session: "US 시장",
+        tone: "양호 · 추세 접근",
+        toneKey: "constructive",
+        breadth: "67%",
+        headline: "대형 기술주 중심의 상승 흐름이 유지되지만 실적 전후 변동성은 확인해야 합니다.",
+        theme: "AI 반도체 · 소프트웨어",
+        environment: "관심 종목 50개 중 34개가 20일선 위",
+        opportunity: "주도주의 5일선 눌림과 거래량 유지 확인",
+        risk: "실적 발표 전후 갭 변동과 장중 추격 진입 주의",
+        updatedAt: "시안 데이터 · 전일 종가 기준",
+      },
+      CRYPTO: {
+        session: "코인 시장",
+        tone: "주의 · 변동성 확대",
+        toneKey: "cautious",
+        breadth: "46%",
+        headline: "비트코인은 추세를 유지하지만 알트코인 확산이 약해 변동성 관리가 우선입니다.",
+        theme: "비트코인 · 메이저 중심",
+        environment: "관찰 코인 중 절반 미만이 20일선 위",
+        opportunity: "돌파 추격보다 지지 구간 재확인",
+        risk: "거래소별 가격 차이와 급격한 장중 변동",
+        updatedAt: "시안 데이터 · 실시간 가정",
+      },
+    };
+
+    const stockProfiles = {
+      "005930": {
+        symbol: "005930",
+        name: "삼성전자",
+        code: "005930 · KRX",
+        session: "KR",
+        price: "84,200원",
+        change: "+1.32%",
+        stance: "관찰",
+        stanceTone: "neutral",
+        headline: "추세는 유지 중이지만 현재가 추격보다 지지 확인이 우선입니다.",
+        plan: "83,500원 부근을 지키고 거래량이 유지되면 상승 흐름이 유효한 것으로 봅니다.",
+        reasons: ["시장폭 58% · 중립", "HMA 상승 전환", "RSI 58 · 과열 아님"],
+        validIf: "83,500원 위 유지",
+        invalidIf: "82,900원 종가 이탈",
+        reliability: "B · 표본 42개 · 1.8R",
+        updatedAt: "분석 기준 10:31",
+      },
+      "000660": {
+        symbol: "000660",
+        name: "SK하이닉스",
+        code: "000660 · KRX",
+        session: "KR",
+        price: "228,500원",
+        change: "+2.08%",
+        stance: "지지 확인",
+        stanceTone: "constructive",
+        headline: "주도 업종 안에서 상대 강도가 높지만 단기 급등 뒤 눌림 확인이 필요합니다.",
+        plan: "224,000원 부근의 이전 돌파 구간을 지지하면 추세 지속 가능성을 높게 봅니다.",
+        reasons: ["반도체 업종 주도", "20일선 위 상승", "거래량 평균 상회"],
+        validIf: "224,000원 위 지지",
+        invalidIf: "219,500원 종가 이탈",
+        reliability: "B+ · 표본 38개 · 2.0R",
+        updatedAt: "분석 기준 10:30",
+      },
+      NVDA: {
+        symbol: "NVDA",
+        name: "NVIDIA",
+        code: "NVDA · NASDAQ",
+        session: "US",
+        price: "$178.42",
+        change: "+0.76%",
+        stance: "눌림 대기",
+        stanceTone: "neutral",
+        headline: "중기 추세는 양호하지만 실적 기대가 반영된 구간이라 가격 확인이 우선입니다.",
+        plan: "$174 부근을 지키고 거래량이 재유입되는지 확인한 뒤 추세 지속 여부를 판단합니다.",
+        reasons: ["US 시장폭 67%", "AI 반도체 주도", "고점 인접 · 변동성 주의"],
+        validIf: "$174 위 유지",
+        invalidIf: "$169 종가 이탈",
+        reliability: "B · 표본 51개 · 1.7R",
+        updatedAt: "전일 종가 분석",
+      },
+    };
+
+    const cryptoProfile = {
+      session: "CRYPTO",
+      stance: "변동성 주의",
+      stanceTone: "cautious",
+      headline: "상승 추세 안에서도 장중 변동 폭이 커 신규 진입은 지지 확인이 필요합니다.",
+      plan: "150,000,000원 부근을 지키고 거래량이 회복되는지 확인합니다.",
+      reasons: ["시장폭 46% · 약세", "BTC 상대 강도 유지", "알트코인 확산 제한"],
+      validIf: "150,000,000원 위 유지",
+      invalidIf: "147,500,000원 이탈",
+      reliability: "C+ · 표본 34개 · 1.5R",
+      updatedAt: "실시간 분석 가정",
+    };
+
+    const horizonBasisBySymbol = {
+      "005930": {
+        currency: "KRW",
+        entry: 84200,
+        snapshot: "시안 데이터 · 10:31",
+        reliability: { grade: "B", sample: 42, successRate: 61, maxGain: 7.8, maxDrawdown: -3.1 },
+        day: { timeframe: "최근 5거래일 15분봉", atr: 600, vwap: 83850, recentLow: 83350, resistance: 85400, hmaRising: true, marketPass: true, dataComplete: true },
+        swing: { timeframe: "일봉 · 4시간봉 보조", atr: 1900, failureLevel: 79900, resistance: 88600, sma20: 81700, chandelier: 82300, marketPass: true, reliabilityGrade: "medium", dataComplete: true },
+        long: { timeframe: "일봉 · 주봉 · 10개월", sma200: 69000, tenMonth: 71000, weeklySma20: 78500, weeklySma60: 72000, marketPass: true, dataComplete: true },
+      },
+      "000660": {
+        currency: "KRW",
+        entry: 228500,
+        snapshot: "시안 데이터 · 10:30",
+        reliability: { grade: "B+", sample: 38, successRate: 66, maxGain: 10.4, maxDrawdown: -4.2 },
+        day: { timeframe: "최근 5거래일 15분봉", atr: 2800, vwap: 226900, recentLow: 224500, resistance: 234000, hmaRising: true, marketPass: true, dataComplete: true },
+        swing: { timeframe: "일봉 · 4시간봉 보조", atr: 7200, failureLevel: 212000, resistance: 246000, sma20: 219500, chandelier: 221000, marketPass: true, reliabilityGrade: "medium", dataComplete: true },
+        long: { timeframe: "일봉 · 주봉 · 10개월", sma200: 170000, tenMonth: 176000, weeklySma20: 207000, weeklySma60: 182000, marketPass: true, dataComplete: true },
+      },
+      NVDA: {
+        currency: "USD",
+        entry: 178.42,
+        snapshot: "시안 데이터 · 전일 종가",
+        reliability: { grade: "B", sample: 51, successRate: 59, maxGain: 12.6, maxDrawdown: -5.8 },
+        day: { timeframe: "최근 5거래일 15분봉", atr: 2.1, vwap: 176.8, recentLow: 174.9, resistance: 183, hmaRising: true, marketPass: true, dataComplete: true },
+        swing: { timeframe: "일봉 · 4시간봉 보조", atr: 5.8, failureLevel: 164.5, resistance: 196, sma20: 171.2, chandelier: 169.8, marketPass: true, reliabilityGrade: "medium", dataComplete: true },
+        long: { timeframe: "일봉 · 주봉 · 10개월", sma200: 118, tenMonth: 126, weeklySma20: 157, weeklySma60: 132, marketPass: true, dataComplete: true },
+      },
+      BTC: {
+        currency: "KRW",
+        entry: 152340000,
+        snapshot: "시안 데이터 · 실시간 가정",
+        reliability: { grade: "C+", sample: 34, successRate: 53, maxGain: 8.9, maxDrawdown: -6.7 },
+        day: { timeframe: "최근 5거래일 15분봉", atr: 2400000, vwap: 151200000, recentLow: 148800000, resistance: 157000000, hmaRising: true, marketPass: false, dataComplete: true },
+        swing: { timeframe: "일봉 · 4시간봉 보조", atr: 6800000, failureLevel: 137500000, resistance: 168000000, sma20: 145000000, chandelier: 143200000, marketPass: false, reliabilityGrade: "low", dataComplete: true },
+        long: { timeframe: "일봉 · 주봉 · 10개월", sma200: 112000000, tenMonth: 118000000, weeklySma20: 138000000, weeklySma60: 124000000, marketPass: true, dataComplete: true },
+      },
+    };
+
+    const horizonMeta = {
+      day: { label: "단타", duration: "당일~3거래일", tpAllocations: [50, 50], trigger: "장중 가격" },
+      swing: { label: "스윙", duration: "2~8주", tpAllocations: [30, 30], trigger: "일봉 종가" },
+      long: { label: "장기", duration: "6개월 이상", tpAllocations: [20, 20], trigger: "월말 종가" },
+    };
+
+    const riskPresets = {
+      conservative: { label: "보수", budgetPct: 0.5 },
+      balanced: { label: "균형", budgetPct: 1.0 },
+      aggressive: { label: "공격", budgetPct: 1.5 },
+    };
+
+    const $ = (selector, root = document) => root.querySelector(selector);
+    const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
+    const onboarding = $("#onboarding");
+    const app = $("#app");
+    const toast = $("#toast");
+    let toastTimer = 0;
+    let currentExitPlans = {};
+
+    function announce(message) {
+      window.clearTimeout(toastTimer);
+      toast.textContent = message;
+      toast.hidden = false;
+      toastTimer = window.setTimeout(() => { toast.hidden = true; }, 2300);
+    }
+
+    const clamp = (value, minimum, maximum) => Math.max(minimum, Math.min(maximum, value));
+
+    function krTickSize(price) {
+      if (price < 2000) return 1;
+      if (price < 5000) return 5;
+      if (price < 20000) return 10;
+      if (price < 50000) return 50;
+      if (price < 200000) return 100;
+      if (price < 500000) return 500;
+      return 1000;
+    }
+
+    function normalizePrice(price, currency, mode = "nearest") {
+      if (!Number.isFinite(price) || price <= 0) return null;
+      if (currency === "USD") return Number(price.toFixed(2));
+      const tick = krTickSize(price);
+      const ratio = price / tick;
+      const rounded = mode === "down" ? Math.floor(ratio) : mode === "up" ? Math.ceil(ratio) : Math.round(ratio);
+      return rounded * tick;
+    }
+
+    function formatPlanPrice(price, currency) {
+      if (!Number.isFinite(price)) return "계산 불가";
+      if (currency === "USD") return "$" + price.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+      return price.toLocaleString("ko-KR", { maximumFractionDigits: 0 }) + "원";
+    }
+
+    function unavailablePlan(horizon, basis, missing) {
+      return {
+        horizon,
+        status: "unavailable",
+        statusLabel: "계산 불가",
+        entry: basis.entry,
+        stop: null,
+        tp1: null,
+        tp2: null,
+        trailing: null,
+        trigger: horizonMeta[horizon].trigger,
+        risk: null,
+        rewardRisk: null,
+        currency: basis.currency,
+        snapshot: basis.snapshot,
+        basisItems: [{ label: "데이터 상태", value: missing }],
+        steps: ["필요한 봉과 지표가 없어 임의 퍼센트로 대체하지 않았습니다."],
+        decision: "필수 데이터가 확보될 때까지 가격 계획을 제공하지 않습니다.",
+        blockers: [missing],
+      };
+    }
+
+    function calculateDayPlan(basis) {
+      const input = basis.day;
+      if (!input?.dataComplete || ![basis.entry, input.atr, input.recentLow, input.resistance, input.vwap].every(Number.isFinite)) {
+        return unavailablePlan("day", basis, "15분봉·VWAP·ATR14 데이터 부족");
+      }
+      const entry = normalizePrice(basis.entry, basis.currency);
+      const structureStop = input.recentLow - input.atr * 0.1;
+      const distance = clamp(entry - structureStop, input.atr * 0.8, input.atr * 1.5);
+      const stop = normalizePrice(entry - distance, basis.currency, "down");
+      const risk = entry - stop;
+      const resistanceInRange = input.resistance >= entry + risk * 0.8 && input.resistance <= entry + risk * 1.5;
+      const tp1 = normalizePrice(resistanceInRange ? input.resistance : entry + risk, basis.currency, "up");
+      const tp2 = normalizePrice(entry + risk * 2, basis.currency, "up");
+      const blockers = [
+        !input.marketPass ? "시장 진입 게이트가 주의 상태입니다." : null,
+        entry < input.vwap ? "현재가가 세션 VWAP 아래입니다." : null,
+        !input.hmaRising ? "15분 HMA20 기울기가 하락 중입니다." : null,
+        input.resistance < entry + risk * 0.8 ? "가까운 저항까지 보상이 0.8R 미만입니다." : null,
+      ].filter(Boolean);
+      return {
+        horizon: "day",
+        status: blockers.length ? "wait" : "actionable",
+        statusLabel: blockers.length ? "대기" : "진입 가능",
+        entry, stop, tp1, tp2, trailing: input.vwap,
+        trigger: "장중 가격 · 8봉 시간 제한",
+        risk,
+        rewardRisk: risk > 0 ? (tp2 - entry) / risk : null,
+        currency: basis.currency,
+        snapshot: basis.snapshot,
+        basisItems: [
+          { label: "사용 데이터", value: input.timeframe },
+          { label: "ATR14", value: formatPlanPrice(input.atr, basis.currency) },
+          { label: "세션 VWAP", value: formatPlanPrice(input.vwap, basis.currency) },
+          { label: "최근 저점 / 저항", value: formatPlanPrice(input.recentLow, basis.currency) + " / " + formatPlanPrice(input.resistance, basis.currency) },
+        ],
+        steps: [
+          `구조 손절 후보 = 최근 저점 ${formatPlanPrice(input.recentLow, basis.currency)} - 0.1ATR`,
+          `손절폭을 0.8~1.5ATR로 제한해 ${formatPlanPrice(stop, basis.currency)}로 정규화`,
+          `1R = ${formatPlanPrice(risk, basis.currency)}, 1차 ${formatPlanPrice(tp1, basis.currency)}, 2차 ${formatPlanPrice(tp2, basis.currency)}`,
+          "8개 15분봉 안에 +0.5R 진행이 없고 VWAP 아래면 재검토",
+        ],
+        decision: blockers.length ? "단기 추세나 보상 조건이 충족될 때까지 즉시 진입보다 관찰이 우선입니다." : "VWAP와 단기 추세가 지지되어 단타 계획을 검토할 수 있습니다.",
+        blockers,
+      };
+    }
+
+    function calculateSwingPlan(basis) {
+      const input = basis.swing;
+      if (!input?.dataComplete || ![basis.entry, input.atr, input.failureLevel, input.resistance, input.sma20, input.chandelier].every(Number.isFinite)) {
+        return unavailablePlan("swing", basis, "일봉 구조선·ATR14·Chandelier 데이터 부족");
+      }
+      const entry = normalizePrice(basis.entry, basis.currency);
+      const distance = clamp(entry - input.failureLevel, input.atr * 1.5, input.atr * 2.5);
+      const stop = normalizePrice(entry - distance, basis.currency, "down");
+      const risk = entry - stop;
+      const resistanceInRange = input.resistance >= entry + risk && input.resistance <= entry + risk * 2;
+      const tp1 = normalizePrice(resistanceInRange ? input.resistance : entry + risk, basis.currency, "up");
+      const tp2 = normalizePrice(entry + risk * 2, basis.currency, "up");
+      const trailing = normalizePrice(Math.max(input.sma20, input.chandelier), basis.currency, "down");
+      const blockers = [
+        !input.marketPass ? "시장폭 기준이 신규 진입에 불리합니다." : null,
+        input.reliabilityGrade === "low" ? "유사 신호 신뢰도가 낮습니다." : null,
+        input.failureLevel >= entry ? "구조 무효선이 현재가보다 높아 계획을 만들 수 없습니다." : null,
+      ].filter(Boolean);
+      return {
+        horizon: "swing",
+        status: blockers.length ? "wait" : "actionable",
+        statusLabel: blockers.length ? "대기" : "진입 가능",
+        entry, stop, tp1, tp2, trailing,
+        trigger: "일봉 종가",
+        risk,
+        rewardRisk: risk > 0 ? (tp2 - entry) / risk : null,
+        currency: basis.currency,
+        snapshot: basis.snapshot,
+        basisItems: [
+          { label: "사용 데이터", value: input.timeframe },
+          { label: "ATR14 / 구조 무효선", value: formatPlanPrice(input.atr, basis.currency) + " / " + formatPlanPrice(input.failureLevel, basis.currency) },
+          { label: "SMA20 / Chandelier", value: formatPlanPrice(input.sma20, basis.currency) + " / " + formatPlanPrice(input.chandelier, basis.currency) },
+          { label: "유사 신호", value: `${basis.reliability.grade} · ${basis.reliability.sample}개 · 성공 ${basis.reliability.successRate}%` },
+        ],
+        steps: [
+          `tradeSetup 무효선 ${formatPlanPrice(input.failureLevel, basis.currency)}을 구조 손절 후보로 사용`,
+          `손절폭을 1.5~2.5ATR로 제한해 ${formatPlanPrice(stop, basis.currency)}로 정규화`,
+          `1R = ${formatPlanPrice(risk, basis.currency)}, 1차 ${formatPlanPrice(tp1, basis.currency)}, 2차 ${formatPlanPrice(tp2, basis.currency)}`,
+          `잔여 40% 추적선 = max(SMA20, Chandelier) = ${formatPlanPrice(trailing, basis.currency)}`,
+        ],
+        decision: blockers.length ? "시장 상태 또는 신뢰도가 개선될 때까지 스윙 진입을 대기합니다." : "구조 손절과 2R 목표가가 함께 성립해 분할 접근을 검토할 수 있습니다.",
+        blockers,
+      };
+    }
+
+    function calculateLongPlan(basis) {
+      const input = basis.long;
+      if (!input?.dataComplete || ![basis.entry, input.sma200, input.tenMonth, input.weeklySma20, input.weeklySma60].every(Number.isFinite)) {
+        return unavailablePlan("long", basis, "SMA200·주봉·10개월 추세 데이터 부족");
+      }
+      const entry = normalizePrice(basis.entry, basis.currency);
+      const stop = normalizePrice(Math.max(input.sma200, input.tenMonth), basis.currency, "down");
+      if (!stop || stop >= entry) return unavailablePlan("long", basis, "장기 추세 무효선이 현재가 아래에 형성되지 않음");
+      const risk = entry - stop;
+      const tp1 = normalizePrice(entry + risk * 2, basis.currency, "up");
+      const tp2 = normalizePrice(entry + risk * 4, basis.currency, "up");
+      const trailing = normalizePrice(input.weeklySma20, basis.currency, "down");
+      const blockers = [
+        !input.marketPass ? "장기 시장 게이트가 약세입니다." : null,
+        input.weeklySma20 <= input.weeklySma60 ? "주봉 SMA20이 SMA60 아래입니다." : null,
+        entry <= stop ? "현재가가 장기 추세선 아래입니다." : null,
+      ].filter(Boolean);
+      return {
+        horizon: "long",
+        status: blockers.length ? "wait" : "actionable",
+        statusLabel: blockers.length ? "대기" : "진입 가능",
+        entry, stop, tp1, tp2, trailing,
+        trigger: "월말 종가 · 자동 stop 아님",
+        risk,
+        rewardRisk: risk > 0 ? (tp2 - entry) / risk : null,
+        currency: basis.currency,
+        snapshot: basis.snapshot,
+        basisItems: [
+          { label: "사용 데이터", value: input.timeframe },
+          { label: "SMA200 / 10개월선", value: formatPlanPrice(input.sma200, basis.currency) + " / " + formatPlanPrice(input.tenMonth, basis.currency) },
+          { label: "주봉 SMA20 / SMA60", value: formatPlanPrice(input.weeklySma20, basis.currency) + " / " + formatPlanPrice(input.weeklySma60, basis.currency) },
+          { label: "유사 신호", value: `${basis.reliability.grade} · 최대상승 ${basis.reliability.maxGain}% · 최대하락 ${basis.reliability.maxDrawdown}%` },
+        ],
+        steps: [
+          `전략 무효선 = max(SMA200, 10개월선) = ${formatPlanPrice(stop, basis.currency)}`,
+          `장기 1R = ${formatPlanPrice(risk, basis.currency)}이며 장중이 아닌 월말 종가로 판단`,
+          `2R에서 20%(${formatPlanPrice(tp1, basis.currency)}), 4R에서 20%(${formatPlanPrice(tp2, basis.currency)}) 부분 익절`,
+          `잔여 60%는 주봉 SMA20 ${formatPlanPrice(trailing, basis.currency)}과 장기 추세 종료까지 보유`,
+        ],
+        decision: blockers.length ? "장기 추세가 다시 정렬될 때까지 신규 진입보다 관찰이 우선입니다." : "장기 상승 구조는 유효하지만 전량 고정 익절 대신 부분 익절과 추세 추적을 사용합니다.",
+        blockers,
+      };
+    }
+
+    function calculateExitPlans(basis) {
+      return {
+        day: calculateDayPlan(basis),
+        swing: calculateSwingPlan(basis),
+        long: calculateLongPlan(basis),
+      };
+    }
+
+    function showProductView(view) {
+      $$(".review-state").forEach((button) => button.setAttribute("aria-pressed", String(button.dataset.review === view)));
+      if (view === "onboarding") {
+        state.tossConnection = "disconnected";
+        state.orderDrawerOpen = false;
+        onboarding.hidden = false;
+        app.hidden = true;
+        renderDrawer();
+        return;
+      }
+      state.tossConnection = "connected";
+      state.appliedExitPlan = null;
+      onboarding.hidden = true;
+      app.hidden = false;
+      setPage("chart");
+      if (view === "crypto") {
+        state.selectedAssetClass = "crypto";
+        state.cryptoConnections = { upbit: false, bithumb: false };
+        state.selectedProvider = null;
+        state.orderDrawerOpen = false;
+      } else {
+        state.selectedAssetClass = "stock";
+        state.selectedSymbol = "005930";
+        state.marketBriefingOpen = false;
+        state.orderDrawerOpen = view === "order";
+      }
+      renderApp();
+      if (view === "order") window.setTimeout(() => $("#close-order").focus(), 0);
+    }
+
+    $$(".review-state").forEach((button) => button.addEventListener("click", () => showProductView(button.dataset.review)));
+
+    $("#toss-form").addEventListener("submit", (event) => {
+      event.preventDefault();
+      const clientId = $("#toss-client-id").value.trim();
+      const secret = $("#toss-client-secret").value.trim();
+      const status = $("#toss-status");
+      const submit = $("#toss-submit");
+      const enter = $("#enter-app");
+      status.hidden = false;
+      enter.hidden = true;
+      if (!clientId || !secret) {
+        state.tossConnection = "failed";
+        status.className = "form-status error";
+        status.textContent = "Client ID와 Client Secret을 모두 입력해 주세요.";
+        return;
+      }
+      state.tossConnection = "verifying";
+      status.className = "form-status verifying";
+      status.textContent = "Toss API 연결을 검증하고 있습니다…";
+      submit.disabled = true;
+      submit.textContent = "검증 중…";
+      window.setTimeout(() => {
+        submit.disabled = false;
+        submit.textContent = "다시 검증하기";
+        if (clientId.toLowerCase().includes("fail")) {
+          state.tossConnection = "failed";
+          status.className = "form-status error";
+          status.textContent = "인증에 실패했습니다. 발급 키와 Toss 개발자 콘솔 상태를 확인해 주세요.";
+          return;
+        }
+        state.tossConnection = "connected";
+        status.className = "form-status success";
+        status.textContent = "연결되었습니다. 이제 실시간 주식 차트를 사용할 수 있습니다.";
+        submit.hidden = true;
+        enter.hidden = false;
+        enter.focus();
+      }, 720);
+    });
+
+    $("#enter-app").addEventListener("click", () => showProductView("stock"));
+
+    function setPage(page) {
+      state.page = page;
+      ["chart", "assets", "strategies", "automation", "settings"].forEach((name) => {
+        $("#" + name + "-page").hidden = name !== page;
+      });
+      $$(".nav-button").forEach((button) => {
+        if (button.dataset.page === page) button.setAttribute("aria-current", "page");
+        else button.removeAttribute("aria-current");
+      });
+      $$(".settings-button").forEach((button) => button.toggleAttribute("data-active", page === "settings"));
+    }
+
+    $$('[data-page]').forEach((button) => button.addEventListener("click", () => setPage(button.dataset.page)));
+
+    $$(".asset-toggle").forEach((button) => button.addEventListener("click", () => {
+      state.selectedAssetClass = button.dataset.asset;
+      state.appliedExitPlan = null;
+      setPage("chart");
+      state.orderDrawerOpen = false;
+      renderApp();
+    }));
+
+    $("#market-briefing-toggle").addEventListener("click", () => {
+      state.marketBriefingOpen = !state.marketBriefingOpen;
+      renderMarketIntelligence();
+    });
+
+    function renderApp() {
+      $$(".asset-toggle").forEach((button) => button.setAttribute("aria-pressed", String(button.dataset.asset === state.selectedAssetClass)));
+      const hasCrypto = Object.values(state.cryptoConnections).some(Boolean);
+      const cryptoLocked = state.selectedAssetClass === "crypto" && !hasCrypto;
+      $("#stock-content").hidden = cryptoLocked;
+      $("#crypto-lock").hidden = !cryptoLocked;
+      if (state.selectedAssetClass === "crypto" && hasCrypto) {
+        const activeProvider = state.selectedProvider || (state.cryptoConnections.upbit ? "upbit" : "bithumb");
+        state.selectedProvider = activeProvider;
+        $("#symbol-name").textContent = "비트코인";
+        $("#symbol-code").textContent = "BTC/KRW";
+        $("#current-price").textContent = "152,340,000원";
+        $("#price-change").textContent = "+0.84%";
+      } else {
+        const profile = stockProfiles[state.selectedSymbol] || stockProfiles["005930"];
+        $("#symbol-name").textContent = profile.name;
+        $("#symbol-code").textContent = profile.code;
+        $("#current-price").textContent = profile.price;
+        $("#price-change").textContent = profile.change;
+      }
+      renderMarketIntelligence();
+      renderOrderContext();
+      renderProviderSelector();
+      renderProviderCards();
+      renderIntervals();
+      renderChart();
+      renderDrawer();
+      $("#emergency-stop").hidden = !state.liveTrading;
+      const connected = Object.entries(state.cryptoConnections).filter(([, value]) => value).map(([name]) => name === "upbit" ? "Upbit" : "Bithumb");
+      $("#crypto-setting-state").textContent = connected.length ? connected.join(", ") + " 연결됨" : "미연결";
+      $$(".quick-provider").forEach((button) => {
+        const provider = button.dataset.quickProvider;
+        button.textContent = (provider === "upbit" ? "Upbit" : "Bithumb") + (state.cryptoConnections[provider] ? " 해제" : "");
+      });
+    }
+
+    function renderMarketIntelligence() {
+      const profile = state.selectedAssetClass === "crypto"
+        ? cryptoProfile
+        : (stockProfiles[state.selectedSymbol] || stockProfiles["005930"]);
+      const context = marketContexts[profile.session];
+      const pulse = $("#market-pulse");
+      pulse.dataset.tone = context.toneKey;
+      $("#market-session").textContent = context.session;
+      $("#market-tone").textContent = context.tone;
+      $("#market-headline").textContent = context.headline;
+      $("#market-breadth").textContent = context.breadth;
+      $("#market-theme").textContent = context.theme;
+      $("#market-updated").textContent = context.updatedAt;
+      $("#market-environment").textContent = context.environment;
+      $("#market-opportunity").textContent = context.opportunity;
+      $("#market-risk").textContent = context.risk;
+      $("#market-briefing-toggle").setAttribute("aria-expanded", String(state.marketBriefingOpen));
+      $("#market-briefing-detail").hidden = !state.marketBriefingOpen;
+
+      const stance = $("#analysis-stance");
+      stance.textContent = profile.stance;
+      stance.dataset.tone = profile.stanceTone;
+      $("#analysis-updated").textContent = profile.updatedAt;
+      $("#analysis-headline").textContent = profile.headline;
+      $("#analysis-plan").textContent = profile.plan;
+      $("#analysis-reasons").innerHTML = profile.reasons.map((reason) => `<span class="analysis-reason">${reason}</span>`).join("");
+      $("#analysis-valid").textContent = profile.validIf;
+      $("#analysis-invalid").textContent = profile.invalidIf;
+      $("#analysis-reliability").textContent = profile.reliability;
+      renderHorizonPlans();
+    }
+
+    function currentHorizonBasis() {
+      const key = state.selectedAssetClass === "crypto" ? "BTC" : state.selectedSymbol;
+      return horizonBasisBySymbol[key] || horizonBasisBySymbol["005930"];
+    }
+
+    function renderHorizonPlans() {
+      const basis = currentHorizonBasis();
+      currentExitPlans = calculateExitPlans(basis);
+      $("#horizon-plans").innerHTML = Object.values(currentExitPlans).map((plan) => {
+        const meta = horizonMeta[plan.horizon];
+        const rr = Number.isFinite(plan.rewardRisk) ? plan.rewardRisk.toFixed(1) + "R" : "-";
+        return `<button class="horizon-card" type="button" data-horizon="${plan.horizon}" aria-pressed="${String(state.selectedHorizon === plan.horizon)}">
+          <span class="horizon-card-head"><span class="horizon-name"><strong>${meta.label}</strong><span>${meta.duration}</span></span><span class="plan-status ${plan.status}">${plan.statusLabel}</span></span>
+          <span class="horizon-levels">
+            <span class="horizon-level"><span>진입 가정</span><strong>${formatPlanPrice(plan.entry, plan.currency)}</strong></span>
+            <span class="horizon-level"><span>1차 익절</span><strong class="profit">${formatPlanPrice(plan.tp1, plan.currency)}</strong></span>
+            <span class="horizon-level"><span>2차 익절</span><strong class="profit">${formatPlanPrice(plan.tp2, plan.currency)}</strong></span>
+            <span class="horizon-level"><span>${plan.horizon === "long" ? "전략 무효선" : "손절"}</span><strong class="stop">${formatPlanPrice(plan.stop, plan.currency)}</strong></span>
+          </span>
+          <span class="horizon-foot"><span>목표 ${rr}</span><span>${plan.trigger}</span></span>
+        </button>`;
+      }).join("");
+      $$(".risk-preset").forEach((button) => button.setAttribute("aria-pressed", String(button.dataset.riskPreset === state.riskPreset)));
+      renderHorizonDetail();
+    }
+
+    function renderHorizonDetail() {
+      const plan = currentExitPlans[state.selectedHorizon] || currentExitPlans.swing;
+      const meta = horizonMeta[plan.horizon];
+      const riskPreset = riskPresets[state.riskPreset];
+      $("#horizon-detail-toggle").setAttribute("aria-expanded", String(state.analysisDetailsOpen));
+      $("#horizon-detail-body").hidden = !state.analysisDetailsOpen;
+      $("#horizon-detail-summary").textContent = `${meta.label} · ${plan.basisItems[0]?.value || meta.duration} ${state.analysisDetailsOpen ? "⌃" : "⌄"}`;
+      $("#basis-grid").innerHTML = plan.basisItems.map((item) => `<div class="basis-item"><span>${item.label}</span><strong>${item.value}</strong></div>`).join("");
+      $("#formula-steps").innerHTML = plan.steps.map((step) => `<li>${step}</li>`).join("");
+      $("#plan-decision-copy").textContent = plan.decision;
+      $("#plan-blockers").innerHTML = plan.blockers.length ? plan.blockers.map((blocker) => `<span>주의 · ${blocker}</span>`).join("") : "<span class=\"check\">모든 필수 조건이 확인되었습니다.</span>";
+      $("#apply-plan").disabled = plan.status !== "actionable";
+      $("#apply-plan").textContent = plan.status === "actionable"
+        ? (plan.horizon === "long" ? "장기 계획을 주문·알림에 적용" : "선택 계획을 주문에 적용")
+        : (plan.status === "wait" ? "대기 조건 충족 전 적용 불가" : "데이터 확보 전 적용 불가");
+      $("#risk-budget-note").textContent = `${riskPreset.label}형 · 거래당 허용 손실 ${riskPreset.budgetPct.toFixed(1)}%. 기술적 가격선은 바뀌지 않으며 계좌 연결 시 권장 수량에만 반영됩니다.`;
+    }
+
+    $("#horizon-plans").addEventListener("click", (event) => {
+      const card = event.target.closest("[data-horizon]");
+      if (!card) return;
+      state.selectedHorizon = card.dataset.horizon;
+      $$(".horizon-card").forEach((button) => button.setAttribute("aria-pressed", String(button === card)));
+      renderHorizonDetail();
+    });
+
+    $$(".risk-preset").forEach((button) => button.addEventListener("click", () => {
+      state.riskPreset = button.dataset.riskPreset;
+      renderHorizonPlans();
+    }));
+
+    $("#horizon-detail-toggle").addEventListener("click", () => {
+      state.analysisDetailsOpen = !state.analysisDetailsOpen;
+      renderHorizonDetail();
+    });
+
+    $("#apply-plan").addEventListener("click", () => {
+      const plan = currentExitPlans[state.selectedHorizon];
+      if (!plan || plan.status === "unavailable") return;
+      state.appliedExitPlan = { ...plan, riskPreset: state.riskPreset };
+      renderAppliedExitPlan();
+      state.orderDrawerOpen = true;
+      renderDrawer();
+      window.setTimeout(() => $("#close-order").focus(), 0);
+      announce(`${horizonMeta[plan.horizon].label} 분석값을 주문 서랍에 복사했습니다. 주문은 제출되지 않았습니다.`);
+    });
+
+    function renderOrderContext() {
+      const isCrypto = state.selectedAssetClass === "crypto";
+      const profile = stockProfiles[state.selectedSymbol] || stockProfiles["005930"];
+      const name = isCrypto ? "비트코인" : profile.name;
+      const currentPrice = isCrypto ? "152,340,000원" : profile.price;
+      const inputPrice = currentPrice.replace(/[^0-9.,]/g, "");
+      $("#order-title").textContent = name + " 주문";
+      $("#order-current-price").textContent = currentPrice;
+      $("#order-price").value = inputPrice;
+      $("#order-estimate").textContent = "예상 주문 금액 " + currentPrice;
+      renderAppliedExitPlan();
+    }
+
+    function renderAppliedExitPlan() {
+      const plan = state.appliedExitPlan;
+      const container = $("#applied-plan");
+      container.hidden = !plan;
+      if (!plan) {
+        $("#order-take-profit").value = "";
+        $("#order-stop").value = "";
+        $("#order-risk-budget").textContent = "위험 예산은 계좌 연결 후 수량에 반영";
+        return;
+      }
+      const meta = horizonMeta[plan.horizon];
+      const riskPreset = riskPresets[plan.riskPreset];
+      $("#applied-plan-title").textContent = `${meta.label} 계획 적용됨`;
+      $("#applied-plan-time").textContent = plan.snapshot;
+      $("#applied-tp1").textContent = `${formatPlanPrice(plan.tp1, plan.currency)} · ${meta.tpAllocations[0]}%`;
+      $("#applied-tp2").textContent = `${formatPlanPrice(plan.tp2, plan.currency)} · ${meta.tpAllocations[1]}%`;
+      $("#applied-stop").textContent = formatPlanPrice(plan.stop, plan.currency);
+      $("#applied-trigger").textContent = plan.trigger;
+      $("#order-price").value = String(plan.entry);
+      $("#order-take-profit").value = String(plan.tp1);
+      $("#order-stop").value = String(plan.stop);
+      $("#order-risk-budget").textContent = `${riskPreset.label}형 위험 예산 ${riskPreset.budgetPct.toFixed(1)}% · 계좌 연결 시 수량 계산`;
+      $("#execution-warning").textContent = plan.horizon === "long"
+        ? "장기 무효선은 월말 종가 알림 조건입니다. 일반 시장가 stop 주문으로 자동 전환되지 않았습니다."
+        : "분석값만 복사했습니다. stop 주문은 발동 시 시장가로 전환되어 표시 가격과 다르게 체결될 수 있으며, 주문은 아직 제출되지 않았습니다.";
+    }
+
+    function renderProviderSelector() {
+      const line = $(".symbol-line");
+      const old = $("#provider-select");
+      if (old) old.remove();
+      const connected = Object.entries(state.cryptoConnections).filter(([, value]) => value).map(([key]) => key);
+      if (state.selectedAssetClass !== "crypto" || connected.length < 2) return;
+      const select = document.createElement("select");
+      select.id = "provider-select";
+      select.className = "provider-select";
+      select.setAttribute("aria-label", "코인 거래소");
+      connected.forEach((provider) => {
+        const option = document.createElement("option");
+        option.value = provider;
+        option.textContent = provider === "upbit" ? "Upbit" : "Bithumb";
+        option.selected = state.selectedProvider === provider;
+        select.append(option);
+      });
+      select.addEventListener("change", () => {
+        state.selectedProvider = select.value;
+        renderIntervals();
+        announce((select.value === "upbit" ? "Upbit" : "Bithumb") + " 시세로 전환했습니다.");
+      });
+      line.append(select);
+    }
+
+    $$(".interval").forEach((button) => button.addEventListener("click", () => {
+      state.interval = button.dataset.interval;
+      renderIntervals();
+      renderChart();
+    }));
+
+    function renderIntervals() {
+      $$(".interval").forEach((button) => button.setAttribute("aria-pressed", String(button.dataset.interval === state.interval)));
+      const labels = { "1m": "Toss 1분봉 · 실시간", "15m": "1분봉 로컬 집계 · 15분", "1d": "Toss 일봉 · 장기 흐름" };
+      $("#interval-note").textContent = state.selectedAssetClass === "crypto" ? ((state.selectedProvider === "bithumb" ? "Bithumb" : "Upbit") + " WebSocket · 실시간") : labels[state.interval];
+    }
+
+    const chartSeries = {
+      "1m": [22,24,23,27,26,29,31,30,35,33,37,39,38,42,44,43,48,47,51,56,54,59,58,62,66,64,69,71,68,74,76,75],
+      "15m": [31,29,32,34,33,38,36,41,43,42,46,50,48,54,51,55,59,57,62,65,64,69,67,72,70,76,74,78,77,81,80,84],
+      "1d": [72,68,70,65,61,64,59,62,66,63,67,71,69,73,76,72,75,79,77,80,84,82,86,83,87,90,88,92,89,94,93,96],
+    };
+
+    function renderChart() {
+      const values = chartSeries[state.interval];
+      const width = 1000;
+      const height = 330;
+      const padX = 28;
+      const padY = 32;
+      const min = Math.min(...values) - 5;
+      const max = Math.max(...values) + 5;
+      const points = values.map((value, index) => {
+        const x = padX + index * ((width - padX * 2) / (values.length - 1));
+        const y = height - padY - ((value - min) / (max - min)) * (height - padY * 2);
+        return [x, y];
+      });
+      const line = points.map(([x,y], index) => (index ? "L" : "M") + x.toFixed(1) + " " + y.toFixed(1)).join(" ");
+      const area = line + " L " + points.at(-1)[0].toFixed(1) + " " + (height - padY) + " L " + points[0][0].toFixed(1) + " " + (height - padY) + " Z";
+      $("#chart-line").setAttribute("d", line);
+      $("#chart-area").setAttribute("d", area);
+      $("#chart-grid").innerHTML = [70,130,190,250].map((y) => `<line x1="28" y1="${y}" x2="972" y2="${y}" stroke="#1d2a35" stroke-width="1" vector-effect="non-scaling-stroke" />`).join("");
+      const signal = points[17];
+      $("#chart-signals").innerHTML = `<circle cx="${signal[0]}" cy="${signal[1]}" r="6" fill="#6aa9ff" stroke="#0a1118" stroke-width="3" vector-effect="non-scaling-stroke"/><text x="${signal[0] + 12}" y="${signal[1] - 10}" fill="#8dbdff" font-size="11">전략 신호</text>`;
+      $("#chart-title").textContent = $("#symbol-name").textContent + " " + state.interval + " 가격 차트";
+    }
+
+    $$(".tab").forEach((button) => button.addEventListener("click", () => {
+      $$(".tab").forEach((tab) => tab.setAttribute("aria-selected", String(tab === button)));
+      $$(".tab-panel").forEach((panel) => panel.hidden = panel.id !== "panel-" + button.dataset.tab);
+    }));
+
+    $$(".provider-connect").forEach((button) => button.addEventListener("click", () => {
+      const form = document.querySelector(`[data-provider-form="${button.dataset.provider}"]`);
+      form.hidden = false;
+      button.hidden = true;
+      $("input", form).focus();
+    }));
+
+    $$(".provider-form").forEach((form) => form.addEventListener("submit", (event) => {
+      event.preventDefault();
+      const fields = $$("input", form);
+      if (fields.some((input) => !input.value.trim())) {
+        announce("키를 모두 입력해 주세요.");
+        fields.find((input) => !input.value.trim()).focus();
+        return;
+      }
+      const provider = form.dataset.providerForm;
+      state.cryptoConnections[provider] = true;
+      state.selectedProvider = provider;
+      announce((provider === "upbit" ? "Upbit" : "Bithumb") + " 연결이 완료되었습니다.");
+      renderApp();
+    }));
+
+    function renderProviderCards() {
+      Object.entries(state.cryptoConnections).forEach(([provider, connected]) => {
+        const card = document.querySelector(`[data-provider-card="${provider}"]`);
+        $(".provider-state", card).textContent = connected ? "연결됨" : "미연결";
+      });
+    }
+
+    $("#open-order").addEventListener("click", () => { state.orderDrawerOpen = true; renderDrawer(); window.setTimeout(() => $("#close-order").focus(), 0); });
+    $("#close-order").addEventListener("click", closeOrder);
+    $("#drawer-scrim").addEventListener("click", closeOrder);
+    function closeOrder() { state.orderDrawerOpen = false; renderDrawer(); $("#open-order").focus(); }
+    function renderDrawer() {
+      $("#drawer-scrim").hidden = !state.orderDrawerOpen;
+      $("#order-drawer").hidden = !state.orderDrawerOpen;
+      $("#order-drawer").setAttribute("aria-hidden", String(!state.orderDrawerOpen));
+    }
+    document.addEventListener("keydown", (event) => { if (event.key === "Escape" && state.orderDrawerOpen) closeOrder(); });
+
+    $$('[data-order-side]').forEach((button) => button.addEventListener("click", () => {
+      $$('[data-order-side]').forEach((side) => side.setAttribute("aria-pressed", String(side === button)));
+      $("#review-order").textContent = button.dataset.orderSide === "buy" ? "매수 주문 내용 검토" : "매도 주문 내용 검토";
+    }));
+    $("#review-order").addEventListener("click", () => announce("실거래 게이트가 꺼져 있어 주문은 전송되지 않습니다."));
+
+    $("#toggle-live").addEventListener("click", () => {
+      state.liveTrading = !state.liveTrading;
+      $("#toggle-live").textContent = state.liveTrading ? "데모: 실거래 끄기" : "데모: 실거래 켜기";
+      renderApp();
+      announce(state.liveTrading ? "실거래가 켜져 긴급 중지를 표시합니다." : "실거래를 껐습니다.");
+    });
+    $("#emergency-stop").addEventListener("click", () => { state.liveTrading = false; renderApp(); announce("모든 자동 주문을 중지했습니다."); });
+
+    $("#expire-toss").addEventListener("click", () => {
+      state.tossConnection = "disconnected";
+      state.liveTrading = false;
+      $("#toss-client-id").value = "";
+      $("#toss-client-secret").value = "";
+      $("#toss-submit").hidden = false;
+      $("#enter-app").hidden = true;
+      $("#toss-status").hidden = false;
+      $("#toss-status").className = "form-status error";
+      $("#toss-status").textContent = "인증 정보가 삭제되었습니다. 앱을 사용하려면 다시 연결해 주세요.";
+      onboarding.hidden = false;
+      app.hidden = true;
+      $$(".review-state").forEach((button) => button.setAttribute("aria-pressed", String(button.dataset.review === "onboarding")));
+    });
+
+    $$(".quick-provider").forEach((button) => button.addEventListener("click", () => {
+      const provider = button.dataset.quickProvider;
+      state.cryptoConnections[provider] = !state.cryptoConnections[provider];
+      if (state.cryptoConnections[provider]) state.selectedProvider = provider;
+      if (!Object.values(state.cryptoConnections).some(Boolean)) state.selectedProvider = null;
+      renderApp();
+      announce((provider === "upbit" ? "Upbit" : "Bithumb") + (state.cryptoConnections[provider] ? "을 연결했습니다." : " 연결을 해제했습니다."));
+    }));
+
+    const searchItems = [
+      { symbol: "005930", name: "삼성전자", code: "005930 · KRX", asset: "stock" },
+      { symbol: "000660", name: "SK하이닉스", code: "000660 · KRX", asset: "stock" },
+      { symbol: "NVDA", name: "NVIDIA", code: "NVDA · NASDAQ", asset: "stock" },
+      { symbol: "BTC", name: "비트코인", code: "BTC/KRW", asset: "crypto" },
+    ];
+    $("#asset-search").addEventListener("input", (event) => {
+      const query = event.target.value.trim().toLowerCase();
+      const results = $("#search-results");
+      if (!query) { results.hidden = true; return; }
+      const matches = searchItems.filter((item) => (item.name + item.code).toLowerCase().includes(query));
+      results.innerHTML = matches.length ? matches.map((item, index) => `<button class="search-result" type="button" role="option" data-search-index="${searchItems.indexOf(item)}">${item.name}<span>${item.code}</span></button>`).join("") : `<div class="search-result">검색 결과가 없습니다</div>`;
+      results.hidden = false;
+    });
+    $("#search-results").addEventListener("click", (event) => {
+      const button = event.target.closest("[data-search-index]");
+      if (!button) return;
+      const item = searchItems[Number(button.dataset.searchIndex)];
+      state.selectedAssetClass = item.asset;
+      state.appliedExitPlan = null;
+      if (item.asset === "stock") state.selectedSymbol = item.symbol;
+      $("#asset-search").value = item.name;
+      $("#search-results").hidden = true;
+      renderApp();
+    });
+
+    renderChart();
+  </script>
+</body>
+</html>

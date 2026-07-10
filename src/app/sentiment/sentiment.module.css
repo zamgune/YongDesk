@@ -1,0 +1,579 @@
+.page {
+    min-height: 100vh;
+    padding: 48px 24px 80px;
+    position: relative;
+    overflow: hidden;
+}
+
+.page::before {
+    content: "";
+    position: absolute;
+    inset: -200px;
+    background: radial-gradient(800px 420px at 15% 20%, rgba(243, 155, 109, 0.22), transparent 60%),
+        radial-gradient(700px 380px at 85% 10%, rgba(28, 157, 111, 0.18), transparent 60%);
+    z-index: 0;
+}
+
+.shell {
+    position: relative;
+    z-index: 1;
+    max-width: 900px;
+    margin: 0 auto;
+    display: flex;
+    flex-direction: column;
+    gap: 24px;
+}
+
+.header {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 20px;
+    align-items: center;
+    justify-content: space-between;
+    padding: 18px 22px;
+    border-radius: 22px;
+    background: var(--card);
+    border: 1px solid var(--border);
+    box-shadow: var(--shadow);
+}
+
+.titleBlock {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.title {
+    font-size: 28px;
+    letter-spacing: -0.5px;
+}
+
+.subtitle {
+    color: var(--ink-2);
+    font-size: 14px;
+}
+
+.backLink {
+    padding: 10px 18px;
+    border-radius: 999px;
+    background: var(--bg-1);
+    color: var(--ink-1);
+    font-size: 14px;
+    font-weight: 500;
+    text-decoration: none;
+    transition: background 0.15s ease;
+}
+
+.backLink:hover {
+    background: var(--bg-0);
+}
+
+/* Tabs */
+.tabs {
+    display: flex;
+    gap: 8px;
+    padding: 4px;
+    background: var(--card);
+    border-radius: 16px;
+    border: 1px solid var(--border);
+}
+
+.tab {
+    flex: 1;
+    padding: 12px 20px;
+    border: none;
+    background: transparent;
+    color: var(--ink-2);
+    font-size: 15px;
+    font-weight: 600;
+    border-radius: 12px;
+    cursor: pointer;
+    transition: background 0.15s ease, color 0.15s ease;
+    -webkit-tap-highlight-color: transparent;
+}
+
+.tab:hover {
+    background: var(--bg-1);
+}
+
+.tabActive {
+    background: var(--accent-0);
+    color: #fff;
+}
+
+.tabActive:hover {
+    background: var(--accent-0);
+}
+
+.sectionTitle {
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--ink-1);
+    margin-bottom: 12px;
+}
+
+.status {
+    text-align: center;
+    color: var(--ink-2);
+    font-size: 14px;
+    padding: 40px;
+}
+
+.gaugeGrid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 20px;
+}
+
+.gaugeGridSingle {
+    display: grid;
+    grid-template-columns: 1fr;
+    max-width: 400px;
+}
+
+.gaugeCard {
+    border-radius: 20px;
+    background: var(--card);
+    border: 1px solid var(--border);
+    box-shadow: var(--shadow);
+    padding: 20px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+}
+
+.gaugeHeader {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.gaugeEmoji {
+    font-size: 24px;
+}
+
+.gaugeTitle {
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--ink-0);
+}
+
+.gaugeContainer {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+}
+
+.gaugeSvg {
+    width: 160px;
+    height: 100px;
+}
+
+.gaugeValue {
+    font-size: 40px;
+    font-weight: 700;
+    font-family: var(--font-mono), monospace;
+    margin-top: -8px;
+}
+
+.gaugeRating {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--ink-1);
+}
+
+.gaugeFormula {
+    font-size: 11px;
+    color: var(--ink-2);
+    text-align: center;
+    background: var(--bg-1);
+    padding: 6px 10px;
+    border-radius: 8px;
+}
+
+.gaugeLoading {
+    padding: 40px;
+    color: var(--ink-2);
+    font-size: 14px;
+}
+
+/* Indicator Cards */
+.indicatorGrid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 16px;
+}
+
+.indicatorCard {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 16px 20px;
+    border-radius: 16px;
+    background: var(--card);
+    border: 1px solid var(--border);
+    box-shadow: var(--shadow);
+}
+
+.indicatorTitle {
+    font-size: 14px;
+    color: var(--ink-2);
+    flex: 1;
+}
+
+.indicatorValue {
+    font-size: 20px;
+    font-weight: 700;
+    font-family: var(--font-mono), monospace;
+    color: var(--ink-0);
+}
+
+.indicatorChange {
+    font-size: 13px;
+    font-weight: 600;
+    font-family: var(--font-mono), monospace;
+}
+
+.indicatorNote {
+    font-size: 12px;
+    color: var(--ink-2);
+    margin-top: 8px;
+    padding: 10px 12px;
+    background: var(--bg-1);
+    border-radius: 10px;
+}
+
+/* Treasury Table */
+.treasuryTable {
+    border-radius: 16px;
+    background: var(--card);
+    border: 1px solid var(--border);
+    box-shadow: var(--shadow);
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+}
+
+.treasuryHeader,
+.treasuryRow {
+    display: grid;
+    grid-template-columns: 1.2fr 1fr 1fr 0.8fr 0.8fr;
+    gap: 8px;
+    padding: 12px 16px;
+}
+
+.treasuryHeader {
+    background: var(--bg-1);
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--ink-2);
+    text-transform: uppercase;
+}
+
+.treasuryRow {
+    font-size: 13px;
+    color: var(--ink-0);
+    border-top: 1px solid var(--border);
+}
+
+.treasuryRow span {
+    font-family: var(--font-mono), monospace;
+}
+
+/* Info Card */
+.infoCard {
+    border-radius: 20px;
+    background: var(--card);
+    border: 1px solid var(--border);
+    box-shadow: var(--shadow);
+    padding: 24px;
+}
+
+.infoCard h2 {
+    font-size: 18px;
+    margin-bottom: 12px;
+}
+
+.infoCard ul {
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.infoCard li {
+    font-size: 13px;
+    color: var(--ink-2);
+    padding: 8px 12px;
+    background: var(--bg-1);
+    border-radius: 8px;
+}
+
+.infoCard li strong {
+    color: var(--ink-0);
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+
+    .gaugeGrid,
+    .indicatorGrid {
+        grid-template-columns: 1fr;
+    }
+
+    .header {
+        flex-direction: column;
+        text-align: center;
+    }
+
+    .treasuryHeader,
+    .treasuryRow {
+        font-size: 11px;
+    }
+}
+
+/* Treasury table wrapper for mobile horizontal scroll */
+.treasuryTableWrapper {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    border-radius: 16px;
+    background: var(--card);
+    border: 1px solid var(--border);
+    box-shadow: var(--shadow);
+}
+
+@media (max-width: 480px) {
+
+    .treasuryHeader,
+    .treasuryRow {
+        min-width: 500px;
+        grid-template-columns: 1.2fr 0.8fr 1fr 0.7fr 0.7fr;
+        padding: 10px 12px;
+        font-size: 11px;
+    }
+}
+
+@media (max-width: 480px) {
+    .page {
+        padding: 16px 12px 60px;
+        padding-bottom: calc(60px + env(safe-area-inset-bottom));
+    }
+
+    .title {
+        font-size: 22px;
+    }
+
+    .gaugeSvg {
+        width: 140px;
+        height: 90px;
+    }
+
+    .gaugeValue {
+        font-size: 32px;
+    }
+
+    .tab {
+        padding: 10px 12px;
+        font-size: 14px;
+    }
+}
+
+/* White House Actions */
+.actionsContainer {
+    border-radius: 16px;
+    background: var(--card);
+    border: 1px solid var(--border);
+    box-shadow: var(--shadow);
+    overflow: hidden;
+}
+
+.actionItem {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 14px 18px;
+    border-bottom: 1px solid var(--border);
+    transition: background 0.15s ease;
+}
+
+.actionItem:last-child {
+    border-bottom: none;
+}
+
+.actionItem:hover {
+    background: var(--bg-1);
+}
+
+.actionHeader {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+.actionCategory {
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    padding: 3px 8px;
+    border-radius: 6px;
+    background: var(--accent-0);
+    color: #fff;
+    white-space: nowrap;
+}
+
+.actionCategory.executive {
+    background: #d0454f;
+}
+
+.actionCategory.proclamation {
+    background: #7ab83a;
+}
+
+.actionCategory.memorandum {
+    background: #e88c3a;
+}
+
+.actionCategory.nomination {
+    background: #5a9fd4;
+}
+
+.actionDate {
+    font-size: 11px;
+    color: var(--ink-2);
+    font-family: var(--font-mono), monospace;
+}
+
+.actionLink {
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--ink-0);
+    text-decoration: none;
+    line-height: 1.4;
+    transition: color 0.15s ease;
+}
+
+.actionLink:hover {
+    color: var(--accent-0);
+}
+
+.actionKeywords {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin-top: 2px;
+}
+
+.keyword {
+    font-size: 10px;
+    font-weight: 500;
+    padding: 2px 6px;
+    border-radius: 4px;
+    background: rgba(243, 155, 109, 0.2);
+    color: var(--accent-0);
+    text-transform: lowercase;
+}
+
+.actionEmpty {
+    padding: 40px;
+    text-align: center;
+    color: var(--ink-2);
+    font-size: 14px;
+}
+
+.actionSource {
+    font-size: 11px;
+    color: var(--ink-2);
+    margin-top: 8px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.actionSource a {
+    color: var(--accent-0);
+    text-decoration: none;
+}
+
+.actionSource a:hover {
+    text-decoration: underline;
+}
+
+/* Economic Calendar */
+.calendarContainer {
+    border-radius: 16px;
+    background: var(--card);
+    border: 1px solid var(--border);
+    box-shadow: var(--shadow);
+    overflow: hidden;
+}
+
+.calendarItem {
+    display: flex;
+    gap: 16px;
+    padding: 14px 18px;
+    border-bottom: 1px solid var(--border);
+    transition: background 0.15s ease;
+}
+
+.calendarItem:last-child {
+    border-bottom: none;
+}
+
+.calendarItem:hover {
+    background: var(--bg-1);
+}
+
+.calendarToday {
+    background: rgba(243, 155, 109, 0.08);
+    border-left: 3px solid var(--accent-0);
+}
+
+.calendarDate {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    min-width: 50px;
+    gap: 2px;
+}
+
+.calendarDay {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--ink-0);
+}
+
+.calendarTime {
+    font-size: 11px;
+    color: var(--ink-2);
+    font-family: var(--font-mono), monospace;
+}
+
+.calendarContent {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    flex: 1;
+}
+
+.calendarHeader {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.calendarFlag {
+    font-size: 18px;
+}
+
+.calendarEvent {
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--ink-0);
+}
+
+.calendarDesc {
+    font-size: 12px;
+    color: var(--ink-2);
+}
