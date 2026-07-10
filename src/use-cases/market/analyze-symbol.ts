@@ -46,6 +46,12 @@ const toUnix = (value: Date) => Math.floor(value.getTime() / 1000);
 
 const getWarmupDays = (timeframe: string) => {
   switch (timeframe) {
+    case "5m":
+      return 5;
+    case "15m":
+      return 10;
+    case "30m":
+      return 21;
     case "1h":
       return 21;
     case "4h":
@@ -958,9 +964,9 @@ export async function analyzeSymbol(
   }
   const rangeDays = rangeDaysResult.value;
   const timeframeParam = url.searchParams.get("tf") ?? "1d";
-  if (!new Set(["1h", "4h", "1d", "1wk"]).has(timeframeParam)) {
+  if (!new Set(["5m", "15m", "30m", "1h", "4h", "1d", "1wk"]).has(timeframeParam)) {
     return Response.json(
-      { error: "Unsupported timeframe. Use 1h, 4h, 1d, or 1wk." },
+      { error: "Unsupported timeframe. Use 5m, 15m, 30m, 1h, 4h, 1d, or 1wk." },
       { status: 400 },
     );
   }
@@ -976,6 +982,9 @@ export async function analyzeSymbol(
     string,
     { interval: MarketDataInterval; resample?: number }
   > = {
+    "5m": { interval: "5m" },
+    "15m": { interval: "15m" },
+    "30m": { interval: "30m" },
     "1h": { interval: "1h" },
     "4h": { interval: "1h", resample: 4 },
     "1d": { interval: "1d" },
@@ -1008,7 +1017,7 @@ export async function analyzeSymbol(
       period1: startDate,
       period2: endDate,
       interval: timeframe.interval,
-      includePrePost: timeframe.interval === "1h" ? false : undefined,
+      includePrePost: ["5m", "15m", "30m", "1h"].includes(timeframe.interval) ? false : undefined,
     }),
     marketData.getCandles(sanitizedSymbol, {
       period1: weeklyStartDate,

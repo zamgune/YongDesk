@@ -36,15 +36,23 @@ const marketData: Pick<MarketDataProvider, "getCandles"> = {
   },
 };
 
-test("analysis rejects unsupported timeframes instead of silently using daily bars", async () => {
+test("analysis accepts supported intraday timeframes and rejects unknown values", async () => {
   const response = await analyzeSymbol(
     new Request("http://localhost/api/market/005930.KS?days=30&tf=15m"),
     undefined,
     { marketData },
   );
 
-  assert.equal(response.status, 400);
-  assert.match((await response.json()).error, /Unsupported timeframe/);
+  assert.equal(response.status, 200);
+  assert.equal((await response.json()).timeframe, "15m");
+
+  const unsupported = await analyzeSymbol(
+    new Request("http://localhost/api/market/005930.KS?days=30&tf=2m"),
+    undefined,
+    { marketData },
+  );
+  assert.equal(unsupported.status, 400);
+  assert.match((await unsupported.json()).error, /Unsupported timeframe/);
 });
 
 test("daily analysis exposes a real ten-month close average for long-term plans", async () => {

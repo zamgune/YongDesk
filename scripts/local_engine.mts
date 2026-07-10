@@ -106,6 +106,11 @@ import {
   handleMarketWorkspaceRequest,
 } from "../src/lib/local-engine/market-workspace.ts";
 import {
+  fixtureLocalChartResponse,
+  handleLocalCryptoChartRequest,
+  LOCAL_CHART_TIMEFRAMES,
+} from "../src/lib/local-engine/chart-data.ts";
+import {
   COMMUNITY_CACHE_MAX_ENTRIES,
   COMMUNITY_CACHE_TTL_SECONDS,
 } from "../src/lib/community-pain/config.mts";
@@ -4039,6 +4044,41 @@ const callRoute = async (request: Request, pathname: string) => {
   throw new Error(`Unsupported route: ${pathname}`);
 };
 
+const localChartResponse = async (request: Request, url: URL) => {
+  const assetClass = url.searchParams.get("assetClass");
+  const symbol = url.searchParams.get("symbol")?.trim();
+  const timeframe = url.searchParams.get("tf");
+  if (!symbol) {
+    return jsonResponse({ error: "symbol is required" }, { status: 400 });
+  }
+  if (!LOCAL_CHART_TIMEFRAMES.includes(timeframe as typeof LOCAL_CHART_TIMEFRAMES[number])) {
+    return jsonResponse({ error: "Unsupported chart timeframe." }, { status: 400 });
+  }
+  const selectedTimeframe = timeframe as typeof LOCAL_CHART_TIMEFRAMES[number];
+  if (assetClass !== "stock" && assetClass !== "crypto") {
+    return jsonResponse({ error: "assetClass must be stock or crypto" }, { status: 400 });
+  }
+  if (assetClass === "crypto") {
+    return handleLocalCryptoChartRequest(url);
+  }
+  if (process.env.STOCK_ANALYSIS_MARKET_FIXTURE_MODE === "1") {
+    return fixtureLocalChartResponse({ symbol, assetClass, timeframe: selectedTimeframe });
+  }
+  const daysByTimeframe: Record<typeof selectedTimeframe, number> = {
+    "5m": 7,
+    "15m": 14,
+    "30m": 30,
+    "1h": 60,
+    "4h": 180,
+    "1d": 365,
+    "1wk": 365 * 3,
+  };
+  const chartUrl = new URL(`/api/market/${encodeURIComponent(symbol)}`, url.origin);
+  chartUrl.searchParams.set("days", String(daysByTimeframe[selectedTimeframe]));
+  chartUrl.searchParams.set("tf", selectedTimeframe);
+  return callRoute(new Request(chartUrl, { headers: request.headers }), chartUrl.pathname);
+};
+
 const parseCommunityBoolean = (value: string | null) =>
   value === "1" || value?.toLowerCase() === "true";
 
@@ -4163,6 +4203,9 @@ export const handleLocalEngineRequest = async (request: Request): Promise<Respon
           ? createMarketWorkspaceFixtureDependencies()
           : undefined,
       });
+    }
+    if (request.method === "GET" && url.pathname === "/api/local/chart") {
+      return localChartResponse(request, url);
     }
     if (request.method === "GET" && url.pathname === "/api/paper-trading/state") {
       return getPaperTradingStateResponse();

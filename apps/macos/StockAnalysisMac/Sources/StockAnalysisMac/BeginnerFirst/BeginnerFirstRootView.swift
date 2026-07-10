@@ -11,6 +11,7 @@ struct BeginnerFirstRootView: View {
 
     @State private var selectedAnalysisTab: BeginnerAnalysisTab = .analysis
     @State private var selectedHorizon: BeginnerTradeHorizon = .day
+    @State private var selectedChartTimeframe: BeginnerChartTimeframe = .oneDay
     @State private var resultPreview = ""
     @State private var isLoading = false
     @State private var showingOrderDrawer = false
@@ -168,10 +169,14 @@ struct BeginnerFirstRootView: View {
                 analysis: analysis,
                 selectedTab: $selectedAnalysisTab,
                 selectedHorizon: $selectedHorizon,
+                selectedChartTimeframe: $selectedChartTimeframe,
                 resultPreview: $resultPreview,
                 isLoading: isLoading,
                 compact: compact,
                 onAnalyze: { Task { await runAnalysis() } },
+                onChartTimeframeChanged: { timeframe in
+                    Task { await refreshChartTimeframe(timeframe) }
+                },
                 onAddToWatchlist: { Task { await addCurrentToWatchlist() } },
                 onOpenOrder: { showingOrderDrawer = true },
                 onRefreshNews: { Task { await refreshNewsAndSentiment() } }
@@ -318,6 +323,12 @@ struct BeginnerFirstRootView: View {
         )
         guard requestGeneration == analysisGeneration else { return }
         resultPreview = result
+        await model.refreshChart(
+            symbol: selectedSymbol,
+            assetClass: assetClass == .crypto ? .crypto : .stock,
+            timeframe: selectedChartTimeframe.analysisTimeframe
+        )
+        guard requestGeneration == analysisGeneration else { return }
         let analyzedSymbol = selectedSymbol
         let analyzedMarket = assetClass == .crypto ? "CRYPTO" : selectedSession
         Task {
@@ -342,6 +353,15 @@ struct BeginnerFirstRootView: View {
         await model.refreshCommunitySentiment(
             symbol: symbol ?? selectedSymbol,
             market: market ?? (assetClass == .crypto ? "CRYPTO" : selectedSession)
+        )
+    }
+
+    private func refreshChartTimeframe(_ timeframe: BeginnerChartTimeframe) async {
+        guard await ensureEngineReady() else { return }
+        await model.refreshChart(
+            symbol: selectedSymbol,
+            assetClass: assetClass == .crypto ? .crypto : .stock,
+            timeframe: timeframe.analysisTimeframe
         )
     }
 
@@ -464,6 +484,7 @@ private struct BeginnerSidebar: View {
             }
         }
         .buttonStyle(.plain)
+        .frame(maxWidth: .infinity, alignment: compact ? .center : .leading)
         .contentShape(RoundedRectangle(cornerRadius: 10))
         .onHover { isHovering in
             hoveredDestination = isHovering ? item : nil

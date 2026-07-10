@@ -62,6 +62,9 @@ public struct EngineHealth: Codable, Equatable, Sendable {
 }
 
 public enum AnalysisTimeframe: Codable, Equatable, Hashable, Sendable {
+    case fiveMinutes
+    case fifteenMinutes
+    case thirtyMinutes
     case oneHour
     case fourHours
     case oneDay
@@ -70,6 +73,9 @@ public enum AnalysisTimeframe: Codable, Equatable, Hashable, Sendable {
 
     public var rawValue: String {
         switch self {
+        case .fiveMinutes: "5m"
+        case .fifteenMinutes: "15m"
+        case .thirtyMinutes: "30m"
         case .oneHour: "1h"
         case .fourHours: "4h"
         case .oneDay: "1d"
@@ -81,6 +87,9 @@ public enum AnalysisTimeframe: Codable, Equatable, Hashable, Sendable {
     public init(from decoder: Decoder) throws {
         let value = try decoder.singleValueContainer().decode(String.self)
         self = switch value.lowercased() {
+        case "5m": .fiveMinutes
+        case "15m": .fifteenMinutes
+        case "30m": .thirtyMinutes
         case "1h": .oneHour
         case "4h": .fourHours
         case "1d": .oneDay
