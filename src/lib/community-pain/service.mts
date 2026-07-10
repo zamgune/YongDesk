@@ -111,7 +111,10 @@ export const getCommunityPain = async ({
     sourceStats: sources.map((source) => ({
       id: source.id,
       label: source.label,
+      policyStatus: source.policyStatus,
       status: source.status,
+      confidenceWeight: source.confidenceWeight,
+      reason: source.reason,
       candidateCount: source.candidateCount,
       recentItemCount: source.recentItemCount,
       itemCount: source.itemCount,

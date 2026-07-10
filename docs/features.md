@@ -1,6 +1,6 @@
 # YongStockDesk 기능 상태
 
-이 문서는 `main`의 실제 코드와 검증 결과를 기준으로 유지하는 기능 목록이다. README나 UX 시안과 설명이 다르면 이 문서의 상태를 우선하고, 코드 변경과 같은 PR에서 갱신한다.
+이 문서는 실제 코드와 검증 근거를 기준으로 유지하는 기능 목록이다. README나 UX 시안과 설명이 다르면 이 문서의 상태를 우선하고, 코드 변경과 같은 PR에서 갱신한다. 과거 DMG·UI smoke 결과는 [1.0.0 릴리스 이력](releases/v1.0.0.md)에 보존하며, 새 코드·패키징 변경 뒤에는 같은 결과를 현재 증거로 재사용하지 않는다.
 
 ## 상태 정의
 
@@ -19,69 +19,81 @@
 |---|---|---|---|---|
 | 앱 셸 | Finder/Dock에서 실행되는 SwiftUI 앱과 번들 sidecar | 구현됨 | 현재 호환 이름은 `StockAnalysis.app` | 없음 |
 | 앱 셸 | 메뉴바 상태, 앱 점검, sidecar 로그, 배포 점검 | 구현됨 | 로컬 App Support와 번들 상태를 사용 | 없음 |
-| 앱 셸 | 차트 중심 사이드바와 단순화된 beginner-first 레이아웃 | HTML 시안 | `beginner-first.html`에만 존재 | 없음 |
-| 온보딩 | 시작 안내와 Toss 설정 시트 | 부분 구현 | 현재 앱은 Toss 등록 전에도 대시보드 진입 가능 | 없음 |
-| 온보딩 | Toss 등록을 완료해야 메인 화면을 여는 필수 게이트 | HTML 시안 | SwiftUI 인증 상태 라우팅 필요 | 없음 |
+| 앱 셸 | 차트 중심 사이드바와 단순화된 beginner-first 레이아웃 | 구현됨 | `BeginnerFirstRootView`가 승인된 `beginner-first-v3.html` 정보 구조를 적용하며 최소 크기는 1024×720 | 없음 |
+| 온보딩 | 삼성전자 예제, 선택형 API 연결과 나중에 연결 경로 | 구현됨 | API 키 없이 Yahoo fallback 분석·Upbit 공개 분석·모의투자로 시작 가능 | 없음 |
 | 시장 데이터 | US·KOSPI·KOSDAQ·CRYPTO 종목 검색과 수동 티커 입력 | 구현됨 | 종목 마스터 캐시가 없으면 seed/fallback 사용 | 없음 |
 | 차트 | 일봉 기반 분석 차트와 지표·신호 표시 | 구현됨 | 데이터 공급자 품질과 거래일 지연 영향 | 없음 |
-| 차트 | macOS의 `1m·15m·1D` 선택 UI | 부분 구현 | 현재 실시간 스트리밍 캔들이 아니라 제한된 히스토리 표시 제어 | 없음 |
-| 차트 | Toss 분봉과 Upbit/Bithumb WebSocket 실시간 차트 | 후속 | 15분봉 로컬 집계와 재연결 정책 필요 | 없음 |
+| 차트 | macOS의 `30일·90일·1년` 일봉 표시 범위 선택 | 구현됨 | 같은 일봉 데이터에서 화면에 표시할 기간만 변경 | 없음 |
+| 시장 데이터 | 주식 1시간·일봉 분석 workspace | 구현됨 | Toss 연결 시 1분봉을 장 마감에 맞춘 1시간봉으로 집계하고 부분 봉은 계산에서 제외, 일봉은 공식 캔들 사용, 미연결·자동 fallback은 Yahoo | 없음 |
+| 시장 데이터 | Upbit 공개 1시간·4시간·일봉 분석 workspace | 구현됨 | API 키 없이 KRW 마켓 REST 캔들 사용, 형성 중 봉과 최근 거래 공백은 신규 진입 계산에서 보수적으로 처리 | 없음 |
+| 차트 | Toss·Upbit WebSocket 실시간 차트 | 후속 | 현재 멀티타임프레임 분석은 REST 기반이며 streaming이 아님 | 없음 |
 | 분석 | 단건 종목 분석, 지지·저항, `tradeSetup`, 돌파 상태 | 구현됨 | 분석은 주문 추천이나 수익 보장이 아님 | 없음 |
 | 분석 | 신호 신뢰도, 유사 표본, 최대 상승·하락과 손익비 | 구현됨 | 표본 부족 시 `insufficient-data` | 없음 |
-| 분석 | 단타·스윙·장기 익절·손절 계획 | 명세만 존재 | HTML mock과 계산 명세만 있고 엔진 응답에는 미연결 | 없음 |
+| 분석 | 시장·통화·출처·주기·기준 시각·지연 metadata | 구현됨 | `market`, `currency`, `dataSource`, `timeframe`, `quoteAt`, `stale`을 응답과 UI에 표시 | 없음 |
+| 분석 | 단타·스윙·장기 익절·손절 계획 | 구현됨 | 필수 봉·지표가 없으면 고정 퍼센트 대신 `계산 불가` 또는 `조건 대기` 반환 | 없음 |
 | 브리핑 | US·KR 시장 브리핑, 주도 후보, 진입 후보 큐 | 구현됨 | 시장 데이터 실패 시 safe fallback 사용 | 없음 |
-| 뉴스 | 공식/RSS 뉴스 이벤트와 신뢰도 표시 | 구현됨 | best-effort이며 분석·자동화를 차단하지 않음 | 없음 |
+| 뉴스 | 공식/RSS 뉴스 이벤트, 2분 polling과 신뢰도 표시 | 부분 구현 | streaming이 아니며 single-flight·소스별 오류 backoff를 사용 | 없음 |
+| 민심 | 종목별 커뮤니티 공포·과열·분열 점수와 근거 링크 | 부분 구현 | 30분 캐시, 낮은 표본 우선 표시, Reddit OAuth는 앱 Keychain에서 선택 연결 | 없음 |
 | 자산 | 웹 포트폴리오 등록·손익·오늘 할 일 | 구현됨 | 웹 fallback/admin 화면에서 제공 | 없음 |
 | 자산 | Toss 보유 조회, 매수 가능 금액과 미체결 주문 조회 | 외부 설정 필요 | 검증된 Toss credential과 계좌 필요 | 없음 |
 | 전략 | `ladder`, `percent-grid`, `loop-grid` 전략 계약 | 구현됨 | 저장, 시뮬레이션과 활성화 단계가 분리됨 | 직접 제출 안 함 |
+| 전략 | 주식 고정 수량·코인 고정 주문금액과 실시간 주문 미리보기 | 구현됨 | `orderSizing`이 없는 기존 전략은 금액 기준을 유지하고 코인 수량은 최대 8자리 | 거래소별 precheck 필요 |
+| 전략 | 추가매수 중단선·평단/진입가 손절·실패 재시도 | 구현됨 | 손절 성공 시 paper 전량 청산 후 전략을 disabled로 전환하고 시뮬레이션을 폐기 | 없음 |
 | 전략 | 1% 반복과 분할차수 전략의 trigger·state 계산 | 구현됨 | 실제 체결가, 쿨다운과 위험 제한 사용 | 직접 제출 안 함 |
 | 전략 | 문장형 블록, 동적 1~20차, 직접 만들기 | HTML 시안 | 실제 `RepeatPolicy`와 `custom` 계약 연결 전 | 없음 |
 | 자동화 | 전략 CRUD, config hash 시뮬레이션, 활성화 | 구현됨 | 현재 시뮬레이션 통과 전 활성화 차단 | 없음 |
-| 자동화 | 1회 실행, 연속 scheduler, worker pause | 구현됨 | scheduler 기본 OFF, 중복 cycle 방지 | 조건부 |
+| 자동화 | 1회 실행, 연속 scheduler, worker pause | 구현됨 | scheduler 기본 OFF, 중복 cycle 방지, 데스크톱 1.0.0은 paper-only | 없음 |
 | 모의투자 | 페이퍼 주문·체결·보유·감사 로그 | 구현됨 | 로컬 저장소 사용, 실브로커 호출 없음 | 없음 |
-| 주문 안전 | holdings, precheck, sync, `OrderIntent`, `RiskCheck` | 구현됨 | precheck와 preview만으로 주문되지 않음 | 조건부 |
-| 안전장치 | 운영자·사용자 live gate, worker control, kill switch | 구현됨 | 하나라도 닫히면 제출 차단 | 차단 경계 |
+| 주문 안전 | holdings, precheck, sync, `OrderIntent`, `RiskCheck` | 구현됨 | 조회·사전검증 계약은 사용 가능, 데스크톱 1.0.0 제출은 차단 | 없음 |
+| 안전장치 | 운영자·사용자 live gate, worker control, kill switch | 구현됨 | 향후 제출 경계를 유지하되 1.0.0은 broker 이전에서 강제 차단 | 차단 경계 |
 | Toss | credential 검증·저장, 계좌 선택, 공인 IP 확인 | 외부 설정 필요 | 사용자 키와 Toss 허용 IP 등록 필요 | 없음 |
-| Toss | 국내·미국 주식 주문 어댑터 | 외부 설정 필요 | 모든 안전 경계를 통과한 limit 주문만 가능 | 조건부 |
-| 코인 | Upbit·Bithumb credential 검증과 주문 사전검증 | 외부 설정 필요 | 거래소별 키와 별도 crypto live gate 필요 | 없음 |
-| 코인 | Upbit·Bithumb limit 주문 어댑터 | 외부 설정 필요 | market buy는 차단, audit 기록 필수 | 조건부 |
-| 배포 | arm64/x64 앱·DMG·ZIP·manifest 생성과 검증 | 구현됨 | 아키텍처별 Node 런타임 번들 | 없음 |
+| Toss | 국내·미국 주식 주문 어댑터 | 부분 구현 | 데스크톱 1.0.0은 credential·계좌·보유·미체결·precheck만 사용하고 live 제출 강제 차단 | 없음 |
+| 코인 | Upbit·Bithumb credential, 잔고·주문가능정보·현재가·최소금액 사전검증 | 외부 설정 필요 | 거래소별 API 키 필요, 실제 주문은 호출하지 않음 | 없음 |
+| 코인 | Upbit·Bithumb limit 주문 어댑터 | 부분 구현 | 1.0.0은 체결·부분체결 동기화 전까지 live 경로를 강제 차단 | 없음 |
+| 배포 | arm64/x64 앱·DMG·ZIP·manifest 생성·설치 검증 | 구현됨 | 생성·검증 도구가 구현됨. 1.0.0 로컬 검증 기록은 릴리스 이력에 보존되며, 새 패키지는 아키텍처별로 다시 검증해야 함 | 없음 |
 | 배포 | Gatekeeper 경고 없는 공개 배포 | 외부 설정 필요 | Developer ID, notarization과 stapling 필요 | 없음 |
 
 ## 현재 macOS 사용자 흐름
 
-현재 SwiftUI는 `beginner-first.html`이 아니라 터미널형 대시보드다.
+현재 기본 창은 승인된 `beginner-first-v3.html`의 정보 구조를 적용한 SwiftUI `BeginnerFirstRootView`다.
 
 1. 앱이 번들된 TypeScript sidecar를 `127.0.0.1`에서 자동 시작한다.
-2. 상단 검색에서 종목과 US/KR 세션을 선택하고 분석 또는 브리핑을 실행한다.
-3. `Toss`, `코인`, `전략`, `점검`, `배포`, `로그` 시트에서 고급 기능을 연다.
-4. Toss 또는 거래소 credential 등록은 선택 사항이며, 등록하지 않아도 로컬 분석과 모의투자를 사용할 수 있다.
-5. 전략은 초안 저장, 시뮬레이션, 활성화 순서로 준비한다.
-6. 자동화 dry-run과 사전검증은 broker submit을 호출하지 않는다.
-7. 실거래는 모든 live gate와 위험 검사를 통과한 경우에만 adapter까지 도달한다.
+2. 첫 실행에서는 `삼성전자 예제 분석 시작`, `내 API 연결하기`, `나중에 연결` 중 하나를 선택한다. API 연결은 메인 화면 진입 조건이 아니다.
+3. 왼쪽의 차트·내 자산·전략·자동화와 설정에서 필요한 화면을 열고, 상단에서 주식·코인과 종목을 선택한다.
+4. 주식은 Toss가 연결되지 않았으면 Yahoo fallback으로, 코인은 API 키 없이 Upbit 공개 REST로 분석한다.
+5. 분석 화면은 최근 종가와 일봉 차트 뒤에 단타·스윙·장기 계획, 신호, 뉴스·민심 근거를 점진적으로 표시한다.
+6. 모의 주문은 사용자가 drawer를 연 뒤에만 기존 paper 흐름으로 진행하며 실브로커를 호출하지 않는다.
+7. 전략 설정은 `초안 저장 → 조건 확인 → 시뮬레이션 → 활성화` 순서와 scheduler·worker·kill switch 동작을 유지한다.
+8. 데스크톱 1.0.0은 Toss와 코인 모두 paper 자동화만 허용하며 broker submit에 도달하지 않는다.
 
-차트 중심 사이드바, 필수 Toss 온보딩, 코인 차트 잠금, 주문 서랍과 문장형 전략 조립기는 [초보자 중심 HTML 시안](ux-prototypes/macos-native/beginner-first.html)에만 있다.
+문장형 전략 조립기는 여전히 HTML 시안이다. Beginner-first 레이아웃 적용이 기존 전략 계약이나 자동화 순서를 변경한 것은 아니다.
 
 ## 시장 분석과 브리핑
 
 ### 구현된 분석 계약
 
 - `/api/market/:symbol`과 local engine은 가격, 지표, 지지·저항, 패턴과 실행 참고 정보를 반환한다.
+- `/api/local/analysis/workspace`는 주식의 `1h·1d`, 코인의 `1h·4h·1d` 분석과 보유기간별 계획을 한 응답으로 제공한다.
+- 주식 단타는 일봉 위험 필터와 확정 1시간봉 진입, 스윙은 일봉 방향과 확정 1시간봉 진입을 사용한다. 6.5시간 정규장의 부분 4시간봉은 핵심 조건으로 사용하지 않는다.
+- 코인 단타·스윙은 일봉 방향, 4시간봉 진입과 1시간봉 재확인을 조합한다.
+- 데스크톱 코인 분석 입력은 현재 `KRW-*`만 허용한다. BTC·USDT 호가 시장을 KRW 데이터로 바꿔 표시하지 않고 명시적으로 거절한다.
+- 장기 10개월 이동평균은 진행 중인 현재 달을 제외하고 완료된 월 종가만 사용한다.
+- workspace의 각 주기 분석 응답은 시장, 통화, 데이터 출처, 주기, 기준 시각과 지연 상태를 함께 반환한다.
 - `breakoutRule`은 신고가, 거래량, 손절 보조선과 추적 상태를 표현한다.
 - `tradeSetup`은 핵심 기준선, 실패선, 유효·무효 조건과 진입 방식을 표현한다.
 - `signalReliability`는 유사 신호 표본과 최대 상승·하락을 제공하며 매수 확정값으로 사용하지 않는다.
 - 시장 리포트의 `entryCandidates`는 `tradable`, `probe`, `armed`, `watch`, `blocked` 상태로 자동화 준비도를 구분한다.
 - 페이퍼 실행은 `entryCandidates`를 사용할 수 있지만 UI의 분석 결과가 실브로커를 직접 호출하지 않는다.
 
-### 아직 연결되지 않은 분석
+### 보유 기간별 익절·손절 계획
 
-[보유 기간별 익절·손절 명세](ux-prototypes/macos-native/horizon-exit-plan-spec.md)는 다음 계약을 정의하지만 현재 분석 엔진의 공개 응답에는 없다.
+[보유 기간별 익절·손절 명세](ux-prototypes/macos-native/horizon-exit-plan-spec.md)는 분석 workspace와 SwiftUI에 연결돼 있다.
 
-- 단타: 15분봉, VWAP, HMA20, ATR14와 최근 구조
-- 스윙: 일봉·4시간봉, failure level, ATR14와 Chandelier
-- 장기: SMA200, 주봉 추세와 종가 기준 무효선
-
-필수 봉이나 지표가 없을 때 임의 퍼센트로 대체하지 않고 `계산 불가`를 반환하는 구현이 필요하다.
+- 단타: 주식은 일봉 위험 필터·1시간봉 진입, 코인은 4시간 위험 필터·1시간봉 진입
+- 스윙: 주식은 일봉 방향·1시간봉 진입, 코인은 일봉 방향·4시간봉 진입·1시간봉 재확인
+- 장기: 일봉·주봉 구조, SMA200과 종가 기준 무효선
+- 손절·익절은 분석 참고값이며 broker stop으로 자동 제출하지 않는다.
+- 필수 봉이나 지표가 없거나 데이터가 오래되면 임의 퍼센트로 대체하지 않고 `계산 불가` 또는 `조건 대기`를 반환한다.
 
 ## 전략과 자동화
 
@@ -108,16 +120,16 @@
 
 ## 브로커와 주문 안전
 
-실제 제출 가능 경로는 다음 순서를 바꿀 수 없다.
+향후 실제 제출을 다시 열 때도 다음 순서를 바꿀 수 없다. 현재 데스크톱 1.0.0은 이 경로에 들어가기 전에 Toss와 코인 제출을 차단한다.
 
 ```text
 전략 신호
 → OrderIntent
 → RiskCheck
 → 검증된 broker credential
-→ 실행 계좌 또는 거래소 선택
+→ 실행 계좌 선택
 → 운영자 live gate
-→ 사용자 또는 crypto live gate
+→ 사용자 live gate
 → worker control
 → kill switch
 → broker adapter
@@ -128,12 +140,14 @@
 - UI, 분석 코드와 뉴스 신호는 broker adapter를 직접 호출하지 않는다.
 - 실거래가 켜져 있어도 `RiskCheck` 실패, worker pause 또는 kill switch가 제출을 차단한다.
 - 모든 제출·차단·거절·실패는 로컬 audit trail에 기록한다.
+- Toss는 1.0.0에서 credential·계좌·보유·미체결·precheck를 제공하지만 실제 주문 생성·정정·취소는 차단한다.
+- Upbit·Bithumb은 1.0.0에서 credential·잔고·주문가능정보·현재가 확인과 paper 자동화까지만 제공한다. 실제 코인 주문은 체결 동기화와 재시작 멱등성 검증 전까지 sidecar에서 차단한다.
 
 ## 배포 상태
 
-`yarn mac:app`은 현재 Mac용 `dist/macos/StockAnalysis.app`을 만들고 번들 Node와 sidecar를 포함한다. `yarn mac:package:all`은 arm64와 x64용 DMG·ZIP·manifest를 각각 만든다.
+`yarn mac:app`은 package version을 Info.plist와 sidecar에 일치시킨 `dist/macos/StockAnalysis.app`을 만들고, 고정된 Node 22.17.0 런타임과 sidecar를 포함한다. arm64/x64 DMG·ZIP·manifest의 1.0.0 생성·검증 결과는 [릴리스 이력](releases/v1.0.0.md)에 보존한다.
 
-로컬 ad-hoc 앱은 빌드·서명·sidecar·실행 검증을 통과했다. 다른 Mac에 일반 배포하기 전에는 다음이 추가로 필요하다.
+새 패키지를 배포 증거로 사용하려면 해당 패키지의 install verification에서 `sidecarVerified`, `sidecarEndpointVerified`, `appLaunchVerified`, `uiSmokeVerified=true`를 다시 확인한다. UI smoke는 1440×900과 최소 1024×720 콘텐츠 영역을 확인하고 실제 주문 제출 버튼을 누르지 않는다. 경고 없는 공개 배포 판정에는 다음이 추가로 필요하다.
 
 - Developer ID Application 인증서
 - hardened runtime 서명

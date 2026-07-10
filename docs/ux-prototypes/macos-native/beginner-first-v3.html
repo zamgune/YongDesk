@@ -1,0 +1,2295 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>YongStockDesk · Beginner-first 전략 UX v3</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #071019;
+      --bg-deep: #050b12;
+      --surface: #0d1823;
+      --surface-raised: #12212e;
+      --surface-soft: #172936;
+      --line: #213746;
+      --line-strong: #34556a;
+      --text: #eef6f8;
+      --muted: #93aab8;
+      --faint: #657b89;
+      --green: #49d9b0;
+      --green-soft: rgba(73, 217, 176, 0.13);
+      --blue: #71aefe;
+      --blue-soft: rgba(113, 174, 254, 0.13);
+      --amber: #f4ba70;
+      --amber-soft: rgba(244, 186, 112, 0.13);
+      --red: #ff8189;
+      --red-soft: rgba(255, 129, 137, 0.13);
+      --sidebar: 210px;
+      --radius: 16px;
+      --shadow: 0 22px 65px rgba(0, 0, 0, 0.34);
+    }
+
+    * { box-sizing: border-box; }
+
+    html,
+    body {
+      width: 100%;
+      height: 100%;
+      margin: 0;
+      overflow: hidden;
+      color: var(--text);
+      background: var(--bg-deep);
+      font-family: -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Pretendard", "Noto Sans KR", sans-serif;
+    }
+
+    button,
+    input,
+    select { font: inherit; }
+
+    button { color: inherit; }
+
+    button:focus-visible,
+    input:focus-visible,
+    select:focus-visible,
+    summary:focus-visible {
+      outline: 3px solid rgba(113, 174, 254, 0.55);
+      outline-offset: 2px;
+    }
+
+    button:disabled {
+      cursor: not-allowed;
+      opacity: 0.43;
+    }
+
+    [hidden] { display: none !important; }
+
+    .sr-only {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      white-space: nowrap;
+      border: 0;
+    }
+
+    .app {
+      width: 100%;
+      height: 100%;
+      display: grid;
+      grid-template-columns: var(--sidebar) minmax(0, 1fr);
+      background:
+        radial-gradient(circle at 72% -18%, rgba(73, 217, 176, 0.08), transparent 38%),
+        var(--bg);
+    }
+
+    .sidebar {
+      min-height: 0;
+      padding: 20px 14px 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 18px;
+      border-right: 1px solid var(--line);
+      background: rgba(5, 12, 19, 0.95);
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 11px;
+      padding: 0 7px;
+    }
+
+    .brand-mark {
+      width: 37px;
+      height: 37px;
+      display: grid;
+      place-items: center;
+      border: 1px solid rgba(73, 217, 176, 0.34);
+      border-radius: 11px;
+      color: var(--green);
+      background: linear-gradient(145deg, rgba(73, 217, 176, 0.2), rgba(113, 174, 254, 0.08));
+      font-size: 13px;
+      font-weight: 900;
+    }
+
+    .brand-copy strong,
+    .brand-copy span { display: block; }
+
+    .brand-copy strong { font-size: 14px; }
+
+    .brand-copy span {
+      margin-top: 2px;
+      color: var(--faint);
+      font-size: 10px;
+    }
+
+    .nav-group { display: grid; gap: 7px; }
+
+    .nav-label {
+      margin: 0 8px 4px;
+      color: var(--faint);
+      font-size: 10px;
+      font-weight: 800;
+      letter-spacing: 0.09em;
+      text-transform: uppercase;
+    }
+
+    .nav-button {
+      width: 100%;
+      min-height: 43px;
+      padding: 9px 11px;
+      display: flex;
+      align-items: center;
+      gap: 11px;
+      border: 1px solid transparent;
+      border-radius: 11px;
+      color: var(--muted);
+      background: transparent;
+      cursor: pointer;
+      text-align: left;
+      font-weight: 730;
+    }
+
+    .nav-button:hover {
+      color: var(--text);
+      background: rgba(255, 255, 255, 0.035);
+    }
+
+    .nav-button[aria-current="page"] {
+      border-color: rgba(73, 217, 176, 0.27);
+      color: var(--text);
+      background: var(--green-soft);
+    }
+
+    .nav-icon {
+      width: 27px;
+      height: 27px;
+      display: grid;
+      place-items: center;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      color: var(--faint);
+      font-size: 11px;
+      font-weight: 900;
+    }
+
+    .nav-button[aria-current="page"] .nav-icon {
+      border-color: rgba(73, 217, 176, 0.38);
+      color: var(--green);
+      background: rgba(73, 217, 176, 0.08);
+    }
+
+    .nav-tag {
+      margin-left: auto;
+      color: var(--faint);
+      font-size: 9px;
+      font-weight: 800;
+    }
+
+    .sidebar-bottom {
+      margin-top: auto;
+      display: grid;
+      gap: 10px;
+    }
+
+    .side-status {
+      padding: 12px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: rgba(255, 255, 255, 0.025);
+    }
+
+    .side-status strong,
+    .side-status span { display: block; }
+
+    .side-status strong { font-size: 11px; }
+
+    .side-status span {
+      margin-top: 5px;
+      color: var(--faint);
+      font-size: 10px;
+      line-height: 1.45;
+    }
+
+    .main {
+      min-width: 0;
+      min-height: 0;
+      display: grid;
+      grid-template-rows: 68px minmax(0, 1fr);
+    }
+
+    .topbar {
+      min-width: 0;
+      padding: 11px 20px;
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      border-bottom: 1px solid var(--line);
+      background: rgba(7, 16, 25, 0.91);
+      backdrop-filter: blur(16px);
+    }
+
+    .topbar-title {
+      min-width: 0;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .topbar-title strong {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-size: 14px;
+    }
+
+    .topbar-spacer { flex: 1; }
+
+    .data-state {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--muted);
+      font-size: 11px;
+      white-space: nowrap;
+    }
+
+    .state-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--green);
+      box-shadow: 0 0 0 4px rgba(73, 217, 176, 0.1);
+    }
+
+    .paper-badge,
+    .mock-badge,
+    .status-badge {
+      display: inline-flex;
+      align-items: center;
+      min-height: 26px;
+      padding: 4px 9px;
+      border-radius: 999px;
+      font-size: 10px;
+      font-weight: 850;
+      white-space: nowrap;
+    }
+
+    .paper-badge {
+      border: 1px solid rgba(73, 217, 176, 0.42);
+      color: var(--green);
+      background: var(--green-soft);
+      letter-spacing: 0.07em;
+    }
+
+    .mock-badge {
+      border: 1px solid var(--line);
+      color: var(--muted);
+      background: rgba(255, 255, 255, 0.025);
+    }
+
+    .status-badge.green { color: var(--green); background: var(--green-soft); }
+    .status-badge.blue { color: var(--blue); background: var(--blue-soft); }
+    .status-badge.amber { color: var(--amber); background: var(--amber-soft); }
+    .status-badge.red { color: var(--red); background: var(--red-soft); }
+
+    .workspace {
+      min-width: 0;
+      min-height: 0;
+      overflow: auto;
+      scrollbar-gutter: stable;
+    }
+
+    .page {
+      width: min(1180px, 100%);
+      margin: 0 auto;
+      padding: 24px 24px 42px;
+    }
+
+    .page-head {
+      display: flex;
+      align-items: flex-start;
+      gap: 18px;
+      margin-bottom: 18px;
+    }
+
+    .page-head-copy { min-width: 0; }
+
+    .eyebrow {
+      margin: 0 0 6px;
+      color: var(--green);
+      font-size: 10px;
+      font-weight: 850;
+      letter-spacing: 0.08em;
+    }
+
+    h1,
+    h2,
+    h3,
+    p { margin-top: 0; }
+
+    h1 {
+      margin-bottom: 7px;
+      font-size: clamp(24px, 2.4vw, 32px);
+      letter-spacing: -0.04em;
+    }
+
+    .page-head p {
+      max-width: 710px;
+      margin-bottom: 0;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.55;
+    }
+
+    .page-head-actions {
+      margin-left: auto;
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+
+    .primary,
+    .secondary,
+    .ghost,
+    .danger,
+    .small-button,
+    .choice-card,
+    .quick-chip {
+      border-radius: 10px;
+      cursor: pointer;
+      transition: 140ms ease;
+    }
+
+    .primary,
+    .secondary,
+    .ghost,
+    .danger {
+      min-height: 39px;
+      padding: 8px 13px;
+      border: 1px solid transparent;
+      font-weight: 770;
+    }
+
+    .primary {
+      color: #03110d;
+      background: var(--green);
+      box-shadow: 0 9px 24px rgba(73, 217, 176, 0.14);
+    }
+
+    .primary:hover:not(:disabled) {
+      background: #68e4be;
+      transform: translateY(-1px);
+    }
+
+    .secondary {
+      border-color: var(--line-strong);
+      color: var(--text);
+      background: var(--surface-raised);
+    }
+
+    .secondary:hover:not(:disabled),
+    .ghost:hover:not(:disabled) {
+      border-color: var(--blue);
+      background: var(--blue-soft);
+    }
+
+    .ghost {
+      border-color: transparent;
+      color: var(--muted);
+      background: transparent;
+    }
+
+    .danger {
+      border-color: rgba(255, 129, 137, 0.42);
+      color: var(--red);
+      background: var(--red-soft);
+    }
+
+    .step-rail {
+      margin-bottom: 18px;
+      padding: 10px;
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 8px;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: rgba(13, 24, 35, 0.7);
+    }
+
+    .step-link {
+      min-width: 0;
+      padding: 9px 10px;
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      border: 0;
+      border-radius: 10px;
+      color: var(--muted);
+      background: transparent;
+      cursor: pointer;
+      text-align: left;
+    }
+
+    .step-link:hover { background: rgba(255, 255, 255, 0.035); }
+
+    .step-number {
+      flex: 0 0 auto;
+      width: 25px;
+      height: 25px;
+      display: grid;
+      place-items: center;
+      border: 1px solid var(--line-strong);
+      border-radius: 50%;
+      color: var(--green);
+      font-size: 10px;
+      font-weight: 900;
+    }
+
+    .step-link strong {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-size: 11px;
+    }
+
+    .strategy-layout {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 350px;
+      gap: 16px;
+      align-items: start;
+    }
+
+    .form-stack { display: grid; gap: 14px; }
+
+    .card {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: linear-gradient(160deg, rgba(18, 33, 46, 0.97), rgba(11, 23, 33, 0.97));
+      box-shadow: 0 12px 35px rgba(0, 0, 0, 0.13);
+    }
+
+    .card-body { padding: 18px; }
+
+    .card-head {
+      margin-bottom: 15px;
+      display: flex;
+      align-items: flex-start;
+      gap: 12px;
+    }
+
+    .card-index {
+      flex: 0 0 auto;
+      width: 31px;
+      height: 31px;
+      display: grid;
+      place-items: center;
+      border: 1px solid rgba(73, 217, 176, 0.34);
+      border-radius: 10px;
+      color: var(--green);
+      background: var(--green-soft);
+      font-size: 12px;
+      font-weight: 900;
+    }
+
+    .card-head-copy { min-width: 0; }
+
+    .card-head h2,
+    .card-head h3 {
+      margin-bottom: 4px;
+      font-size: 16px;
+      letter-spacing: -0.02em;
+    }
+
+    .card-head p {
+      margin-bottom: 0;
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.45;
+    }
+
+    .card-head .mock-badge { margin-left: auto; }
+
+    .segmented {
+      display: inline-flex;
+      padding: 3px;
+      gap: 3px;
+      border: 1px solid var(--line);
+      border-radius: 11px;
+      background: rgba(5, 12, 19, 0.56);
+    }
+
+    .segmented button {
+      min-height: 34px;
+      padding: 6px 14px;
+      border: 0;
+      border-radius: 8px;
+      color: var(--muted);
+      background: transparent;
+      cursor: pointer;
+      font-weight: 760;
+    }
+
+    .segmented button[aria-pressed="true"] {
+      color: var(--text);
+      background: var(--surface-soft);
+      box-shadow: inset 0 0 0 1px var(--line-strong);
+    }
+
+    .instrument-top {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+
+    .instrument-select {
+      min-width: 210px;
+      height: 41px;
+      padding: 0 12px;
+      border: 1px solid var(--line-strong);
+      border-radius: 10px;
+      color: var(--text);
+      background: var(--surface);
+    }
+
+    .quote-grid {
+      margin-top: 14px;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+      gap: 10px;
+    }
+
+    .quote-box {
+      min-width: 0;
+      padding: 13px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: rgba(5, 12, 19, 0.45);
+    }
+
+    .quote-label {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      color: var(--muted);
+      font-size: 10px;
+      font-weight: 780;
+    }
+
+    .quote-value {
+      margin-top: 7px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .quote-value strong {
+      font-size: 21px;
+      letter-spacing: -0.025em;
+    }
+
+    .quote-meta {
+      margin-top: 5px;
+      color: var(--faint);
+      font-size: 9px;
+      line-height: 1.4;
+    }
+
+    .anchor-input-wrap {
+      margin-top: 7px;
+      display: flex;
+      align-items: center;
+      gap: 7px;
+    }
+
+    .number-input {
+      width: 100%;
+      min-width: 0;
+      height: 40px;
+      padding: 0 11px;
+      border: 1px solid var(--line-strong);
+      border-radius: 9px;
+      color: var(--text);
+      background: var(--surface);
+      font-variant-numeric: tabular-nums;
+    }
+
+    .small-button {
+      flex: 0 0 auto;
+      min-height: 36px;
+      padding: 7px 10px;
+      border: 1px solid var(--line-strong);
+      color: var(--text);
+      background: var(--surface-raised);
+      font-size: 10px;
+      font-weight: 780;
+    }
+
+    .info-note,
+    .warning-note,
+    .success-note {
+      margin-top: 12px;
+      padding: 10px 11px;
+      border-radius: 10px;
+      font-size: 10px;
+      line-height: 1.5;
+    }
+
+    .info-note {
+      border: 1px solid rgba(113, 174, 254, 0.25);
+      color: #b9d5fb;
+      background: var(--blue-soft);
+    }
+
+    .warning-note {
+      border: 1px solid rgba(244, 186, 112, 0.27);
+      color: #f5d5ab;
+      background: var(--amber-soft);
+    }
+
+    .success-note {
+      border: 1px solid rgba(73, 217, 176, 0.28);
+      color: #b8f2df;
+      background: var(--green-soft);
+    }
+
+    .choice-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 9px;
+    }
+
+    .choice-card {
+      min-width: 0;
+      padding: 12px;
+      border: 1px solid var(--line);
+      color: var(--muted);
+      background: rgba(5, 12, 19, 0.4);
+      text-align: left;
+    }
+
+    .choice-card:hover { border-color: var(--line-strong); }
+
+    .choice-card[aria-pressed="true"] {
+      border-color: rgba(73, 217, 176, 0.5);
+      color: var(--text);
+      background: var(--green-soft);
+      box-shadow: inset 0 0 0 1px rgba(73, 217, 176, 0.12);
+    }
+
+    .choice-card strong,
+    .choice-card span { display: block; }
+
+    .choice-card strong { font-size: 12px; }
+
+    .choice-card span {
+      margin-top: 4px;
+      color: var(--muted);
+      font-size: 10px;
+      line-height: 1.4;
+    }
+
+    .field-grid {
+      margin-top: 14px;
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .field {
+      min-width: 0;
+      padding: 12px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: rgba(5, 12, 19, 0.37);
+    }
+
+    .field-label {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      color: var(--muted);
+      font-size: 10px;
+      font-weight: 780;
+    }
+
+    .field-label output {
+      margin-left: auto;
+      color: var(--text);
+      font-size: 12px;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .stepper {
+      margin-top: 9px;
+      display: grid;
+      grid-template-columns: 39px minmax(0, 1fr) 39px;
+      align-items: center;
+      border: 1px solid var(--line-strong);
+      border-radius: 10px;
+      overflow: hidden;
+      background: var(--surface);
+    }
+
+    .stepper button {
+      height: 39px;
+      border: 0;
+      color: var(--blue);
+      background: rgba(113, 174, 254, 0.07);
+      cursor: pointer;
+      font-size: 18px;
+      font-weight: 700;
+    }
+
+    .stepper output {
+      text-align: center;
+      font-size: 14px;
+      font-weight: 850;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .field-help {
+      margin: 8px 0 0;
+      color: var(--faint);
+      font-size: 9px;
+      line-height: 1.4;
+    }
+
+    .quick-chips {
+      margin-top: 9px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+
+    .quick-chip {
+      min-height: 31px;
+      padding: 5px 9px;
+      border: 1px solid var(--line);
+      color: var(--muted);
+      background: var(--surface);
+      font-size: 10px;
+      font-weight: 750;
+    }
+
+    .quick-chip[aria-pressed="true"] {
+      border-color: rgba(73, 217, 176, 0.48);
+      color: var(--green);
+      background: var(--green-soft);
+    }
+
+    input[type="range"] {
+      width: 100%;
+      margin: 12px 0 0;
+      accent-color: var(--green);
+    }
+
+    .metric-strip {
+      margin-top: 10px;
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 8px;
+    }
+
+    .metric {
+      min-width: 0;
+      padding: 10px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: rgba(5, 12, 19, 0.38);
+    }
+
+    .metric span,
+    .metric strong { display: block; }
+
+    .metric span {
+      color: var(--faint);
+      font-size: 9px;
+    }
+
+    .metric strong {
+      margin-top: 5px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      color: var(--text);
+      font-size: 11px;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .advanced {
+      margin-top: 12px;
+      border-top: 1px solid var(--line);
+      padding-top: 11px;
+    }
+
+    .advanced summary {
+      color: var(--muted);
+      cursor: pointer;
+      font-size: 10px;
+      font-weight: 780;
+    }
+
+    .advanced-content {
+      margin-top: 10px;
+      display: grid;
+      gap: 9px;
+    }
+
+    .simple-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      color: var(--muted);
+      font-size: 10px;
+    }
+
+    .simple-row select {
+      height: 34px;
+      padding: 0 9px;
+      border: 1px solid var(--line-strong);
+      border-radius: 8px;
+      color: var(--text);
+      background: var(--surface);
+    }
+
+    .sticky-preview {
+      position: sticky;
+      top: 18px;
+      overflow: hidden;
+      box-shadow: var(--shadow);
+    }
+
+    .preview-head {
+      padding: 17px;
+      border-bottom: 1px solid var(--line);
+      background: rgba(73, 217, 176, 0.055);
+    }
+
+    .preview-head-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .preview-head h2 {
+      margin: 0;
+      font-size: 16px;
+    }
+
+    .preview-head .status-badge { margin-left: auto; }
+
+    .preview-head p {
+      margin: 7px 0 0;
+      color: var(--muted);
+      font-size: 10px;
+      line-height: 1.45;
+    }
+
+    .preview-body { padding: 16px; }
+
+    .preview-hero {
+      padding-bottom: 13px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .preview-symbol {
+      display: flex;
+      align-items: baseline;
+      gap: 7px;
+    }
+
+    .preview-symbol strong { font-size: 18px; }
+
+    .preview-symbol span {
+      color: var(--faint);
+      font-size: 10px;
+    }
+
+    .sentence {
+      margin: 10px 0 0;
+      color: #dce9ed;
+      font-size: 12px;
+      line-height: 1.55;
+    }
+
+    .ladder {
+      margin-top: 13px;
+      display: grid;
+      gap: 7px;
+    }
+
+    .ladder-row {
+      padding: 9px 10px;
+      display: grid;
+      grid-template-columns: 45px minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 8px;
+      border: 1px solid var(--line);
+      border-radius: 9px;
+      background: rgba(5, 12, 19, 0.4);
+      font-size: 10px;
+    }
+
+    .ladder-row .rung {
+      color: var(--blue);
+      font-weight: 850;
+    }
+
+    .ladder-row .price {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      font-weight: 760;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .ladder-row .size {
+      color: var(--muted);
+      white-space: nowrap;
+    }
+
+    .exit-grid {
+      margin-top: 13px;
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+    }
+
+    .exit-box {
+      padding: 10px;
+      border-radius: 10px;
+    }
+
+    .exit-box.profit {
+      border: 1px solid rgba(73, 217, 176, 0.28);
+      background: var(--green-soft);
+    }
+
+    .exit-box.stop {
+      border: 1px solid rgba(255, 129, 137, 0.28);
+      background: var(--red-soft);
+    }
+
+    .exit-box span,
+    .exit-box strong { display: block; }
+
+    .exit-box span {
+      color: var(--muted);
+      font-size: 9px;
+    }
+
+    .exit-box strong {
+      margin-top: 5px;
+      font-size: 11px;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .risk-summary {
+      margin-top: 13px;
+      padding: 11px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: rgba(5, 12, 19, 0.42);
+    }
+
+    .risk-summary-row {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      font-size: 10px;
+    }
+
+    .risk-summary-row + .risk-summary-row { margin-top: 7px; }
+
+    .risk-summary-row span { color: var(--muted); }
+
+    .risk-summary-row strong {
+      text-align: right;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .contract-note {
+      margin-top: 12px;
+      padding: 10px;
+      border: 1px dashed rgba(244, 186, 112, 0.42);
+      border-radius: 10px;
+      color: #f1d2a8;
+      background: rgba(244, 186, 112, 0.07);
+      font-size: 9px;
+      line-height: 1.45;
+    }
+
+    .workflow {
+      margin-top: 13px;
+      padding-top: 13px;
+      border-top: 1px solid var(--line);
+    }
+
+    .workflow-status {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 5px;
+    }
+
+    .workflow-chip {
+      padding: 7px 5px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      color: var(--faint);
+      background: rgba(5, 12, 19, 0.35);
+      text-align: center;
+      font-size: 8px;
+      font-weight: 800;
+    }
+
+    .workflow-chip.done {
+      border-color: rgba(73, 217, 176, 0.3);
+      color: var(--green);
+      background: var(--green-soft);
+    }
+
+    .workflow-actions {
+      margin-top: 9px;
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 7px;
+    }
+
+    .workflow-actions button {
+      min-width: 0;
+      min-height: 38px;
+      padding: 7px 8px;
+      font-size: 10px;
+    }
+
+    .workflow-actions .wide { grid-column: 1 / -1; }
+
+    .automation-overview {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 10px;
+      margin-bottom: 14px;
+    }
+
+    .overview-card {
+      min-width: 0;
+      padding: 13px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: var(--surface);
+    }
+
+    .overview-card span,
+    .overview-card strong { display: block; }
+
+    .overview-card span {
+      color: var(--muted);
+      font-size: 9px;
+    }
+
+    .overview-card strong {
+      margin-top: 6px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-size: 14px;
+    }
+
+    .automation-layout {
+      display: grid;
+      grid-template-columns: minmax(0, 1.45fr) minmax(290px, 0.7fr);
+      gap: 14px;
+      align-items: start;
+    }
+
+    .section-title {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 12px;
+    }
+
+    .section-title h2 {
+      margin: 0;
+      font-size: 16px;
+    }
+
+    .section-title span {
+      margin-left: auto;
+      color: var(--muted);
+      font-size: 10px;
+    }
+
+    .active-strategy {
+      padding: 16px;
+      border: 1px solid rgba(73, 217, 176, 0.31);
+      border-radius: 14px;
+      background:
+        linear-gradient(145deg, rgba(73, 217, 176, 0.075), rgba(5, 12, 19, 0.35)),
+        var(--surface-raised);
+    }
+
+    .active-head {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+    }
+
+    .active-symbol {
+      width: 42px;
+      height: 42px;
+      display: grid;
+      place-items: center;
+      border: 1px solid rgba(73, 217, 176, 0.31);
+      border-radius: 12px;
+      color: var(--green);
+      background: var(--green-soft);
+      font-size: 10px;
+      font-weight: 900;
+    }
+
+    .active-copy { min-width: 0; }
+
+    .active-copy strong,
+    .active-copy span { display: block; }
+
+    .active-copy strong { font-size: 14px; }
+
+    .active-copy span {
+      margin-top: 4px;
+      color: var(--muted);
+      font-size: 10px;
+    }
+
+    .active-head .status-badge { margin-left: auto; }
+
+    .active-sentence {
+      margin: 13px 0 0;
+      padding: 11px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: rgba(5, 12, 19, 0.38);
+      font-size: 11px;
+      line-height: 1.55;
+    }
+
+    .active-details {
+      margin-top: 11px;
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 8px;
+    }
+
+    .active-detail {
+      min-width: 0;
+      padding: 9px;
+      border: 1px solid var(--line);
+      border-radius: 9px;
+      background: rgba(5, 12, 19, 0.3);
+    }
+
+    .active-detail span,
+    .active-detail strong { display: block; }
+
+    .active-detail span {
+      color: var(--faint);
+      font-size: 8px;
+    }
+
+    .active-detail strong {
+      margin-top: 5px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-size: 10px;
+    }
+
+    .active-actions {
+      margin-top: 12px;
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .timeline {
+      margin-top: 14px;
+      display: grid;
+      gap: 0;
+    }
+
+    .timeline-row {
+      padding: 11px 0;
+      display: grid;
+      grid-template-columns: 72px 11px minmax(0, 1fr) auto;
+      gap: 9px;
+      align-items: start;
+      border-top: 1px solid var(--line);
+      font-size: 10px;
+    }
+
+    .timeline-row time { color: var(--faint); }
+
+    .timeline-dot {
+      width: 8px;
+      height: 8px;
+      margin-top: 2px;
+      border-radius: 50%;
+      background: var(--green);
+    }
+
+    .timeline-copy strong,
+    .timeline-copy span { display: block; }
+
+    .timeline-copy strong { font-size: 10px; }
+
+    .timeline-copy span {
+      margin-top: 3px;
+      color: var(--muted);
+      line-height: 1.4;
+    }
+
+    .control-card { overflow: hidden; }
+
+    .control-block {
+      padding: 15px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .control-block:last-child { border-bottom: 0; }
+
+    .control-title {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .control-title strong { font-size: 12px; }
+
+    .control-title .status-badge { margin-left: auto; }
+
+    .control-block p {
+      margin: 7px 0 0;
+      color: var(--muted);
+      font-size: 9px;
+      line-height: 1.45;
+    }
+
+    .control-block .primary { width: 100%; margin-top: 11px; }
+
+    .control-row {
+      margin-top: 10px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+    }
+
+    .control-row select {
+      height: 35px;
+      padding: 0 9px;
+      border: 1px solid var(--line-strong);
+      border-radius: 8px;
+      color: var(--text);
+      background: var(--surface);
+      font-size: 10px;
+    }
+
+    .toggle {
+      position: relative;
+      width: 42px;
+      height: 24px;
+      padding: 0;
+      border: 1px solid var(--line-strong);
+      border-radius: 999px;
+      background: var(--surface);
+      cursor: pointer;
+    }
+
+    .toggle::after {
+      position: absolute;
+      top: 3px;
+      left: 3px;
+      width: 16px;
+      height: 16px;
+      border-radius: 50%;
+      background: var(--muted);
+      transition: 150ms ease;
+      content: "";
+    }
+
+    .toggle[aria-pressed="true"] {
+      border-color: rgba(73, 217, 176, 0.45);
+      background: var(--green-soft);
+    }
+
+    .toggle[aria-pressed="true"]::after {
+      left: 21px;
+      background: var(--green);
+    }
+
+    .danger-zone {
+      margin-top: 10px;
+      padding-top: 10px;
+      border-top: 1px solid var(--line);
+    }
+
+    .toast {
+      position: fixed;
+      z-index: 20;
+      right: 22px;
+      bottom: 20px;
+      max-width: min(390px, calc(100vw - 32px));
+      padding: 11px 14px;
+      border: 1px solid var(--line-strong);
+      border-radius: 11px;
+      color: var(--text);
+      background: rgba(14, 27, 38, 0.98);
+      box-shadow: var(--shadow);
+      font-size: 11px;
+      line-height: 1.45;
+      transform: translateY(14px);
+      opacity: 0;
+      pointer-events: none;
+      transition: 170ms ease;
+    }
+
+    .toast.visible {
+      transform: translateY(0);
+      opacity: 1;
+    }
+
+    @media (max-width: 1120px) {
+      :root { --sidebar: 174px; }
+      .page { padding: 18px 18px 36px; }
+      .strategy-layout { grid-template-columns: minmax(0, 1fr); }
+      .sticky-preview { position: static; }
+      .automation-layout { grid-template-columns: minmax(0, 1fr); }
+      .automation-overview { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+
+    @media (max-width: 760px) {
+      :root { --sidebar: 68px; }
+      .sidebar { padding: 14px 9px; }
+      .brand { justify-content: center; padding: 0; }
+      .brand-copy,
+      .nav-button > span:not(.nav-icon),
+      .nav-label,
+      .nav-tag,
+      .sidebar-bottom { display: none; }
+      .nav-button { justify-content: center; padding: 8px; }
+      .topbar { padding: 10px 12px; }
+      .data-state span:last-child { display: none; }
+      .page { padding: 16px 12px 30px; }
+      .page-head { display: block; }
+      .page-head-actions { margin: 11px 0 0; }
+      .step-rail { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .quote-grid,
+      .choice-grid,
+      .field-grid,
+      .metric-strip,
+      .active-details { grid-template-columns: minmax(0, 1fr); }
+      .automation-overview { grid-template-columns: minmax(0, 1fr); }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        scroll-behavior: auto !important;
+        transition-duration: 0.01ms !important;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar" aria-label="주요 메뉴">
+      <div class="brand">
+        <div class="brand-mark" aria-hidden="true">YS</div>
+        <div class="brand-copy">
+          <strong>YongStockDesk</strong>
+          <span>Beginner-first v3</span>
+        </div>
+      </div>
+
+      <nav class="nav-group" aria-label="워크스페이스">
+        <p class="nav-label">Workspace</p>
+        <button class="nav-button existing-page" type="button" data-existing="차트">
+          <span class="nav-icon" aria-hidden="true">C</span><span>차트</span><span class="nav-tag">기존</span>
+        </button>
+        <button class="nav-button existing-page" type="button" data-existing="내 자산">
+          <span class="nav-icon" aria-hidden="true">₩</span><span>내 자산</span><span class="nav-tag">기존</span>
+        </button>
+        <button id="nav-strategy" class="nav-button" type="button" data-page="strategy" aria-current="page">
+          <span class="nav-icon" aria-hidden="true">S</span><span>전략</span>
+        </button>
+        <button id="nav-automation" class="nav-button" type="button" data-page="automation">
+          <span class="nav-icon" aria-hidden="true">A</span><span>자동화</span><span id="nav-active-count" class="nav-tag">1 활성</span>
+        </button>
+      </nav>
+
+      <div class="sidebar-bottom">
+        <div class="side-status">
+          <strong>이 HTML은 시안입니다</strong>
+          <span>외부 API, 계좌, 주문 엔진을 호출하지 않습니다.</span>
+        </div>
+        <button class="nav-button existing-page" type="button" data-existing="설정">
+          <span class="nav-icon" aria-hidden="true">⋯</span><span>설정</span>
+        </button>
+      </div>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <div class="topbar-title">
+          <strong id="topbar-title">전략 설정</strong>
+          <span class="mock-badge">시안 데이터</span>
+        </div>
+        <div class="topbar-spacer"></div>
+        <div class="data-state"><span class="state-dot" aria-hidden="true"></span><span>공개 시세 예시 · 주문 미호출</span></div>
+        <span class="paper-badge">PAPER ONLY</span>
+      </header>
+
+      <div id="workspace" class="workspace">
+        <section id="page-strategy" class="page" aria-labelledby="strategy-heading">
+          <div class="page-head">
+            <div class="page-head-copy">
+              <p class="eyebrow">처음 만드는 자동매매</p>
+              <h1 id="strategy-heading" tabindex="-1">매매 문장으로 전략 만들기</h1>
+              <p>현재 가격을 확인한 뒤 주식은 몇 주, 코인은 얼마를 살지 정합니다. 입력할 때마다 오른쪽에서 예상 매수가·익절·손절과 최대 투자 규모를 확인할 수 있습니다.</p>
+            </div>
+            <div class="page-head-actions">
+              <span id="draft-state-badge" class="status-badge green">활성 전략 편집</span>
+              <button id="reset-draft" class="secondary" type="button">새 전략</button>
+            </div>
+          </div>
+
+          <div class="step-rail" aria-label="전략 설정 단계">
+            <button class="step-link" type="button" data-scroll="step-instrument"><span class="step-number">1</span><strong>종목과 기준가</strong></button>
+            <button class="step-link" type="button" data-scroll="step-size"><span class="step-number">2</span><strong>한 번에 살 수량</strong></button>
+            <button class="step-link" type="button" data-scroll="step-condition"><span class="step-number">3</span><strong>매수·정리 조건</strong></button>
+            <button class="step-link" type="button" data-scroll="strategy-preview"><span class="step-number">4</span><strong>검증 후 활성화</strong></button>
+          </div>
+
+          <div class="strategy-layout">
+            <div class="form-stack">
+              <section id="step-instrument" class="card" aria-labelledby="instrument-title">
+                <div class="card-body">
+                  <div class="card-head">
+                    <span class="card-index">1</span>
+                    <div class="card-head-copy">
+                      <h2 id="instrument-title">무엇을 거래할까요?</h2>
+                      <p>종목과 현재가를 먼저 확인합니다. 현재가는 참고값이고 전략 기준가는 저장 시 고정됩니다.</p>
+                    </div>
+                    <span class="mock-badge">시안 데이터</span>
+                  </div>
+
+                  <div class="instrument-top">
+                    <div class="segmented" aria-label="자산 종류">
+                      <button type="button" data-asset="stock" aria-pressed="true">주식</button>
+                      <button type="button" data-asset="crypto" aria-pressed="false">코인</button>
+                    </div>
+                    <label>
+                      <span class="sr-only">종목 선택</span>
+                      <select id="instrument-select" class="instrument-select">
+                        <option value="005930.KS">삼성전자 · 005930.KS</option>
+                        <option value="AAPL">Apple · AAPL</option>
+                      </select>
+                    </label>
+                  </div>
+
+                  <div class="quote-grid">
+                    <div class="quote-box">
+                      <div class="quote-label"><span class="state-dot" aria-hidden="true"></span>지금 확인한 현재가</div>
+                      <div class="quote-value"><strong id="current-price">84,200원</strong><button id="refresh-quote" class="small-button" type="button">가격 새로고침</button></div>
+                      <div id="quote-meta" class="quote-meta">최근 종가 · 공개 데이터 예시 · 2026.07.10 15:30 KST</div>
+                    </div>
+                    <div class="quote-box">
+                      <div class="quote-label">전략 기준가 <span class="status-badge blue">저장 시 고정</span></div>
+                      <div class="anchor-input-wrap">
+                        <input id="anchor-price" class="number-input" type="number" min="1" step="1" value="84200" aria-label="전략 기준가" />
+                        <button id="use-current-price" class="small-button" type="button">현재가 적용</button>
+                      </div>
+                      <div class="quote-meta">자동 갱신하지 않아 매수 기준이 시세를 따라 움직이지 않습니다.</div>
+                    </div>
+                  </div>
+
+                  <div class="info-note">현재가는 전략을 만들 때 기준가 제안에만 사용합니다. 저장 후 기준가를 바꾸려면 사용자가 직접 ‘현재가 적용’을 눌러 다시 검증해야 합니다.</div>
+                </div>
+              </section>
+
+              <section id="step-size" class="card" aria-labelledby="size-title">
+                <div class="card-body">
+                  <div class="card-head">
+                    <span class="card-index">2</span>
+                    <div class="card-head-copy">
+                      <h2 id="size-title">한 번에 얼마나 살까요?</h2>
+                      <p id="size-subtitle">주식은 가격 대신 수량을 먼저 정하고 예상 주문금액을 확인합니다.</p>
+                    </div>
+                  </div>
+
+                  <div class="choice-grid" aria-label="전략 방식">
+                    <button class="choice-card" type="button" data-mode="percent-grid" aria-pressed="true">
+                      <strong>분할 매수</strong>
+                      <span>가격이 내려올 때 정한 횟수만큼 나누어 매수</span>
+                    </button>
+                    <button class="choice-card" type="button" data-mode="loop-grid" aria-pressed="false">
+                      <strong>반복 매매</strong>
+                      <span>매수 후 익절하면 같은 조건으로 다시 대기</span>
+                    </button>
+                  </div>
+
+                  <div id="stock-sizing" class="field-grid">
+                    <div class="field">
+                      <div class="field-label">한 번에 살 수량 <output id="stock-quantity-label">2주</output></div>
+                      <div class="stepper">
+                        <button type="button" data-step="quantity" data-delta="-1" aria-label="주식 수량 1주 줄이기">−</button>
+                        <output id="stock-quantity">2주</output>
+                        <button type="button" data-step="quantity" data-delta="1" aria-label="주식 수량 1주 늘리기">+</button>
+                      </div>
+                      <p id="stock-order-estimate" class="field-help">첫 매수 예상금액 약 165,032원</p>
+                    </div>
+                    <div class="field">
+                      <div class="field-label">나누어 살 횟수 <output id="entry-count-label">3회</output></div>
+                      <div class="stepper">
+                        <button type="button" data-step="entries" data-delta="-1" aria-label="분할 횟수 1회 줄이기">−</button>
+                        <output id="entry-count">3회</output>
+                        <button type="button" data-step="entries" data-delta="1" aria-label="분할 횟수 1회 늘리기">+</button>
+                      </div>
+                      <p id="stock-max-quantity" class="field-help">최대 6주까지 보유할 수 있습니다.</p>
+                    </div>
+                  </div>
+
+                  <div id="crypto-sizing" class="field-grid" hidden>
+                    <div class="field">
+                      <div class="field-label">한 번에 쓸 금액 <output id="crypto-notional-label">50,000원</output></div>
+                      <input id="crypto-notional" class="number-input" type="number" min="5000" step="1000" value="50000" aria-label="코인 1회 주문금액" />
+                      <div class="quick-chips" aria-label="코인 주문금액 빠른 선택">
+                        <button class="quick-chip" type="button" data-notional="10000" aria-pressed="false">1만원</button>
+                        <button class="quick-chip" type="button" data-notional="50000" aria-pressed="true">5만원</button>
+                        <button class="quick-chip" type="button" data-notional="100000" aria-pressed="false">10만원</button>
+                      </div>
+                      <p id="crypto-quantity-estimate" class="field-help">첫 매수 예상수량 약 0.00049784 BTC</p>
+                    </div>
+                    <div class="field">
+                      <div class="field-label">나누어 살 횟수 <output id="crypto-entry-count-label">3회</output></div>
+                      <div class="stepper">
+                        <button type="button" data-step="entries" data-delta="-1" aria-label="분할 횟수 1회 줄이기">−</button>
+                        <output id="crypto-entry-count">3회</output>
+                        <button type="button" data-step="entries" data-delta="1" aria-label="분할 횟수 1회 늘리기">+</button>
+                      </div>
+                      <p class="field-help">거래소 최소금액과 소수점 정밀도는 실행 전 사전검증합니다.</p>
+                    </div>
+                  </div>
+
+                  <div class="metric-strip">
+                    <div class="metric"><span>첫 주문 예상</span><strong id="first-order-metric">2주 · 약 165,032원</strong></div>
+                    <div class="metric"><span>최대 보유</span><strong id="max-position-metric">6주</strong></div>
+                    <div class="metric"><span>예상 최대투자</span><strong id="max-exposure-metric">약 485,592원</strong></div>
+                  </div>
+
+                  <details class="advanced">
+                    <summary>고급 수량 설정</summary>
+                    <div class="advanced-content">
+                      <div class="simple-row"><span>주식 기본</span><strong>고정 수량 · 정수 단위</strong></div>
+                      <div class="simple-row"><span>코인 기본</span><strong>고정 주문금액 · 예상 소수수량</strong></div>
+                      <div class="warning-note">고정 수량을 실제 실행까지 보장하려면 향후 엔진 계약에 수량 기준 설정을 추가해야 합니다. 이 HTML은 UX 검토용입니다.</div>
+                    </div>
+                  </details>
+                </div>
+              </section>
+
+              <section id="step-condition" class="card" aria-labelledby="condition-title">
+                <div class="card-body">
+                  <div class="card-head">
+                    <span class="card-index">3</span>
+                    <div class="card-head-copy">
+                      <h2 id="condition-title">언제 사고, 언제 정리할까요?</h2>
+                      <p>퍼센트를 입력하면 실제 가격으로 바로 풀어서 보여줍니다. 익절과 손절은 실제 체결가 또는 보유 평단가 기준입니다.</p>
+                    </div>
+                  </div>
+
+                  <div class="field-grid">
+                    <div class="field">
+                      <div class="field-label">첫 매수 하락폭 <output id="buy-drop-output">기준가 −2.0%</output></div>
+                      <input id="buy-drop" type="range" min="0.5" max="10" step="0.5" value="2" aria-label="첫 매수 하락폭" />
+                      <p id="buy-drop-help" class="field-help">82,516원부터 1차 매수 대기</p>
+                    </div>
+                    <div class="field">
+                      <div class="field-label">차수 간격 <output id="rung-gap-output">2.0%씩</output></div>
+                      <input id="rung-gap" type="range" min="0.5" max="8" step="0.5" value="2" aria-label="차수 간격" />
+                      <p class="field-help">2차부터 기준가 대비 하락폭을 누적합니다.</p>
+                    </div>
+                    <div class="field">
+                      <div class="field-label">익절 기준 <output id="take-profit-output">체결가 +5.0%</output></div>
+                      <input id="take-profit" type="range" min="0.5" max="20" step="0.5" value="5" aria-label="익절 기준" />
+                      <p id="take-profit-help" class="field-help">1차 체결가 기준 약 86,642원</p>
+                    </div>
+                    <div class="field">
+                      <div class="field-label">손절 기준 <output id="stop-loss-output">평단가 −3.0%</output></div>
+                      <input id="stop-loss" type="range" min="0.5" max="15" step="0.5" value="3" aria-label="손절 기준" />
+                      <p id="stop-loss-help" class="field-help">1차 체결가 기준 약 80,041원</p>
+                    </div>
+                  </div>
+
+                  <div class="warning-note">익절·손절 가격은 체결 전 예상값입니다. 실제 앱에서는 보유 평단을 우선 사용하고, 데이터 부족·지연 시 임의 가격을 만들지 않고 ‘조건 대기’로 표시해야 합니다.</div>
+
+                  <details class="advanced">
+                    <summary>고급 안전 제한</summary>
+                    <div class="advanced-content">
+                      <div class="simple-row"><span>일일 최대 매수 횟수</span><select id="daily-limit" aria-label="일일 최대 매수 횟수"><option>3회</option><option>5회</option><option>10회</option></select></div>
+                      <div class="simple-row"><span>반복매매 쿨다운</span><select id="cooldown" aria-label="반복매매 쿨다운"><option>5분</option><option>15분</option><option>30분</option></select></div>
+                      <div class="simple-row"><span>매도 수량</span><strong>보유 수량 전부</strong></div>
+                    </div>
+                  </details>
+                </div>
+              </section>
+            </div>
+
+            <aside id="strategy-preview" class="card sticky-preview" aria-labelledby="preview-title">
+              <div class="preview-head">
+                <div class="preview-head-row">
+                  <h2 id="preview-title">내 전략 미리보기</h2>
+                  <span id="preview-status" class="status-badge green">활성</span>
+                </div>
+                <p>입력값을 매매 문장과 예상 가격으로 변환한 시안입니다.</p>
+              </div>
+              <div class="preview-body">
+                <div class="preview-hero">
+                  <div class="preview-symbol"><strong id="preview-name">삼성전자</strong><span id="preview-code">005930.KS · 주식</span></div>
+                  <p id="preview-sentence" class="sentence">기준가 84,200원에서 2.0%씩 내려올 때마다 2주씩, 최대 3회 나누어 삽니다.</p>
+                </div>
+
+                <div id="ladder" class="ladder" aria-label="예상 매수 단계"></div>
+
+                <div class="exit-grid">
+                  <div class="exit-box profit"><span>익절</span><strong id="preview-take-profit">체결가 +5.0%</strong></div>
+                  <div class="exit-box stop"><span>손절</span><strong id="preview-stop-loss">평단가 −3.0%</strong></div>
+                </div>
+
+                <div class="risk-summary">
+                  <div class="risk-summary-row"><span>예상 최대투자</span><strong id="preview-max-exposure">약 485,592원</strong></div>
+                  <div class="risk-summary-row"><span>최대 보유</span><strong id="preview-max-position">6주</strong></div>
+                  <div class="risk-summary-row"><span>실행 거래소</span><strong id="preview-venue">Toss 조회·paper</strong></div>
+                </div>
+
+                <div id="contract-note" class="contract-note">UX 제안: 주식의 ‘2주’를 실행 계약으로 보존하려면 `sizingMode=quantity`가 필요합니다. 현재 엔진의 금액 기반 계산을 그대로 두고 라벨만 바꾸면 가격 변동 시 수량이 달라질 수 있습니다.</div>
+
+                <div class="workflow">
+                  <div class="workflow-status" aria-label="전략 준비 상태">
+                    <span id="workflow-draft" class="workflow-chip done">1 초안</span>
+                    <span id="workflow-preview" class="workflow-chip done">2 조건 확인</span>
+                    <span id="workflow-simulate" class="workflow-chip done">3 시뮬레이션</span>
+                    <span id="workflow-enable" class="workflow-chip done">4 활성화</span>
+                  </div>
+                  <div class="workflow-actions">
+                    <button id="save-draft" class="secondary" type="button">1. 초안 저장</button>
+                    <button id="preview-tick" class="secondary" type="button">2. 현재 틱 확인</button>
+                    <button id="preview-trigger" class="ghost wide" type="button">발동가 테스트</button>
+                    <button id="simulate" class="secondary" type="button">3. 모의 시뮬레이션</button>
+                    <button id="enable-strategy" class="primary" type="button">4. 전략 활성화</button>
+                  </div>
+                </div>
+              </div>
+            </aside>
+          </div>
+        </section>
+
+        <section id="page-automation" class="page" aria-labelledby="automation-heading" hidden>
+          <div class="page-head">
+            <div class="page-head-copy">
+              <p class="eyebrow">활성 전략 운영</p>
+              <h1 id="automation-heading" tabindex="-1">무엇이 자동으로 실행되는지 먼저 확인</h1>
+              <p>전략 탭에서 활성화한 설정만 카드로 보여줍니다. 초보자는 전략 상태와 최근 결과를 먼저 보고, scheduler·worker·kill switch는 고급 운영 제어에서 다룹니다.</p>
+            </div>
+            <div class="page-head-actions">
+              <span class="paper-badge">PAPER ONLY</span>
+            </div>
+          </div>
+
+          <div class="automation-overview" aria-label="자동화 요약">
+            <div class="overview-card"><span>활성 전략</span><strong id="overview-active-count">1개</strong></div>
+            <div class="overview-card"><span>자동 실행</span><strong id="overview-scheduler">꺼짐</strong></div>
+            <div class="overview-card"><span>다음 실행</span><strong id="overview-next-run">수동 실행 대기</strong></div>
+            <div class="overview-card"><span>안전 상태</span><strong id="overview-safety">정상 · paper</strong></div>
+          </div>
+
+          <div class="automation-layout">
+            <section class="card" aria-labelledby="active-strategy-title">
+              <div class="card-body">
+                <div class="section-title"><h2 id="active-strategy-title">활성 전략</h2><span>전략 탭과 같은 설정 데이터</span></div>
+
+                <article class="active-strategy">
+                  <div class="active-head">
+                    <div id="active-symbol-mark" class="active-symbol">KR</div>
+                    <div class="active-copy"><strong id="active-name">삼성전자 초보 분할</strong><span id="active-code">005930.KS · Toss 조회 · paper 실행</span></div>
+                    <span id="active-status" class="status-badge green">실행 가능</span>
+                  </div>
+                  <p id="active-sentence" class="active-sentence">84,200원 기준 · 2.0%씩 하락 시 2주씩 최대 3회 · 익절 +5.0% · 손절 −3.0%</p>
+                  <div class="active-details">
+                    <div class="active-detail"><span>다음 매수 조건</span><strong id="active-next-entry">82,516원 이하</strong></div>
+                    <div class="active-detail"><span>주문 단위</span><strong id="active-order-size">2주 · 예상 165,032원</strong></div>
+                    <div class="active-detail"><span>최대 노출</span><strong id="active-max-exposure">약 485,592원</strong></div>
+                    <div class="active-detail"><span>최근 시뮬레이션</span><strong>통과 · 시안 데이터</strong></div>
+                    <div class="active-detail"><span>최근 실행</span><strong id="active-last-run">오늘 09:31 · 조건 대기</strong></div>
+                    <div class="active-detail"><span>다음 실행</span><strong id="active-next-run">수동 실행 대기</strong></div>
+                  </div>
+                  <div class="active-actions">
+                    <button id="edit-active-strategy" class="secondary" type="button">전략 수정</button>
+                    <button id="pause-strategy" class="ghost" type="button" aria-pressed="false">전략 일시중지</button>
+                  </div>
+                </article>
+
+                <div class="timeline" aria-label="최근 자동화 기록">
+                  <div class="timeline-row"><time>오늘 09:31</time><span class="timeline-dot" aria-hidden="true"></span><div class="timeline-copy"><strong>조건 확인 완료</strong><span>현재가가 1차 매수가보다 높아 주문 의도를 만들지 않았습니다.</span></div><span class="status-badge blue">대기</span></div>
+                  <div class="timeline-row"><time>어제 15:30</time><span class="timeline-dot" aria-hidden="true"></span><div class="timeline-copy"><strong>모의검증 통과</strong><span>수량, 최대투자금과 익절·손절 조건을 확인했습니다.</span></div><span class="status-badge green">통과</span></div>
+                </div>
+              </div>
+            </section>
+
+            <aside class="card control-card" aria-label="자동화 실행 제어">
+              <div class="control-block">
+                <div class="control-title"><strong>지금 한 번 확인</strong><span id="run-state" class="status-badge blue">대기</span></div>
+                <p>활성 전략의 조건을 한 번 계산합니다. 이 시안과 데스크톱 1.0.0은 실제 주문을 제출하지 않습니다.</p>
+                <button id="run-once" class="primary" type="button">자동화 1회 실행</button>
+              </div>
+              <div class="control-block">
+                <div class="control-title"><strong>반복 실행</strong><span id="scheduler-state" class="status-badge amber">꺼짐</span></div>
+                <p>앱과 sidecar가 실행 중일 때만 정한 주기로 조건을 확인합니다.</p>
+                <div class="control-row"><label for="scheduler-interval">확인 주기</label><select id="scheduler-interval"><option value="60">1분</option><option value="300">5분</option><option value="900">15분</option></select></div>
+                <div class="control-row"><span>연속 scheduler</span><button id="scheduler-toggle" class="toggle" type="button" aria-label="연속 scheduler" aria-pressed="false"></button></div>
+              </div>
+              <div class="control-block">
+                <details class="advanced">
+                  <summary>고급 운영 제어</summary>
+                  <div class="advanced-content">
+                    <div class="control-row"><span>Worker 일시중지</span><button id="worker-toggle" class="toggle" type="button" aria-label="Worker 일시중지" aria-pressed="false"></button></div>
+                    <div class="danger-zone"><button id="kill-switch" class="danger" type="button" aria-pressed="false">긴급 중지 켜기</button></div>
+                    <div class="warning-note">긴급 중지는 자동화 큐와 모의 주문을 함께 차단합니다. 색상 외에도 버튼 문구와 상태 배지로 차단 상태를 표시합니다.</div>
+                  </div>
+                </details>
+              </div>
+            </aside>
+          </div>
+        </section>
+      </div>
+    </main>
+  </div>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+  <script>
+    (function () {
+      "use strict";
+
+      var profiles = {
+        "005930.KS": { asset: "stock", name: "삼성전자", code: "005930.KS", short: "KR", quote: 84200, currency: "KRW", venue: "Toss 조회·paper", meta: "최근 종가 · 공개 데이터 예시 · 2026.07.10 15:30 KST" },
+        "AAPL": { asset: "stock", name: "Apple", code: "AAPL", short: "US", quote: 228.64, currency: "USD", venue: "Toss 조회·paper", meta: "최근 종가 · 공개 데이터 예시 · 2026.07.10 16:00 ET" },
+        "KRW-BTC": { asset: "crypto", name: "비트코인", code: "KRW-BTC", short: "BTC", quote: 102500000, currency: "KRW", venue: "Upbit 공개·paper", meta: "공개 REST 현재가 예시 · 2026.07.10 15:30 KST" },
+        "KRW-ETH": { asset: "crypto", name: "이더리움", code: "KRW-ETH", short: "ETH", quote: 4680000, currency: "KRW", venue: "Upbit 공개·paper", meta: "공개 REST 현재가 예시 · 2026.07.10 15:30 KST" }
+      };
+
+      var state = {
+        asset: "stock",
+        code: "005930.KS",
+        quote: profiles["005930.KS"].quote,
+        anchor: profiles["005930.KS"].quote,
+        mode: "percent-grid",
+        quantity: 2,
+        cryptoNotional: 50000,
+        entries: 3,
+        buyDrop: 2,
+        rungGap: 2,
+        takeProfit: 5,
+        stopLoss: 3,
+        workflowStage: 4,
+        scheduler: false,
+        workerPaused: false,
+        killSwitch: false,
+        strategyPaused: false,
+        activeConfig: null
+      };
+
+      var toastTimer = null;
+
+      function profile() { return profiles[state.code]; }
+
+      function copyDraft() {
+        return {
+          asset: state.asset,
+          code: state.code,
+          quote: state.quote,
+          anchor: state.anchor,
+          mode: state.mode,
+          quantity: state.quantity,
+          cryptoNotional: state.cryptoNotional,
+          entries: state.entries,
+          buyDrop: state.buyDrop,
+          rungGap: state.rungGap,
+          takeProfit: state.takeProfit,
+          stopLoss: state.stopLoss
+        };
+      }
+
+      state.activeConfig = copyDraft();
+
+      function formatPrice(value, currency) {
+        if (currency === "USD") return "$" + Number(value).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        return Math.round(value).toLocaleString("ko-KR") + "원";
+      }
+
+      function formatWon(value) {
+        return Math.round(value).toLocaleString("ko-KR") + "원";
+      }
+
+      function roundPrice(value, currency) {
+        return currency === "USD" ? Math.round(value * 100) / 100 : Math.round(value);
+      }
+
+      function entryPrice(config, index) {
+        var drop = config.buyDrop + config.rungGap * index;
+        return roundPrice(config.anchor * (1 - drop / 100), profiles[config.code].currency);
+      }
+
+      function orderQuantity(config, price) {
+        if (config.asset === "stock") return config.quantity;
+        return Math.floor((config.cryptoNotional / price) * 100000000) / 100000000;
+      }
+
+      function orderNotional(config, price) {
+        return config.asset === "stock" ? price * config.quantity : config.cryptoNotional;
+      }
+
+      function exposure(config) {
+        var total = 0;
+        for (var index = 0; index < config.entries; index += 1) total += orderNotional(config, entryPrice(config, index));
+        return total;
+      }
+
+      function announce(message) {
+        var toast = document.getElementById("toast");
+        toast.textContent = message;
+        toast.classList.add("visible");
+        window.clearTimeout(toastTimer);
+        toastTimer = window.setTimeout(function () { toast.classList.remove("visible"); }, 2800);
+      }
+
+      function markDirty(message) {
+        state.workflowStage = 0;
+        renderWorkflow();
+        renderDraft();
+        if (message) announce(message + " 변경 내용을 저장·검증한 뒤 자동화 탭에 반영합니다.");
+      }
+
+      function setPage(page) {
+        document.getElementById("page-strategy").hidden = page !== "strategy";
+        document.getElementById("page-automation").hidden = page !== "automation";
+        document.querySelectorAll("[data-page]").forEach(function (button) {
+          if (button.dataset.page === page) button.setAttribute("aria-current", "page");
+          else button.removeAttribute("aria-current");
+        });
+        document.getElementById("topbar-title").textContent = page === "strategy" ? "전략 설정" : "자동화 운영";
+        document.getElementById("workspace").scrollTop = 0;
+        if (page === "automation") renderAutomation();
+      }
+
+      function instrumentOptions(asset) {
+        var select = document.getElementById("instrument-select");
+        var codes = asset === "stock" ? ["005930.KS", "AAPL"] : ["KRW-BTC", "KRW-ETH"];
+        select.innerHTML = "";
+        codes.forEach(function (code) {
+          var item = profiles[code];
+          var option = document.createElement("option");
+          option.value = code;
+          option.textContent = item.name + " · " + item.code;
+          select.appendChild(option);
+        });
+        select.value = state.code;
+      }
+
+      function setAsset(asset) {
+        state.asset = asset;
+        state.code = asset === "stock" ? "005930.KS" : "KRW-BTC";
+        state.quote = profiles[state.code].quote;
+        state.anchor = state.quote;
+        state.quantity = 2;
+        state.cryptoNotional = 50000;
+        document.querySelectorAll("[data-asset]").forEach(function (button) {
+          button.setAttribute("aria-pressed", String(button.dataset.asset === asset));
+        });
+        instrumentOptions(asset);
+        document.getElementById("stock-sizing").hidden = asset !== "stock";
+        document.getElementById("crypto-sizing").hidden = asset !== "crypto";
+        document.getElementById("size-subtitle").textContent = asset === "stock"
+          ? "주식은 가격 대신 수량을 먼저 정하고 예상 주문금액을 확인합니다."
+          : "코인은 원화 주문금액을 먼저 정하고 예상 소수점 수량을 확인합니다.";
+        markDirty(asset === "stock" ? "주식 입력 방식으로 바꿨습니다." : "코인 입력 방식으로 바꿨습니다.");
+      }
+
+      function renderWorkflow() {
+        var ids = ["workflow-draft", "workflow-preview", "workflow-simulate", "workflow-enable"];
+        ids.forEach(function (id, index) {
+          document.getElementById(id).classList.toggle("done", state.workflowStage >= index + 1);
+        });
+        document.getElementById("preview-tick").disabled = state.workflowStage < 1;
+        document.getElementById("preview-trigger").disabled = state.workflowStage < 1;
+        document.getElementById("simulate").disabled = state.workflowStage < 2;
+        document.getElementById("enable-strategy").disabled = state.workflowStage < 3;
+        var badge = document.getElementById("draft-state-badge");
+        var previewBadge = document.getElementById("preview-status");
+        if (state.workflowStage === 4) {
+          badge.textContent = "활성 전략 편집";
+          badge.className = "status-badge green";
+          previewBadge.textContent = "활성";
+          previewBadge.className = "status-badge green";
+        } else if (state.workflowStage === 3) {
+          badge.textContent = "시뮬레이션 통과";
+          badge.className = "status-badge blue";
+          previewBadge.textContent = "활성화 대기";
+          previewBadge.className = "status-badge blue";
+        } else if (state.workflowStage >= 1) {
+          badge.textContent = state.workflowStage === 2 ? "조건 확인 완료" : "초안 저장됨";
+          badge.className = "status-badge amber";
+          previewBadge.textContent = "검증 중";
+          previewBadge.className = "status-badge amber";
+        } else {
+          badge.textContent = "저장하지 않은 변경";
+          badge.className = "status-badge red";
+          previewBadge.textContent = "다시 검증 필요";
+          previewBadge.className = "status-badge red";
+        }
+      }
+
+      function renderDraft() {
+        var item = profile();
+        var config = copyDraft();
+        var firstPrice = entryPrice(config, 0);
+        var firstNotional = orderNotional(config, firstPrice);
+        var totalExposure = exposure(config);
+        var totalQuantity = config.asset === "stock" ? config.quantity * config.entries : null;
+        var firstQuantity = orderQuantity(config, firstPrice);
+
+        document.getElementById("current-price").textContent = formatPrice(state.quote, item.currency);
+        document.getElementById("quote-meta").textContent = item.meta;
+        document.getElementById("anchor-price").value = state.anchor;
+        document.getElementById("stock-quantity").textContent = state.quantity + "주";
+        document.getElementById("stock-quantity-label").textContent = state.quantity + "주";
+        document.getElementById("entry-count").textContent = state.entries + "회";
+        document.getElementById("entry-count-label").textContent = state.entries + "회";
+        document.getElementById("crypto-entry-count").textContent = state.entries + "회";
+        document.getElementById("crypto-entry-count-label").textContent = state.entries + "회";
+        document.getElementById("stock-order-estimate").textContent = "첫 매수 예상금액 약 " + formatPrice(firstNotional, item.currency);
+        document.getElementById("stock-max-quantity").textContent = "최대 " + totalQuantity + "주까지 보유할 수 있습니다.";
+        document.getElementById("crypto-notional").value = state.cryptoNotional;
+        document.getElementById("crypto-notional-label").textContent = formatWon(state.cryptoNotional);
+        document.getElementById("crypto-quantity-estimate").textContent = "첫 매수 예상수량 약 " + firstQuantity.toFixed(8) + " " + item.short;
+
+        document.querySelectorAll("[data-notional]").forEach(function (button) {
+          button.setAttribute("aria-pressed", String(Number(button.dataset.notional) === state.cryptoNotional));
+        });
+
+        document.getElementById("buy-drop-output").textContent = "기준가 −" + state.buyDrop.toFixed(1) + "%";
+        document.getElementById("rung-gap-output").textContent = state.rungGap.toFixed(1) + "%씩";
+        document.getElementById("take-profit-output").textContent = "체결가 +" + state.takeProfit.toFixed(1) + "%";
+        document.getElementById("stop-loss-output").textContent = "평단가 −" + state.stopLoss.toFixed(1) + "%";
+        document.getElementById("buy-drop-help").textContent = formatPrice(firstPrice, item.currency) + "부터 1차 매수 대기";
+        document.getElementById("take-profit-help").textContent = "1차 체결가 기준 약 " + formatPrice(firstPrice * (1 + state.takeProfit / 100), item.currency);
+        document.getElementById("stop-loss-help").textContent = "1차 체결가 기준 약 " + formatPrice(firstPrice * (1 - state.stopLoss / 100), item.currency);
+
+        var firstMetric = config.asset === "stock"
+          ? config.quantity + "주 · 약 " + formatPrice(firstNotional, item.currency)
+          : formatWon(config.cryptoNotional) + " · 약 " + firstQuantity.toFixed(8) + " " + item.short;
+        var maxPosition = config.asset === "stock" ? totalQuantity + "주" : "최대 " + config.entries + "회 분할";
+        document.getElementById("first-order-metric").textContent = firstMetric;
+        document.getElementById("max-position-metric").textContent = maxPosition;
+        document.getElementById("max-exposure-metric").textContent = "약 " + formatPrice(totalExposure, item.currency);
+
+        document.getElementById("preview-name").textContent = item.name;
+        document.getElementById("preview-code").textContent = item.code + " · " + (config.asset === "stock" ? "주식" : "코인");
+        document.getElementById("preview-sentence").textContent = config.asset === "stock"
+          ? "기준가 " + formatPrice(config.anchor, item.currency) + "에서 " + config.rungGap.toFixed(1) + "%씩 내려올 때마다 " + config.quantity + "주씩, 최대 " + config.entries + "회 나누어 삽니다."
+          : "기준가 " + formatPrice(config.anchor, item.currency) + "에서 " + config.rungGap.toFixed(1) + "%씩 내려올 때마다 " + formatWon(config.cryptoNotional) + "씩, 최대 " + config.entries + "회 나누어 삽니다.";
+
+        var ladder = document.getElementById("ladder");
+        ladder.innerHTML = "";
+        for (var index = 0; index < config.entries; index += 1) {
+          var price = entryPrice(config, index);
+          var quantity = orderQuantity(config, price);
+          var row = document.createElement("div");
+          row.className = "ladder-row";
+          var rung = document.createElement("span");
+          rung.className = "rung";
+          rung.textContent = (index + 1) + "차";
+          var priceText = document.createElement("span");
+          priceText.className = "price";
+          priceText.textContent = formatPrice(price, item.currency) + " 이하";
+          var size = document.createElement("span");
+          size.className = "size";
+          size.textContent = config.asset === "stock" ? config.quantity + "주" : quantity.toFixed(8) + " " + item.short;
+          row.append(rung, priceText, size);
+          ladder.appendChild(row);
+        }
+
+        document.getElementById("preview-take-profit").textContent = "체결가 +" + config.takeProfit.toFixed(1) + "%";
+        document.getElementById("preview-stop-loss").textContent = "평단가 −" + config.stopLoss.toFixed(1) + "%";
+        document.getElementById("preview-max-exposure").textContent = "약 " + formatPrice(totalExposure, item.currency);
+        document.getElementById("preview-max-position").textContent = maxPosition;
+        document.getElementById("preview-venue").textContent = item.venue;
+        document.getElementById("contract-note").textContent = config.asset === "stock"
+          ? "UX 제안: 주식의 ‘" + config.quantity + "주’를 실행 계약으로 보존하려면 sizingMode=quantity가 필요합니다. 현재 엔진의 금액 기반 계산을 그대로 두고 라벨만 바꾸면 가격 변동 시 수량이 달라질 수 있습니다."
+          : "UX 제안: 코인은 주문금액을 고정하고 실행 가격에서 소수점 수량을 계산합니다. 거래소별 최소 주문금액과 수량 정밀도는 저장값이 아니라 실행 전 사전검증 결과를 사용해야 합니다.";
+      }
+
+      function renderAutomation() {
+        var config = state.activeConfig;
+        var item = profiles[config.code];
+        var firstPrice = entryPrice(config, 0);
+        var firstQuantity = orderQuantity(config, firstPrice);
+        var firstNotional = orderNotional(config, firstPrice);
+        var totalExposure = exposure(config);
+        var paused = state.strategyPaused || state.workerPaused || state.killSwitch;
+
+        document.getElementById("active-symbol-mark").textContent = item.short;
+        document.getElementById("active-name").textContent = item.name + (config.mode === "loop-grid" ? " 반복 매매" : " 초보 분할");
+        document.getElementById("active-code").textContent = item.code + " · " + item.venue;
+        document.getElementById("active-sentence").textContent = formatPrice(config.anchor, item.currency) + " 기준 · " + config.rungGap.toFixed(1) + "%씩 하락 시 " + (config.asset === "stock" ? config.quantity + "주" : formatWon(config.cryptoNotional)) + "씩 최대 " + config.entries + "회 · 익절 +" + config.takeProfit.toFixed(1) + "% · 손절 −" + config.stopLoss.toFixed(1) + "%";
+        document.getElementById("active-next-entry").textContent = formatPrice(firstPrice, item.currency) + " 이하";
+        document.getElementById("active-order-size").textContent = config.asset === "stock"
+          ? config.quantity + "주 · 예상 " + formatPrice(firstNotional, item.currency)
+          : formatWon(config.cryptoNotional) + " · 약 " + firstQuantity.toFixed(8) + " " + item.short;
+        document.getElementById("active-max-exposure").textContent = "약 " + formatPrice(totalExposure, item.currency);
+        document.getElementById("overview-scheduler").textContent = state.scheduler ? "켜짐 · " + document.getElementById("scheduler-interval").selectedOptions[0].textContent : "꺼짐";
+        document.getElementById("overview-next-run").textContent = state.scheduler ? "약 " + document.getElementById("scheduler-interval").selectedOptions[0].textContent + " 뒤" : "수동 실행 대기";
+        document.getElementById("active-next-run").textContent = state.scheduler ? document.getElementById("scheduler-interval").selectedOptions[0].textContent + " 뒤" : "수동 실행 대기";
+        document.getElementById("overview-safety").textContent = state.killSwitch ? "긴급 중지" : state.workerPaused ? "Worker 정지" : state.strategyPaused ? "전략 정지" : "정상 · paper";
+
+        var status = document.getElementById("active-status");
+        status.textContent = paused ? "일시중지" : "실행 가능";
+        status.className = paused ? "status-badge amber" : "status-badge green";
+        document.getElementById("pause-strategy").textContent = state.strategyPaused ? "전략 다시 시작" : "전략 일시중지";
+        document.getElementById("pause-strategy").setAttribute("aria-pressed", String(state.strategyPaused));
+        document.getElementById("run-once").disabled = paused;
+        document.getElementById("nav-active-count").textContent = state.strategyPaused ? "1 정지" : "1 활성";
+        document.getElementById("scheduler-state").textContent = state.scheduler ? "켜짐" : "꺼짐";
+        document.getElementById("scheduler-state").className = state.scheduler ? "status-badge green" : "status-badge amber";
+        document.getElementById("scheduler-toggle").setAttribute("aria-pressed", String(state.scheduler));
+        document.getElementById("worker-toggle").setAttribute("aria-pressed", String(state.workerPaused));
+        document.getElementById("kill-switch").setAttribute("aria-pressed", String(state.killSwitch));
+        document.getElementById("kill-switch").textContent = state.killSwitch ? "긴급 중지 해제" : "긴급 중지 켜기";
+      }
+
+      document.querySelectorAll("[data-page]").forEach(function (button) {
+        button.addEventListener("click", function () { setPage(button.dataset.page); });
+      });
+
+      document.querySelectorAll(".existing-page").forEach(function (button) {
+        button.addEventListener("click", function () { announce(button.dataset.existing + " 화면은 v2와 동일하며, 이번 시안은 전략·자동화 UX에 집중합니다."); });
+      });
+
+      document.querySelectorAll("[data-scroll]").forEach(function (button) {
+        button.addEventListener("click", function () {
+          var target = document.getElementById(button.dataset.scroll);
+          target.scrollIntoView({ behavior: "smooth", block: "start" });
+          window.setTimeout(function () { target.setAttribute("tabindex", "-1"); target.focus({ preventScroll: true }); }, 220);
+        });
+      });
+
+      document.querySelectorAll("[data-asset]").forEach(function (button) {
+        button.addEventListener("click", function () { if (button.dataset.asset !== state.asset) setAsset(button.dataset.asset); });
+      });
+
+      document.getElementById("instrument-select").addEventListener("change", function (event) {
+        state.code = event.target.value;
+        state.quote = profile().quote;
+        state.anchor = state.quote;
+        markDirty(profile().name + " 종목으로 바꿨습니다.");
+      });
+
+      document.getElementById("refresh-quote").addEventListener("click", function () {
+        state.quote = roundPrice(state.quote * 1.001, profile().currency);
+        renderDraft();
+        announce("현재가 시안만 새로고침했습니다. 전략 기준가는 바뀌지 않았습니다.");
+      });
+
+      document.getElementById("use-current-price").addEventListener("click", function () {
+        state.anchor = state.quote;
+        markDirty("현재가를 전략 기준가로 적용했습니다.");
+      });
+
+      document.getElementById("anchor-price").addEventListener("input", function (event) {
+        var next = Number(event.target.value);
+        if (Number.isFinite(next) && next > 0) {
+          state.anchor = next;
+          markDirty();
+        }
+      });
+
+      document.querySelectorAll("[data-mode]").forEach(function (button) {
+        button.addEventListener("click", function () {
+          state.mode = button.dataset.mode;
+          document.querySelectorAll("[data-mode]").forEach(function (item) { item.setAttribute("aria-pressed", String(item === button)); });
+          markDirty(state.mode === "loop-grid" ? "반복 매매 방식으로 바꿨습니다." : "분할 매수 방식으로 바꿨습니다.");
+        });
+      });
+
+      document.querySelectorAll("[data-step]").forEach(function (button) {
+        button.addEventListener("click", function () {
+          var delta = Number(button.dataset.delta);
+          if (button.dataset.step === "quantity") state.quantity = Math.max(1, Math.min(100, state.quantity + delta));
+          if (button.dataset.step === "entries") state.entries = Math.max(1, Math.min(10, state.entries + delta));
+          markDirty();
+        });
+      });
+
+      document.getElementById("crypto-notional").addEventListener("input", function (event) {
+        var next = Number(event.target.value);
+        if (Number.isFinite(next) && next > 0) {
+          state.cryptoNotional = next;
+          markDirty();
+        }
+      });
+
+      document.querySelectorAll("[data-notional]").forEach(function (button) {
+        button.addEventListener("click", function () {
+          state.cryptoNotional = Number(button.dataset.notional);
+          markDirty();
+        });
+      });
+
+      [
+        ["buy-drop", "buyDrop"],
+        ["rung-gap", "rungGap"],
+        ["take-profit", "takeProfit"],
+        ["stop-loss", "stopLoss"]
+      ].forEach(function (pair) {
+        document.getElementById(pair[0]).addEventListener("input", function (event) {
+          state[pair[1]] = Number(event.target.value);
+          markDirty();
+        });
+      });
+
+      document.getElementById("reset-draft").addEventListener("click", function () {
+        state.asset = "stock";
+        state.code = "005930.KS";
+        state.quote = profiles[state.code].quote;
+        state.anchor = state.quote;
+        state.mode = "percent-grid";
+        state.quantity = 1;
+        state.cryptoNotional = 50000;
+        state.entries = 3;
+        state.buyDrop = 2;
+        state.rungGap = 2;
+        state.takeProfit = 5;
+        state.stopLoss = 3;
+        state.workflowStage = 0;
+        document.querySelectorAll("[data-asset]").forEach(function (button) { button.setAttribute("aria-pressed", String(button.dataset.asset === "stock")); });
+        document.querySelectorAll("[data-mode]").forEach(function (button) { button.setAttribute("aria-pressed", String(button.dataset.mode === "percent-grid")); });
+        instrumentOptions("stock");
+        document.getElementById("stock-sizing").hidden = false;
+        document.getElementById("crypto-sizing").hidden = true;
+        document.getElementById("size-subtitle").textContent = "주식은 가격 대신 수량을 먼저 정하고 예상 주문금액을 확인합니다.";
+        document.getElementById("buy-drop").value = state.buyDrop;
+        document.getElementById("rung-gap").value = state.rungGap;
+        document.getElementById("take-profit").value = state.takeProfit;
+        document.getElementById("stop-loss").value = state.stopLoss;
+        renderWorkflow();
+        renderDraft();
+        announce("초보자 기본값으로 새 전략을 시작했습니다.");
+      });
+
+      document.getElementById("save-draft").addEventListener("click", function () {
+        state.workflowStage = 1;
+        renderWorkflow();
+        announce("전략 초안을 저장했습니다. 자동화는 아직 시작되지 않았습니다.");
+      });
+
+      function previewCondition(kind) {
+        state.workflowStage = Math.max(state.workflowStage, 2);
+        renderWorkflow();
+        announce(kind + " 시안 결과: 현재는 1차 매수가 도달 전이라 주문 의도를 만들지 않습니다.");
+      }
+
+      document.getElementById("preview-tick").addEventListener("click", function () { previewCondition("현재 틱 확인"); });
+      document.getElementById("preview-trigger").addEventListener("click", function () { previewCondition("발동가 테스트"); });
+
+      document.getElementById("simulate").addEventListener("click", function () {
+        state.workflowStage = 3;
+        renderWorkflow();
+        announce("모의 시뮬레이션을 통과했습니다. 주문은 제출되지 않았습니다.");
+      });
+
+      document.getElementById("enable-strategy").addEventListener("click", function () {
+        state.workflowStage = 4;
+        state.activeConfig = copyDraft();
+        state.strategyPaused = false;
+        renderWorkflow();
+        renderAutomation();
+        announce("전략을 활성화했습니다. 자동화 탭의 활성 전략 카드에 반영했습니다.");
+      });
+
+      document.getElementById("edit-active-strategy").addEventListener("click", function () {
+        setPage("strategy");
+        document.getElementById("strategy-heading").focus();
+        announce("활성 전략 설정으로 이동했습니다.");
+      });
+
+      document.getElementById("pause-strategy").addEventListener("click", function () {
+        state.strategyPaused = !state.strategyPaused;
+        renderAutomation();
+        announce(state.strategyPaused ? "이 전략의 자동 실행을 일시중지했습니다." : "이 전략의 자동 실행을 다시 시작했습니다.");
+      });
+
+      document.getElementById("run-once").addEventListener("click", function () {
+        var badge = document.getElementById("run-state");
+        badge.textContent = "확인 중";
+        badge.className = "status-badge amber";
+        window.setTimeout(function () {
+          badge.textContent = "조건 대기";
+          badge.className = "status-badge blue";
+          document.getElementById("active-last-run").textContent = "방금 · 조건 대기";
+          announce("자동화 1회 실행 시안입니다. 조건 미충족으로 주문 의도를 만들지 않았습니다.");
+        }, 520);
+      });
+
+      document.getElementById("scheduler-toggle").addEventListener("click", function () {
+        if (state.killSwitch || state.workerPaused) {
+          announce("안전 차단 상태를 먼저 해제해야 scheduler를 시작할 수 있습니다.");
+          return;
+        }
+        state.scheduler = !state.scheduler;
+        renderAutomation();
+        announce(state.scheduler ? "연속 scheduler 시안을 켰습니다. paper 조건만 확인합니다." : "연속 scheduler 시안을 껐습니다.");
+      });
+
+      document.getElementById("scheduler-interval").addEventListener("change", function () {
+        renderAutomation();
+        announce("자동 확인 주기를 " + document.getElementById("scheduler-interval").selectedOptions[0].textContent + "으로 바꿨습니다.");
+      });
+
+      document.getElementById("worker-toggle").addEventListener("click", function () {
+        state.workerPaused = !state.workerPaused;
+        if (state.workerPaused) state.scheduler = false;
+        renderAutomation();
+        announce(state.workerPaused ? "Worker를 일시중지해 자동화 실행을 차단했습니다." : "Worker 일시중지를 해제했습니다.");
+      });
+
+      document.getElementById("kill-switch").addEventListener("click", function () {
+        state.killSwitch = !state.killSwitch;
+        if (state.killSwitch) state.scheduler = false;
+        renderAutomation();
+        announce(state.killSwitch ? "긴급 중지를 켰습니다. 자동화와 모의 주문을 차단합니다." : "긴급 중지를 해제했습니다.");
+      });
+
+      instrumentOptions(state.asset);
+      renderWorkflow();
+      renderDraft();
+      renderAutomation();
+      setPage("strategy");
+    }());
+  </script>
+</body>
+</html>

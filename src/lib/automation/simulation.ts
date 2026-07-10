@@ -7,6 +7,7 @@ import type {
   AutomationSimulationResult,
   AutomationStrategyConfig,
 } from "@/domain/automation";
+import { resolveOrderSizing } from "@/use-cases/trading/resolve-order-sizing";
 
 const roundMoney = (value: number) => Math.round(value * 100) / 100;
 const MAX_REASONABLE_PERCENT = 80;
@@ -71,6 +72,19 @@ export const validateStrategyConfig = (config: AutomationStrategyConfig) => {
   if (!Number.isFinite(config.currentPrice) || config.currentPrice <= 0) {
     errors.push("현재가가 필요합니다.");
   }
+  if (config.orderSizing?.mode === "quantity") {
+    if (!Number.isFinite(config.orderSizing.quantity) || config.orderSizing.quantity <= 0) {
+      errors.push("고정 주문 수량은 0보다 커야 합니다.");
+    } else if (config.market !== "CRYPTO" && !Number.isInteger(config.orderSizing.quantity)) {
+      errors.push("주식 고정 주문 수량은 1주 이상의 정수여야 합니다.");
+    }
+  }
+  if (
+    config.orderSizing?.mode === "notional" &&
+    (!Number.isFinite(config.orderSizing.notional) || config.orderSizing.notional <= 0)
+  ) {
+    errors.push("고정 주문 금액은 0보다 커야 합니다.");
+  }
 
   if (config.mode === "percent-grid") {
     // 순환분할 그리드 모드: 그리드 차수 검증
@@ -101,14 +115,22 @@ export const validateStrategyConfig = (config: AutomationStrategyConfig) => {
       if (!Number.isFinite(rung.sellRisePct) || rung.sellRisePct <= 0 || rung.sellRisePct > MAX_REASONABLE_PERCENT) {
         errors.push(`${rung.index}차 매도 상승률은 0보다 커야 합니다.`);
       }
-      if (!Number.isFinite(rung.notional) || rung.notional <= 0) {
+      if (!config.orderSizing && (!Number.isFinite(rung.notional) || rung.notional <= 0)) {
         errors.push(`${rung.index}차 투입 금액이 필요합니다.`);
       }
       if (Number.isFinite(rung.buyDropPct) && rung.buyDropPct > 0) {
         previousBuyDropPct = Math.max(previousBuyDropPct, rung.buyDropPct);
       }
     }
-    const totalNotional = (grid?.rungs ?? []).reduce((sum, rung) => sum + rung.notional, 0);
+    const totalNotional = (grid?.rungs ?? []).reduce((sum, rung) => {
+      const price = gridBuyLevel(grid!.basePrice, rung.buyDropPct);
+      return sum + resolveOrderSizing({
+        orderSizing: config.orderSizing,
+        legacyNotional: rung.notional,
+        price,
+        fractionalQuantity: config.market === "CRYPTO",
+      }).notional;
+    }, 0);
     if (totalNotional > config.riskLimits.maxPositionValue) {
       errors.push("분할 주문 총액이 최대 보유 금액을 초과합니다.");
     }
@@ -142,7 +164,7 @@ export const validateStrategyConfig = (config: AutomationStrategyConfig) => {
     if (!loop || !Number.isFinite(loop.sellRisePct) || loop.sellRisePct <= 0 || loop.sellRisePct > MAX_REASONABLE_PERCENT) {
       errors.push("순환매매 매도 상승률은 0보다 커야 합니다.");
     }
-    if (!loop || !Number.isFinite(loop.notional) || loop.notional <= 0) {
+    if (!loop || (!config.orderSizing && (!Number.isFinite(loop.notional) || loop.notional <= 0))) {
       errors.push("순환매매 1회 매수 금액이 필요합니다.");
     }
     if (loop && loop.cooldownMinutes < 0) {
@@ -154,7 +176,15 @@ export const validateStrategyConfig = (config: AutomationStrategyConfig) => {
     if (config.riskLimits.maxPositionValue <= 0) {
       errors.push("최대 보유 금액 제한이 필요합니다.");
     }
-    if (loop && loop.notional > config.riskLimits.maxPositionValue) {
+    const loopNotional = loop
+      ? resolveOrderSizing({
+        orderSizing: config.orderSizing,
+        legacyNotional: loop.notional,
+        price: loopBuyLevel(loop.anchorPrice, loop.buyDropPct),
+        fractionalQuantity: config.market === "CRYPTO",
+      }).notional
+      : 0;
+    if (loop && loopNotional > config.riskLimits.maxPositionValue) {
       errors.push("순환매매 1회 매수 금액이 최대 보유 금액을 초과합니다.");
     }
     if (
@@ -206,7 +236,15 @@ export const simulateAutomationStrategy = ({
     const blockers = validateStrategyConfig(config);
     const warnings = ["실거래 OFF 상태에서는 분할 주문의도 초안만 생성하고 broker 전송은 차단됩니다."];
     const rungs = [...config.grid.rungs].toSorted((a, b) => a.index - b.index);
-    const totalNotional = rungs.reduce((sum, rung) => sum + rung.notional, 0);
+    const totalNotional = rungs.reduce((sum, rung) => {
+      const buyLevel = gridBuyLevel(config.grid!.basePrice, rung.buyDropPct);
+      return sum + resolveOrderSizing({
+        orderSizing: config.orderSizing,
+        legacyNotional: rung.notional,
+        price: buyLevel,
+        fractionalQuantity: config.market === "CRYPTO",
+      }).notional;
+    }, 0);
     const riskCheck: AutomationRiskCheck = {
       passed: blockers.length === 0,
       blockers,
@@ -216,6 +254,12 @@ export const simulateAutomationStrategy = ({
     const orderIntents: AutomationOrderIntentDraft[] = rungs.map((rung) => {
       const buyLevel = roundMoney(gridBuyLevel(config.grid!.basePrice, rung.buyDropPct));
       const sellLevel = roundMoney(buyLevel * (1 + rung.sellRisePct / 100));
+      const sizing = resolveOrderSizing({
+        orderSizing: config.orderSizing,
+        legacyNotional: rung.notional,
+        price: buyLevel,
+        fractionalQuantity: config.market === "CRYPTO",
+      });
       return {
         id: randomUUID(),
         userId,
@@ -223,8 +267,8 @@ export const simulateAutomationStrategy = ({
         symbol: config.symbol.trim().toUpperCase(),
         side: "buy",
         orderType: "limit",
-        quantity: Math.max(1, Math.floor(rung.notional / buyLevel)),
-        notional: roundMoney(rung.notional),
+        quantity: sizing.quantity,
+        notional: roundMoney(sizing.notional),
         limitPrice: buyLevel,
         status: riskCheck.passed ? "draft" : "blocked",
         reason: riskCheck.passed
@@ -269,6 +313,12 @@ export const simulateAutomationStrategy = ({
       warnings,
     };
     const now = new Date().toISOString();
+    const sizing = resolveOrderSizing({
+      orderSizing: config.orderSizing,
+      legacyNotional: config.loop.notional,
+      price: buyLevel,
+      fractionalQuantity: config.market === "CRYPTO",
+    });
     const orderIntents: AutomationOrderIntentDraft[] = [
       {
         id: randomUUID(),
@@ -277,8 +327,8 @@ export const simulateAutomationStrategy = ({
         symbol: config.symbol.trim().toUpperCase(),
         side: "buy",
         orderType: "limit",
-        quantity: Math.max(1, Math.floor(config.loop.notional / buyLevel)),
-        notional: roundMoney(config.loop.notional),
+        quantity: sizing.quantity,
+        notional: roundMoney(sizing.notional),
         limitPrice: buyLevel,
         status: riskCheck.passed ? "draft" : "blocked",
         reason: riskCheck.passed
@@ -313,7 +363,12 @@ export const simulateAutomationStrategy = ({
   const boxWidthPct = ((config.resistancePrice - config.supportPrice) / config.supportPrice) * 100;
   const expectedReturnPct = ((config.resistancePrice - config.currentPrice) / config.currentPrice) * 100;
   const expectedLossPct = ((config.currentPrice - config.supportPrice) / config.currentPrice) * 100;
-  const ladderNotional = config.ladder.reduce((sum, step) => sum + step.notional, 0);
+  const ladderNotional = config.ladder.reduce((sum, step) => sum + resolveOrderSizing({
+    orderSizing: config.orderSizing,
+    legacyNotional: step.notional,
+    price: step.price,
+    fractionalQuantity: config.market === "CRYPTO",
+  }).notional, 0);
 
   if (boxWidthPct < 1.5) {
     warnings.push("박스 폭이 좁아 수수료와 슬리피지를 이기기 어려울 수 있습니다.");
@@ -338,22 +393,30 @@ export const simulateAutomationStrategy = ({
   };
 
   const now = new Date().toISOString();
-  const orderIntents: AutomationOrderIntentDraft[] = config.ladder.map((step) => ({
-    id: randomUUID(),
-    userId,
-    strategyConfigId: config.id,
-    symbol: config.symbol.trim().toUpperCase(),
-    side: step.side,
-    orderType: "limit",
-    quantity: Math.max(1, Math.floor(step.notional / step.price)),
-    notional: roundMoney(step.notional),
-    limitPrice: roundMoney(step.price),
-    status: riskCheck.passed ? "draft" : "blocked",
-    reason: riskCheck.passed
-      ? `${config.name} 모의 자동매매 ${step.condition}`
-      : riskCheck.blockers.join(" / "),
-    createdAt: now,
-  }));
+  const orderIntents: AutomationOrderIntentDraft[] = config.ladder.map((step) => {
+    const sizing = resolveOrderSizing({
+      orderSizing: config.orderSizing,
+      legacyNotional: step.notional,
+      price: step.price,
+      fractionalQuantity: config.market === "CRYPTO",
+    });
+    return {
+      id: randomUUID(),
+      userId,
+      strategyConfigId: config.id,
+      symbol: config.symbol.trim().toUpperCase(),
+      side: step.side,
+      orderType: "limit",
+      quantity: sizing.quantity,
+      notional: roundMoney(sizing.notional),
+      limitPrice: roundMoney(step.price),
+      status: riskCheck.passed ? "draft" : "blocked",
+      reason: riskCheck.passed
+        ? `${config.name} 모의 자동매매 ${step.condition}`
+        : riskCheck.blockers.join(" / "),
+      createdAt: now,
+    };
+  });
 
   const logs = [
     `실거래 비활성: ${orderIntents.length}개 주문의도 초안만 생성했습니다.`,

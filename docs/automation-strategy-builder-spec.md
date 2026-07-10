@@ -4,7 +4,7 @@
 
 전략 조립기는 코딩 도구가 아니라 초보자가 자동매매 규칙을 문장 순서로 읽고 수정하는 설정 UI다. v1은 `조건 → 보유 확인 → 매수 → 청산 조건 → 매도 → 반복 또는 종료 → 안전 제한` 순서를 고정하며, 임의 분기, 중첩 반복, 사용자 스크립트와 AI 전략 생성은 지원하지 않는다.
 
-이번 시안의 구현 범위는 `docs/ux-prototypes/macos-native/beginner-first.html`의 mock 상태와 계산 함수다. 외부 API, 전략 저장소, SwiftUI, `OrderIntent`, RiskCheck와 브로커 제출 경계는 변경하지 않는다.
+이 문서는 향후 문장형 전략 기능의 설계 명세다. 현재 SwiftUI 전략 workspace와 엔진에는 아직 연결하지 않으며, 보관된 초기 mock 시안은 [Archive](archive/README.md#구형-ux-시안)에서만 참고한다. 외부 API, 전략 저장소, SwiftUI, `OrderIntent`, `RiskCheck`와 브로커 제출 경계는 이 명세만으로 변경하지 않는다.
 
 ## 사용자 흐름
 

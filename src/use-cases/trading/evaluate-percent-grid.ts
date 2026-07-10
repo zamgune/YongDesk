@@ -1,4 +1,5 @@
-import type { GridLot, GridPlan, GridRung } from "@/domain/automation";
+import type { AutomationOrderSizing, GridLot, GridPlan, GridRung } from "@/domain/automation";
+import { resolveOrderSizing } from "./resolve-order-sizing.ts";
 
 /**
  * 순환분할식 퍼센트 그리드 평가 (순수 함수).
@@ -48,6 +49,7 @@ export type EvaluateGridInput = {
   maxDailySells: number;
   /** 기준가 대비 이 하락률을 넘으면 신규 매수만 중단합니다. */
   maxLossPct: number;
+  orderSizing?: AutomationOrderSizing;
   /** 코인처럼 소수 수량을 허용할 때 true. */
   fractionalQuantity?: boolean;
 };
@@ -59,11 +61,6 @@ const sellLevelFor = (lot: GridLot, rung: GridRung | undefined, fallbackRisePct:
   const risePct = rung ? rung.sellRisePct : fallbackRisePct;
   return lot.entryPrice * (1 + risePct / 100);
 };
-
-const stepQuantity = (notional: number, price: number, fractional = false) =>
-  fractional
-    ? Math.floor((notional / price) * 100_000_000) / 100_000_000
-    : Math.max(1, Math.floor(notional / price));
 
 /** 차수별 매수선/매도선 미리보기 (UI용) */
 export const gridPreview = (plan: GridPlan) =>
@@ -86,6 +83,7 @@ export const evaluatePercentGrid = ({
   maxDailyBuys,
   maxDailySells,
   maxLossPct,
+  orderSizing,
   fractionalQuantity = false,
 }: EvaluateGridInput): GridEvaluation => {
   const buys: GridBuyTrigger[] = [];
@@ -130,11 +128,17 @@ export const evaluatePercentGrid = ({
         continue;
       }
       buyCount += 1;
+      const sizing = resolveOrderSizing({
+        orderSizing,
+        legacyNotional: rung.notional,
+        price: buyLevel,
+        fractionalQuantity,
+      });
       buys.push({
         rungIndex: rung.index,
         buyLevel,
-        quantity: stepQuantity(rung.notional, buyLevel, fractionalQuantity),
-        notional: rung.notional,
+        quantity: sizing.quantity,
+        notional: sizing.notional,
         reason: `${rung.index}차 매수 발동 (기준가 −${rung.buyDropPct}% = ${Math.round(buyLevel)}, 현재가 ${Math.round(marketPrice)})`,
       });
     }

@@ -9,6 +9,7 @@ import {
   assessMacRelease,
   assessMacReleaseSet,
   summarizeMacSigningReadiness,
+  type MacReleaseExpectations,
   type MacReleaseFileCheck,
   type MacReleaseIndex,
   type MacReleaseIndexFileCheck,
@@ -25,6 +26,17 @@ import {
   buildMacReleaseInstallGuide,
   type MacReleaseHandoffEntry,
 } from "../scripts/package_macos_release.mts";
+import {
+  buildMacInfoPlist,
+  normalizeMacBuildNumber,
+  parseMacPackageVersion,
+} from "../scripts/build_macos_app.mts";
+import { assertMacAppVersionConsistency } from "../scripts/verify_macos_app.mts";
+import {
+  assertMacNodeVersion,
+  assertMacNodeVersionOverride,
+  readPinnedMacNodeVersion,
+} from "../scripts/macos_release_config.mts";
 import {
   mergeDmgInstallVerificationResults,
   sidecarEndpointChecksFromVerificationOutput,
@@ -68,13 +80,15 @@ const completeFiles: MacReleaseFileCheck[] = [
 const completeReleaseSetIndex = (readyForExternalDistribution: boolean): MacReleaseIndex => ({
   app: "StockAnalysis",
   version: "0.1.0",
+  buildNumber: "1",
+  bundledNodeVersion: "v22.17.0",
   platform: "macos",
   generatedAt: "2026-07-09T00:00:00.000Z",
   releaseRoot: "/tmp",
   installGuide: "StockAnalysis-0.1.0-macos-install.md",
   installChecklist: [
     "대상 Mac CPU에 맞는 DMG를 전달합니다.",
-    "실거래는 OrderIntent, RiskCheck, credential, live gate, kill switch를 모두 통과해야 합니다.",
+    "1.0.0은 Toss·Upbit·Bithumb 실제 주문을 차단하며 OrderIntent·RiskCheck 결과는 paper 전용입니다.",
   ],
   entries: [
     {
@@ -83,6 +97,8 @@ const completeReleaseSetIndex = (readyForExternalDistribution: boolean): MacRele
       readyForExternalDistribution,
       status: readyForExternalDistribution ? "external-ready" : "local-test",
       sidecarVerified: true,
+      buildNumber: "1",
+      bundledNodeVersion: "v22.17.0",
       minimumMacOS: "14.0",
       supportedArchitectures: ["arm64"],
       files: [],
@@ -93,6 +109,8 @@ const completeReleaseSetIndex = (readyForExternalDistribution: boolean): MacRele
       readyForExternalDistribution,
       status: readyForExternalDistribution ? "external-ready" : "local-test",
       sidecarVerified: true,
+      buildNumber: "1",
+      bundledNodeVersion: "v22.17.0",
       minimumMacOS: "14.0",
       supportedArchitectures: ["x64"],
       files: [],
@@ -203,8 +221,88 @@ const installedAppVerificationResult = (
   uiSmokeVerified: true,
   uiSmokeChecks: null,
   uiSmokeOutputLines: [],
-  nodeVersion: "v25.4.0",
+  nodeVersion: "v22.17.0",
   verificationOutputLines: [],
+});
+
+test("mac app plist uses the package version and a numeric build number", () => {
+  const packageVersion = parseMacPackageVersion(readFileSync("package.json", "utf8"), "root package.json");
+  const buildNumber = normalizeMacBuildNumber("42");
+  const plist = buildMacInfoPlist({ version: packageVersion, buildNumber });
+
+  assert.match(plist, new RegExp(`<key>CFBundleShortVersionString</key>\\s*<string>${packageVersion.replaceAll(".", "\\.")}</string>`));
+  assert.match(plist, /<key>CFBundleVersion<\/key>\s*<string>42<\/string>/);
+});
+
+test("mac app build number accepts only positive integers", () => {
+  assert.equal(normalizeMacBuildNumber(undefined), "1");
+  assert.equal(normalizeMacBuildNumber(" 17 "), "17");
+  for (const invalid of ["0", "-1", "1.2", "build-1"]) {
+    assert.throws(() => normalizeMacBuildNumber(invalid), /positive integer/);
+  }
+});
+
+test("mac release Node pin is loaded from .node-version and rejects overrides", async () => {
+  const pinnedNodeVersion = await readPinnedMacNodeVersion(process.cwd());
+
+  assert.equal(pinnedNodeVersion, "v22.17.0");
+  assert.equal(assertMacNodeVersion("22.17.0", pinnedNodeVersion, "Bundled Node runtime"), "v22.17.0");
+  assert.doesNotThrow(() => assertMacNodeVersionOverride("v22.17.0", pinnedNodeVersion));
+  assert.throws(
+    () => assertMacNodeVersionOverride("v25.4.0", pinnedNodeVersion),
+    /Expected v22\.17\.0, got v25\.4\.0/,
+  );
+});
+
+test("mac app verifier requires root, plist, and bundled package versions to match", () => {
+  assert.deepEqual(assertMacAppVersionConsistency({
+    rootPackageVersion: "1.0.0",
+    infoPlistVersion: "1.0.0",
+    bundledPackageVersion: "1.0.0",
+  }), {
+    rootPackageVersion: "1.0.0",
+    infoPlistVersion: "1.0.0",
+    bundledPackageVersion: "1.0.0",
+    verified: true,
+  });
+  assert.throws(() => assertMacAppVersionConsistency({
+    rootPackageVersion: "1.0.0",
+    infoPlistVersion: "0.1.0",
+    bundledPackageVersion: "1.0.0",
+  }), /App version mismatch/);
+});
+
+test("mac release check rejects repo version and Node pin drift", async () => {
+  const expectations: MacReleaseExpectations = {
+    version: parseMacPackageVersion(readFileSync("package.json", "utf8"), "root package.json"),
+    nodeVersion: await readPinnedMacNodeVersion(process.cwd()),
+  };
+  const manifest: MacReleaseManifest = {
+    version: expectations.version,
+    buildNumber: "7",
+    arch: "arm64",
+    compatibility: {
+      targetArch: "arm64",
+      supportedArchitectures: ["arm64"],
+      bundledNodeVersion: expectations.nodeVersion,
+      sidecarVerified: true,
+    },
+  };
+
+  const matching = assessMacRelease(manifest, completeFiles, expectations);
+  assert.equal(matching.ok, true);
+  assert.equal(matching.buildNumber, "7");
+
+  const staleVersion = assessMacRelease({ ...manifest, version: "0.1.0" }, completeFiles, expectations);
+  assert.equal(staleVersion.ok, false);
+  assert.ok(staleVersion.issues.some((issue) => issue.includes("package.json")));
+
+  const wrongNode = assessMacRelease({
+    ...manifest,
+    compatibility: { ...manifest.compatibility, bundledNodeVersion: "v25.4.0" },
+  }, completeFiles, expectations);
+  assert.equal(wrongNode.ok, false);
+  assert.ok(wrongNode.issues.some((issue) => issue.includes("Expected v22.17.0")));
 });
 
 test("mac release check classifies ad-hoc packages as local test builds", () => {
@@ -224,7 +322,7 @@ test("mac release check classifies ad-hoc packages as local test builds", () => 
       supportedArchitectures: ["arm64"],
       supportsAppleSilicon: true,
       supportsIntel: false,
-      bundledNodeVersion: "v25.4.0",
+      bundledNodeVersion: "v22.17.0",
       sidecarVerified: true,
     },
   };
@@ -259,7 +357,7 @@ test("mac release check requires Developer ID and stapled notarization for exter
       supportedArchitectures: ["arm64", "x64"],
       supportsAppleSilicon: true,
       supportsIntel: true,
-      bundledNodeVersion: "v25.4.0",
+      bundledNodeVersion: "v22.17.0",
       sidecarVerified: true,
     },
   };
@@ -290,7 +388,7 @@ test("mac release check verifies actual DMG stapler and Gatekeeper evidence", ()
       supportedArchitectures: ["arm64", "x64"],
       supportsAppleSilicon: true,
       supportsIntel: true,
-      bundledNodeVersion: "v25.4.0",
+      bundledNodeVersion: "v22.17.0",
       sidecarVerified: true,
     },
   };
@@ -331,7 +429,7 @@ test("mac release check marks missing artifacts as incomplete", () => {
       supportedArchitectures: ["arm64"],
       supportsAppleSilicon: true,
       supportsIntel: false,
-      bundledNodeVersion: "v25.4.0",
+      bundledNodeVersion: "v22.17.0",
       sidecarVerified: true,
     },
   };
@@ -370,7 +468,7 @@ test("mac release check requires sidecar bundle verification evidence", () => {
       supportedArchitectures: ["arm64", "x64"],
       supportsAppleSilicon: true,
       supportsIntel: true,
-      bundledNodeVersion: "v25.4.0",
+      bundledNodeVersion: "v22.17.0",
       sidecarVerified: false,
     },
   };
@@ -401,7 +499,7 @@ test("mac release check reports the missing companion architecture for x64 build
       supportedArchitectures: ["x64"],
       supportsAppleSilicon: false,
       supportsIntel: true,
-      bundledNodeVersion: "v25.4.0",
+      bundledNodeVersion: "v22.17.0",
       sidecarVerified: true,
     },
   };
@@ -427,6 +525,33 @@ test("mac release set check accepts complete arm64 and x64 local test artifacts"
   assert.equal(report.issues.length, 0);
   assert.ok(report.warnings.some((warning) => warning.includes("Gatekeeper")));
   assert.equal(report.warnings.some((warning) => warning.includes("Intel Mac까지 지원하려면 x64")), false);
+});
+
+test("mac release set check rejects current repo version and Node pin drift", async () => {
+  const expectations: MacReleaseExpectations = {
+    version: parseMacPackageVersion(readFileSync("package.json", "utf8"), "root package.json"),
+    nodeVersion: await readPinnedMacNodeVersion(process.cwd()),
+  };
+  const matchingIndex = {
+    ...completeReleaseSetIndex(false),
+    version: expectations.version,
+    bundledNodeVersion: expectations.nodeVersion,
+  };
+  const matching = assessMacReleaseSet(matchingIndex, completeReleaseSetFiles, expectations);
+  assert.equal(matching.ok, true);
+  assert.equal(matching.buildNumber, "1");
+  assert.equal(matching.bundledNodeVersion, "v22.17.0");
+
+  const staleVersion = assessMacReleaseSet({ ...matchingIndex, version: "0.1.0" }, completeReleaseSetFiles, expectations);
+  assert.equal(staleVersion.ok, false);
+  assert.ok(staleVersion.issues.some((issue) => issue.includes("package.json")));
+
+  const wrongNode = assessMacReleaseSet({
+    ...matchingIndex,
+    bundledNodeVersion: "v25.4.0",
+  }, completeReleaseSetFiles, expectations);
+  assert.equal(wrongNode.ok, false);
+  assert.ok(wrongNode.issues.some((issue) => issue.includes("Expected v22.17.0")));
 });
 
 test("mac release set check requires the Intel companion release", () => {
@@ -640,39 +765,22 @@ test("mac dmg install verification parses copied app UI smoke checks", () => {
     "{",
     "  \"ok\": true,",
     "  \"checks\": {",
-    "    \"launchedWindow\": true,",
-    "    \"sidecarVisible\": true,",
-    "    \"koreanSymbolSearch\": true,",
-    "    \"cryptoExchangeSheet\": true,",
-    "    \"menuBarExtra\": true,",
-    "    \"topCommandButtons\": true,",
-    "    \"decisionPanelButtons\": true,",
-    "    \"paperResetConfirmation\": true,",
-    "    \"firstRunSetup\": true,",
-    "    \"firstRunSetupActions\": true,",
-    "    \"workspaceTabs\": true,",
-    "    \"orderRiskButtons\": true,",
-    "    \"orderRiskReportCopy\": true,",
-    "    \"orderSyncButton\": true,",
-    "    \"newsReplayPlaybookButtons\": true,",
-    "    \"tossSheetNoCredentialState\": true,",
-    "    \"publicIpCheckButton\": true,",
-    "    \"publicIpCopyButton\": true,",
-    "    \"tossCredentialControls\": true,",
-    "    \"tossReadinessButton\": true,",
-    "    \"strategyDraftCreation\": true,",
-    "    \"strategyReportCopy\": true,",
-    "    \"strategyBackupImport\": true,",
-    "    \"strategyCardActions\": true,",
-    "    \"automationRunConfirmation\": true,",
-    "    \"continuousAutomationScheduler\": true,",
-    "    \"selfTestSheet\": true,",
-    "    \"selfTestReportCopy\": true,",
-    "    \"distributionInstallReadiness\": true,",
-    "    \"releaseChecksumCopy\": true,",
-    "    \"sidecarLogSheet\": true,",
-    "    \"killSwitchToggle\": true,",
-    "    \"killSwitchButtonGuards\": true",
+    "    \"beginnerFirstOnboarding\": true,",
+    "    \"samsungFixtureAnalysis\": true,",
+    "    \"sourceCurrencyTimeframeVisible\": true,",
+    "    \"horizonPlans\": true,",
+    "    \"signalAndNewsSentimentTabs\": true,",
+    "    \"paperOrderDrawerNoSubmit\": true,",
+    "    \"assetsWorkspace\": true,",
+    "    \"strategyWorkflowOrder\": true,",
+    "    \"strategySheetReadOnlySmoke\": true,",
+    "    \"automationPaperOnly\": true,",
+    "    \"killSwitchReachable\": true,",
+    "    \"settingsApiReachable\": true,",
+    "    \"selfTestReachable\": true,",
+    "    \"sidecarLogReachable\": true,",
+    "    \"distributionReachable\": true,",
+    "    \"responsiveWindowSizes\": true",
     "  }",
     "}",
   ].join("\n");
@@ -680,31 +788,23 @@ test("mac dmg install verification parses copied app UI smoke checks", () => {
   const checks = uiSmokeChecksFromVerificationOutput(output);
 
   assert.ok(checks);
-  assert.equal(checks?.strategyCardActions, true);
-  assert.equal(checks?.koreanSymbolSearch, true);
-  assert.equal(checks?.cryptoExchangeSheet, true);
-  assert.equal(checks?.strategyReportCopy, true);
-  assert.equal(checks?.strategyBackupImport, true);
-  assert.equal(checks?.continuousAutomationScheduler, true);
-  assert.equal(checks?.orderRiskReportCopy, true);
-  assert.equal(checks?.orderSyncButton, true);
-  assert.equal(checks?.selfTestReportCopy, true);
-  assert.equal(checks?.releaseChecksumCopy, true);
-  assert.equal(checks?.publicIpCheckButton, true);
-  assert.equal(checks?.publicIpCopyButton, true);
-  assert.equal(checks?.firstRunSetupActions, true);
-  assert.equal(checks?.killSwitchButtonGuards, true);
+  assert.equal(checks?.beginnerFirstOnboarding, true);
+  assert.equal(checks?.samsungFixtureAnalysis, true);
+  assert.equal(checks?.horizonPlans, true);
+  assert.equal(checks?.paperOrderDrawerNoSubmit, true);
+  assert.equal(checks?.strategyWorkflowOrder, true);
+  assert.equal(checks?.automationPaperOnly, true);
+  assert.equal(checks?.responsiveWindowSizes, true);
   assert.equal(uiSmokeChecksVerified(checks), true);
 
   const installedCopyChecks: UiSmokeChecks = {
     ...checks,
-    releaseChecksumCopy: undefined,
   };
   assert.equal(uiSmokeChecksVerified(installedCopyChecks), true);
 
   const missingButtonGuard: UiSmokeChecks = {
     ...checks,
-    killSwitchButtonGuards: false,
+    paperOrderDrawerNoSubmit: false,
   };
   assert.equal(uiSmokeChecksVerified(missingButtonGuard), false);
 });
@@ -764,6 +864,8 @@ test("mac release install guide covers cross-arch handoff and Toss setup", () =>
     {
       arch: "arm64",
       label: "Apple Silicon Mac",
+      buildNumber: "1",
+      bundledNodeVersion: "v22.17.0",
       readyForExternalDistribution: false,
       status: "local-test",
       sidecarVerified: true,
@@ -782,6 +884,8 @@ test("mac release install guide covers cross-arch handoff and Toss setup", () =>
     {
       arch: "x64",
       label: "Intel Mac",
+      buildNumber: "1",
+      bundledNodeVersion: "v22.17.0",
       readyForExternalDistribution: false,
       status: "local-test",
       sidecarVerified: true,
@@ -815,15 +919,12 @@ test("mac release install guide covers cross-arch handoff and Toss setup", () =>
   assert.match(guide, /appLaunchVerified/);
   assert.match(guide, /uiSmokeVerified/);
   assert.match(guide, /sidecarEndpointChecks\.strategyBackupImport=true/);
-  assert.match(guide, /uiSmokeChecks\.tossCredentialControls=true/);
-  assert.match(guide, /uiSmokeChecks\.strategyReportCopy=true/);
-  assert.match(guide, /uiSmokeChecks\.strategyBackupImport=true/);
-  assert.match(guide, /uiSmokeChecks\.orderRiskReportCopy=true/);
-  assert.match(guide, /uiSmokeChecks\.orderSyncButton=true/);
-  assert.match(guide, /uiSmokeChecks\.selfTestReportCopy=true/);
+  assert.match(guide, /uiSmokeChecks\.samsungFixtureAnalysis=true/);
+  assert.match(guide, /uiSmokeChecks\.horizonPlans=true/);
+  assert.match(guide, /uiSmokeChecks\.paperOrderDrawerNoSubmit=true/);
+  assert.match(guide, /uiSmokeChecks\.strategyWorkflowOrder=true/);
+  assert.match(guide, /uiSmokeChecks\.responsiveWindowSizes=true/);
   assert.match(guide, /DMG SHA-256.*release index.*release-check/);
-  assert.match(guide, /uiSmokeChecks\.publicIpCheckButton=true/);
-  assert.match(guide, /uiSmokeChecks\.publicIpCopyButton=true/);
   assert.match(guide, /StockAnalysis-0\.1\.0-macos-release-check\.json/);
   assert.match(guide, /staplerValidated=true/);
   assert.match(guide, /gatekeeperAccepted=true/);

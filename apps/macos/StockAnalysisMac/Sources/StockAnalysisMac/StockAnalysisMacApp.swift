@@ -12,16 +12,17 @@ struct StockAnalysisMacApp: App {
     @StateObject private var model = AppModel()
 
     var body: some Scene {
-        WindowGroup("StockAnalysis Terminal", id: "main") {
-            MainDashboardView()
+        WindowGroup("YongStockDesk", id: "main") {
+            BeginnerFirstRootView()
                 .environmentObject(model)
                 .task {
                     await model.bootstrap()
                 }
         }
         .defaultSize(width: 1440, height: 900)
+        .windowResizability(.contentMinSize)
 
-        MenuBarExtra("StockAnalysis", systemImage: model.menuBarIcon) {
+        MenuBarExtra("YongStockDesk", systemImage: model.menuBarIcon) {
             MenuBarStatusView()
                 .environmentObject(model)
         }
@@ -36,14 +37,24 @@ final class AppModel: ObservableObject {
     @Published var automationHealth: AutomationHealth?
     @Published var newsEvents: [LocalNewsEvent] = []
     @Published var latestAlerts: [LocalNewsEvent] = []
+    @Published var newsSourceErrors: [NewsSourceError] = []
+    @Published var newsLastGeneratedAt: String?
+    @Published var newsSourceStatusMessage = "공식/RSS 소스 상태는 뉴스 갱신 후 표시됩니다."
+    @Published var communitySentiment: CommunitySentimentSnapshot?
+    @Published var communitySentimentMessage = "종목별 커뮤니티 반응은 뉴스·알림 화면에서 불러올 수 있습니다."
+    @Published var redditCredentialStored = false
+    @Published var redditCredentialMessage = "Reddit OAuth는 선택 사항입니다. 연결하면 미국 종목의 게시글·댓글 근거를 함께 수집합니다."
     @Published var paperTradingState: PaperTradingStateView?
     @Published var paperTradingMessage = "모의 주문을 실행하면 paper 계좌와 포지션이 여기에 표시됩니다."
     @Published var terminalDashboard: TerminalDashboardSnapshot?
     @Published var latestMarketAnalysis: MarketAnalysisSnapshot?
+    @Published var latestWorkspaceAnalysis: WorkspaceAnalysis?
+    @Published var workspaceAnalysisMessage = "종목을 선택하면 1시간·4시간·일봉 기준을 함께 계산합니다."
+    @Published private(set) var isWorkspaceAnalysisLoading = false
     @Published var brokerCredential: BrokerCredentialView?
     @Published var brokerAccounts: [BrokerAccountView] = []
     @Published var brokerAccountPreference: BrokerAccountPreferenceView?
-    @Published var brokerCredentialMessage = "토스 API 키를 등록하면 실계좌 조회와 자동거래 준비 상태를 확인할 수 있습니다."
+    @Published var brokerCredentialMessage = "토스 API 키를 등록하면 계좌·보유·미체결을 읽기 전용으로 확인할 수 있습니다."
     @Published var brokerAccountMessage = "검증 완료된 Toss API 키가 있으면 자동거래 계좌를 선택할 수 있습니다."
     @Published var keychainCredentialStored = false
     @Published var keychainCredentialMessage = "Keychain 상태를 아직 확인하지 않았습니다."
@@ -52,7 +63,7 @@ final class AppModel: ObservableObject {
     @Published var tossReadiness: TossReadinessResponse?
     @Published var tossReadinessMessage = "운영 준비 점검은 저장된 Toss credential로 토큰/계좌/보유/미체결 조회를 주문 없이 확인합니다."
     @Published var localLiveTrading: LocalLiveTradingState?
-    @Published var localLiveTradingMessage = "실거래는 로컬 운영자 게이트와 사용자 토글을 모두 켜야 열립니다."
+    @Published var localLiveTradingMessage = "1.0.0 데스크톱은 Toss 조회·사전검증·paper 자동화 전용이며 실제 주문은 차단됩니다."
     @Published var killSwitchState: LocalKillSwitchState?
     @Published var killSwitchMessage = "긴급 중지는 모의 주문과 자동화 큐를 sidecar에서 차단합니다."
     @Published var workerControlState: LocalWorkerControlState?
@@ -64,6 +75,7 @@ final class AppModel: ObservableObject {
     @Published var cryptoReadiness: CryptoReadinessResponse?
     @Published var cryptoOrderPrecheck: CryptoOrderPrecheckResponse?
     @Published var strategyConfigs: [StrategyConfigView] = []
+    @Published var requestedStrategyConfigId: String?
     @Published var strategyMessage = "전략은 초안 저장 후 시뮬레이션을 통과해야 활성화할 수 있습니다."
     @Published var latestStrategySimulation: StrategySimulationResultView?
     @Published var latestStrategyTickPreview: String?
@@ -78,8 +90,11 @@ final class AppModel: ObservableObject {
     @Published var activeEnginePort: Int
 
     private static let sidecarLoaderImport = #"data:text/javascript,import { register } from "node:module"; import { pathToFileURL } from "node:url"; register("./scripts/ts_path_loader.mjs", pathToFileURL("./"));"#
+    private static let marketAnalysisCandleRetentionLimit = 400
     @Published var isStartingSidecar = false
     @Published var killSwitchEngaged = false
+    @Published private(set) var killSwitchTransitionPending = false
+    @Published private(set) var workerControlTransitionPending = false
     @Published var lastUpdated = "-"
 
     let store: AppSupportStore
@@ -88,6 +103,9 @@ final class AppModel: ObservableObject {
     private let notifier = NotificationService()
     private var sidecar: Process?
     private var sidecarLogHandle: FileHandle?
+    private var newsRefreshTask: Task<Void, Never>?
+    private var communityRefreshGeneration = 0
+    private var workspaceAnalysisGeneration = 0
 
     var menuBarIcon: String {
         if killSwitchEngaged {
@@ -100,27 +118,22 @@ final class AppModel: ObservableObject {
         if killSwitchEngaged {
             return "긴급 중지"
         }
-        if localLiveTrading?.effective == true || brokerDiagnostics?.liveGate.liveTradingEffective == true {
-            return "실거래 가능"
-        }
-        if settings.liveTradingOperatorEnabled {
-            return "실거래 게이트 ON"
-        }
-        return "실거래 게이트 OFF"
+        return "PAPER ONLY"
     }
 
     var liveGateTone: PillTone {
         if killSwitchEngaged {
             return .red
         }
-        if localLiveTrading?.effective == true || brokerDiagnostics?.liveGate.liveTradingEffective == true {
-            return .green
-        }
-        return settings.liveTradingOperatorEnabled ? .amber : .red
+        return .green
     }
 
     var workerPausedEffective: Bool {
-        killSwitchEngaged || workerControlState?.paused == true || settings.workerPaused
+        executionBlocked || workerControlState?.paused == true || settings.workerPaused
+    }
+
+    var executionBlocked: Bool {
+        killSwitchEngaged || killSwitchTransitionPending || workerControlTransitionPending
     }
 
     var client: EngineClient {
@@ -130,7 +143,15 @@ final class AppModel: ObservableObject {
     init() {
         do {
             let store = try AppSupportStore()
-            let settings = store.loadSettings()
+            var settings = store.loadSettings()
+            if settings.liveTradingOperatorEnabled {
+                settings.liveTradingOperatorEnabled = false
+                try? store.saveSettings(settings)
+            }
+            if settings.cryptoLiveTradingOperatorEnabled {
+                settings.cryptoLiveTradingOperatorEnabled = false
+                try? store.saveSettings(settings)
+            }
             self.store = store
             self.database = LocalSQLiteStore(databaseURL: store.sqliteURL)
             self.settings = settings
@@ -156,12 +177,14 @@ final class AppModel: ObservableObject {
             statusLine = error.localizedDescription
         }
         await refreshHealth()
+        refreshRedditCredentialStatus()
         if health?.ok == true, !isCurrentBundledSidecar(health) {
             terminateManagedSidecar(on: activeEnginePort, reason: "stale sidecar build")
             health = nil
         }
         if health?.ok == true {
             await refreshNews()
+            startNewsRefreshLoop()
             refreshKeychainCredentialStatus()
             await refreshBrokerCredential()
             await refreshBrokerAccounts()
@@ -194,16 +217,28 @@ final class AppModel: ObservableObject {
         let keychain = self.keychain
         Task.detached { [weak self, workingDirectory, store, keychain] in
             let brokerEncryptionKey = Self.resolveLocalBrokerEncryptionKey(store: store)
+            let redditClientId = try? keychain.readSecret(account: "reddit-client-id")
+            let redditClientSecret = try? keychain.readSecret(account: "reddit-client-secret")
             Task.detached {
                 try? keychain.saveSecret(brokerEncryptionKey, account: "broker-credential-encryption-key")
             }
             await MainActor.run {
-                self?.runSidecar(workingDirectory: workingDirectory, brokerEncryptionKey: brokerEncryptionKey)
+                self?.runSidecar(
+                    workingDirectory: workingDirectory,
+                    brokerEncryptionKey: brokerEncryptionKey,
+                    redditClientId: redditClientId,
+                    redditClientSecret: redditClientSecret
+                )
             }
         }
     }
 
-    private func runSidecar(workingDirectory: URL, brokerEncryptionKey: String) {
+    private func runSidecar(
+        workingDirectory: URL,
+        brokerEncryptionKey: String,
+        redditClientId: String?,
+        redditClientSecret: String?
+    ) {
         guard sidecar == nil, isStartingSidecar else {
             return
         }
@@ -220,6 +255,8 @@ final class AppModel: ObservableObject {
         process.arguments = bundledNodeURL() == nil ? ["node"] + engineArguments : engineArguments
         process.currentDirectoryURL = workingDirectory
         var environment = ProcessInfo.processInfo.environment
+        environment.removeValue(forKey: "REDDIT_CLIENT_ID")
+        environment.removeValue(forKey: "REDDIT_CLIENT_SECRET")
         environment["PATH"] = [
             bundledNodeURL()?.deletingLastPathComponent().path(percentEncoded: false),
             "/opt/homebrew/bin",
@@ -232,9 +269,14 @@ final class AppModel: ObservableObject {
         environment["STOCK_ANALYSIS_STORAGE_ROOT"] = store.sidecarStorageRoot.path(percentEncoded: false)
         environment["STOCK_ANALYSIS_LOCAL_ENGINE_PORT"] = "\(activeEnginePort)"
         environment["STOCK_ANALYSIS_RUNTIME"] = "macos-local"
-        environment["ENABLE_LIVE_TRADING"] = settings.liveTradingOperatorEnabled ? "true" : "false"
-        environment["ENABLE_CRYPTO_LIVE_TRADING"] = settings.cryptoLiveTradingOperatorEnabled ? "true" : "false"
+        environment["ENABLE_LIVE_TRADING"] = "false"
+        environment["ENABLE_CRYPTO_LIVE_TRADING"] = "false"
         environment["BROKER_CREDENTIAL_ENC_KEY"] = brokerEncryptionKey
+        if let redditClientId, !redditClientId.isEmpty,
+           let redditClientSecret, !redditClientSecret.isEmpty {
+            environment["REDDIT_CLIENT_ID"] = redditClientId
+            environment["REDDIT_CLIENT_SECRET"] = redditClientSecret
+        }
         if let buildId = bundledSidecarBuildId() {
             environment["STOCK_ANALYSIS_SIDECAR_BUILD_ID"] = buildId
         }
@@ -290,6 +332,7 @@ final class AppModel: ObservableObject {
                 await refreshPaperTradingState()
                 await refreshStrategyConfigs()
                 await refreshNews()
+                startNewsRefreshLoop()
                 return
             }
             if sidecar == nil {
@@ -301,6 +344,8 @@ final class AppModel: ObservableObject {
     }
 
     func stopSidecar() {
+        newsRefreshTask?.cancel()
+        newsRefreshTask = nil
         let port = activeEnginePort
         sidecar?.terminate()
         sidecar = nil
@@ -318,6 +363,60 @@ final class AppModel: ObservableObject {
         stopSidecar()
         terminateManagedSidecar(on: previousPort, reason: reason)
         startSidecar()
+    }
+
+    func refreshRedditCredentialStatus() {
+        do {
+            let clientId = try keychain.readSecret(account: "reddit-client-id")
+            let clientSecret = try keychain.readSecret(account: "reddit-client-secret")
+            redditCredentialStored = !(clientId ?? "").isEmpty && !(clientSecret ?? "").isEmpty
+            redditCredentialMessage = redditCredentialStored
+                ? "Reddit 공식 OAuth 키가 이 Mac의 Keychain에 저장되어 있습니다. 다음 민심 갱신부터 게시글·댓글을 수집합니다."
+                : "Reddit OAuth는 선택 사항입니다. 연결하면 미국 종목의 게시글·댓글 근거를 함께 수집합니다."
+        } catch {
+            redditCredentialStored = false
+            redditCredentialMessage = "Reddit Keychain 상태 확인 실패: \(Self.errorMessage(error))"
+        }
+    }
+
+    func saveRedditCredential(clientId: String, clientSecret: String) {
+        let normalizedClientId = clientId.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalizedClientSecret = clientSecret.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedClientId.isEmpty, !normalizedClientSecret.isEmpty else {
+            redditCredentialMessage = "Reddit Client ID와 Client Secret을 모두 입력하세요."
+            return
+        }
+        do {
+            try keychain.saveSecret(normalizedClientId, account: "reddit-client-id")
+            do {
+                try keychain.saveSecret(normalizedClientSecret, account: "reddit-client-secret")
+            } catch {
+                try? keychain.delete(broker: "reddit-client-id")
+                throw error
+            }
+            refreshRedditCredentialStatus()
+            communityRefreshGeneration += 1
+            communitySentiment = nil
+            communitySentimentMessage = "Reddit OAuth 반영을 위해 엔진을 다시 시작합니다. 잠시 후 민심을 갱신하세요."
+            restartSidecar(reason: "Reddit OAuth credential changed")
+        } catch {
+            redditCredentialStored = false
+            redditCredentialMessage = "Reddit OAuth 저장 실패: \(Self.errorMessage(error))"
+        }
+    }
+
+    func deleteRedditCredential() {
+        do {
+            try keychain.delete(broker: "reddit-client-id")
+            try keychain.delete(broker: "reddit-client-secret")
+            redditCredentialStored = false
+            redditCredentialMessage = "Reddit OAuth 연결을 삭제했습니다. 미국 민심은 다른 허용 소스만 사용합니다."
+            communityRefreshGeneration += 1
+            communitySentiment = nil
+            restartSidecar(reason: "Reddit OAuth credential removed")
+        } catch {
+            redditCredentialMessage = "Reddit OAuth 삭제 실패: \(Self.errorMessage(error))"
+        }
     }
 
     func openSidecarLog() {
@@ -806,12 +905,80 @@ final class AppModel: ObservableObject {
     }
 
     func refreshNews() async {
+        await refreshNews(silent: false)
+    }
+
+    private func refreshNews(silent: Bool) async {
         do {
             let response = try await loadNews(limit: 60)
-            statusLine = "news refreshed · \(response.events.count) events"
+            if !silent {
+                statusLine = "news refreshed · \(response.events.count) events"
+            }
         } catch {
-            statusLine = error.localizedDescription
+            newsSourceStatusMessage = "뉴스 갱신 실패: \(Self.errorMessage(error))"
+            if !silent {
+                statusLine = error.localizedDescription
+            }
         }
+    }
+
+    private func startNewsRefreshLoop() {
+        guard newsRefreshTask == nil else {
+            return
+        }
+        newsRefreshTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(120))
+                guard !Task.isCancelled else {
+                    return
+                }
+                guard let self else {
+                    return
+                }
+                guard self.health?.ok == true else {
+                    continue
+                }
+                await self.refreshNews(silent: true)
+            }
+        }
+    }
+
+    func refreshCommunitySentiment(symbol: String, market: String) async {
+        let normalizedSymbol = symbol.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        communityRefreshGeneration += 1
+        let requestGeneration = communityRefreshGeneration
+        communitySentiment = nil
+        guard !normalizedSymbol.isEmpty else {
+            communitySentimentMessage = "민심을 조회할 종목을 먼저 선택하세요."
+            return
+        }
+        communitySentimentMessage = "\(normalizedSymbol) 민심 근거를 수집 중입니다."
+        do {
+            let response = try await client.communitySentiment(
+                symbol: normalizedSymbol,
+                market: market,
+                includeBroad: false,
+                refresh: true
+            )
+            guard requestGeneration == communityRefreshGeneration else {
+                return
+            }
+            communitySentiment = response
+            communitySentimentMessage = response.lowEvidence
+                ? "\(normalizedSymbol) 민심 표본이 부족합니다. 소스 상태와 근거 수를 함께 확인하세요."
+                : "\(normalizedSymbol) 민심 갱신 · 근거 \(response.evidenceCount)건 · 신뢰도 \(response.confidence)%"
+        } catch {
+            guard requestGeneration == communityRefreshGeneration else {
+                return
+            }
+            communitySentiment = nil
+            communitySentimentMessage = "\(normalizedSymbol) 민심 조회 실패: \(Self.errorMessage(error))"
+        }
+    }
+
+    func completeOnboarding() {
+        settings.hasCompletedOnboarding = true
+        try? store.saveSettings(settings)
     }
 
     func refreshNewsSummary() async -> String {
@@ -895,6 +1062,11 @@ final class AppModel: ObservableObject {
         let response = try await client.news(limit: limit)
         newsEvents = response.events
         latestAlerts = response.alertCandidates
+        newsSourceErrors = response.errors
+        newsLastGeneratedAt = response.generatedAt
+        newsSourceStatusMessage = response.errors.isEmpty
+            ? "공식/RSS 소스 갱신 완료 · 오류 없음"
+            : "공식/RSS 소스 \(response.errors.count)곳에서 오류가 발생했습니다. 정상 소스의 저장 이벤트는 유지됩니다."
         lastUpdated = Self.timeFormatter.string(from: Date())
         if settings.alertsEnabled {
             await notifier.requestAuthorization()
@@ -1015,8 +1187,8 @@ final class AppModel: ObservableObject {
             let response = try await client.brokerDiagnostics(includePublicIP: includePublicIP)
             brokerDiagnostics = response
             let gate = response.liveGate.automationQueueReady
-                ? "자동거래 준비"
-                : response.liveGate.liveTradingEffective ? "실거래 가능·자동화 차단" : "실거래 차단"
+                ? "paper 자동화 준비"
+                : "paper 자동화 점검 필요"
             let ip = response.egress.ip ?? (response.egress.status == "not-requested" ? "공인 IP 미조회" : "공인 IP 미확인")
             brokerDiagnosticsMessage = "\(gate) · \(ip) · \(response.liveGate.readinessOverall)"
         } catch {
@@ -1078,26 +1250,21 @@ final class AppModel: ObservableObject {
     }
 
     func setKillSwitchEngaged(_ engaged: Bool, reason: String) async {
-        applyKillSwitch(LocalKillSwitchState(
-            engaged: engaged,
-            reason: engaged ? reason : nil,
-            updatedAt: ISO8601DateFormatter().string(from: Date()),
-            updatedBy: "macos-app",
-            blocks: ["paper-trading", "automation-cycle"]
-        ))
-        if engaged {
-            statusLine = "kill switch engaged"
-        } else {
-            statusLine = "kill switch released"
-        }
+        guard !killSwitchTransitionPending else { return }
+        killSwitchTransitionPending = true
+        defer { killSwitchTransitionPending = false }
+        killSwitchMessage = engaged ? "sidecar 긴급 중지를 요청 중입니다." : "sidecar 긴급 중지 해제를 요청 중입니다."
+        statusLine = engaged ? "kill switch request pending" : "kill switch release pending"
         do {
             let response = try await client.updateLocalKillSwitch(engaged: engaged, reason: reason)
             applyKillSwitch(response.killSwitch)
-            killSwitchMessage = engaged
+            statusLine = response.killSwitch.engaged ? "kill switch engaged" : "kill switch released"
+            killSwitchMessage = response.killSwitch.engaged
                 ? "sidecar 긴급 중지 활성 · \(response.killSwitch.reason ?? reason)"
                 : "sidecar 긴급 중지를 해제했습니다."
         } catch {
-            killSwitchMessage = "앱 상태만 변경됨 · sidecar 긴급 중지 갱신 실패: \(Self.errorMessage(error))"
+            statusLine = "kill switch request failed"
+            killSwitchMessage = "긴급 중지 상태 변경 실패 · 마지막 확인 상태를 유지합니다: \(Self.errorMessage(error))"
         }
         await refreshWorkerControl()
         await refreshCurrentTerminalDashboard()
@@ -1116,21 +1283,21 @@ final class AppModel: ObservableObject {
     }
 
     func setWorkerPaused(_ paused: Bool, reason: String) async {
-        applyWorkerControl(LocalWorkerControlState(
-            paused: paused,
-            reason: paused ? reason : nil,
-            updatedAt: ISO8601DateFormatter().string(from: Date()),
-            updatedBy: "macos-app"
-        ))
-        statusLine = paused ? "worker paused" : "worker resumed"
+        guard !workerControlTransitionPending else { return }
+        workerControlTransitionPending = true
+        defer { workerControlTransitionPending = false }
+        workerControlMessage = paused ? "sidecar 워커 일시중지를 요청 중입니다." : "sidecar 워커 재개를 요청 중입니다."
+        statusLine = paused ? "worker pause pending" : "worker resume pending"
         do {
             let response = try await client.updateLocalWorkerControl(paused: paused, reason: reason)
             applyWorkerControl(response.workerControl)
-            workerControlMessage = paused
+            statusLine = response.workerControl.paused ? "worker paused" : "worker resumed"
+            workerControlMessage = response.workerControl.paused
                 ? "sidecar 워커 일시중지 · \(response.workerControl.reason ?? reason)"
                 : "sidecar 워커 일시중지를 해제했습니다."
         } catch {
-            workerControlMessage = "앱 상태만 변경됨 · sidecar 워커 상태 갱신 실패: \(Self.errorMessage(error))"
+            statusLine = "worker state request failed"
+            workerControlMessage = "워커 상태 변경 실패 · 마지막 확인 상태를 유지합니다: \(Self.errorMessage(error))"
         }
     }
 
@@ -1145,6 +1312,10 @@ final class AppModel: ObservableObject {
     }
 
     func setAutomationSchedulerEnabled(_ enabled: Bool, intervalSeconds: Int) async {
+        if enabled, executionBlocked || workerPausedEffective {
+            automationSchedulerMessage = "긴급 중지 또는 워커 일시중지 전환 중에는 연속 자동 실행을 시작할 수 없습니다."
+            return
+        }
         do {
             let response = try await client.updateLocalAutomationScheduler(
                 enabled: enabled,
@@ -1173,7 +1344,7 @@ final class AppModel: ObservableObject {
             brokerCredential = response.credential ?? brokerCredential
             localLiveTradingMessage = enabled
                 ? liveTradingMessage(response.liveTrading)
-                : "사용자 실거래 토글을 껐습니다."
+                : "Toss 자동화는 paper 전용입니다."
             await refreshBrokerDiagnostics()
         } catch {
             localLiveTradingMessage = "실거래 토글 변경 실패: \(Self.errorMessage(error))"
@@ -1181,24 +1352,25 @@ final class AppModel: ObservableObject {
     }
 
     func setLocalLiveTradingOperatorEnabled(_ enabled: Bool) {
-        settings.liveTradingOperatorEnabled = enabled
+        settings.liveTradingOperatorEnabled = false
         try? store.saveSettings(settings)
         localLiveTradingMessage = enabled
-            ? "로컬 운영자 게이트를 켰습니다. sidecar를 재시작해 ENABLE_LIVE_TRADING=true를 반영합니다."
-            : "로컬 운영자 게이트를 껐습니다. sidecar를 재시작해 실거래 제출을 차단합니다."
-        restartSidecar(reason: "live trading operator gate changed")
+            ? "1.0.0에서는 Toss 실거래를 열지 않습니다. 조회·사전검증·paper 자동화를 사용하세요."
+            : "Toss 자동화는 paper 전용입니다."
+        if enabled {
+            statusLine = "toss live trading remains disabled"
+        }
     }
 
     func setCryptoLiveTradingOperatorEnabled(_ enabled: Bool) {
-        settings.cryptoLiveTradingOperatorEnabled = enabled
-        if enabled {
-            settings.liveTradingOperatorEnabled = true
-        }
+        settings.cryptoLiveTradingOperatorEnabled = false
         try? store.saveSettings(settings)
         cryptoExchangeMessage = enabled
-            ? "코인 실거래 게이트를 켰습니다. sidecar 재시작 후 시뮬레이션·API 키·긴급 중지 조건을 통과한 전략은 실제 주문을 제출할 수 있습니다."
-            : "코인 실거래 게이트를 껐습니다. 코인 전략은 paper 자동화로만 실행됩니다."
-        restartSidecar(reason: "crypto live trading operator gate changed")
+            ? "1.0.0에서는 체결 동기화 안전 경계가 없는 코인 실거래를 열지 않습니다. 조회·사전검증·paper 자동화는 사용할 수 있습니다."
+            : "코인 전략은 paper 자동화로 실행됩니다."
+        if enabled {
+            statusLine = "crypto live trading remains disabled"
+        }
     }
 
     func registerBrokerCredential(clientId: String, clientSecret: String) async {
@@ -1304,18 +1476,22 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func createStrategyDraft(_ input: StrategyDraftInput) async {
+    @discardableResult
+    func createStrategyDraft(_ input: StrategyDraftInput) async -> StrategyConfigView? {
         do {
             let response = try await client.createStrategyDraft(input)
             latestStrategyTickPreview = nil
             strategyMessage = "\(response.config.name) 초안을 저장했습니다. 활성화 전 시뮬레이션이 필요합니다."
             await refreshStrategyConfigs(replacingMessage: false)
+            return response.config
         } catch {
             strategyMessage = "전략 저장 실패: \(Self.errorMessage(error))"
+            return nil
         }
     }
 
-    func updateStrategyDraft(_ config: StrategyConfigView, input: StrategyDraftInput) async {
+    @discardableResult
+    func updateStrategyDraft(_ config: StrategyConfigView, input: StrategyDraftInput) async -> StrategyConfigView? {
         do {
             let response = try await client.updateStrategyDraft(id: config.id, input: input)
             if latestStrategySimulation?.strategyConfigId == config.id {
@@ -1326,8 +1502,10 @@ final class AppModel: ObservableObject {
             }
             strategyMessage = "\(response.config.name) 전략을 수정했습니다. 변경된 설정은 다시 시뮬레이션해야 활성화할 수 있습니다."
             await refreshStrategyConfigs(replacingMessage: false)
+            return response.config
         } catch {
             strategyMessage = "전략 수정 실패: \(Self.errorMessage(error))"
+            return nil
         }
     }
 
@@ -1513,6 +1691,86 @@ final class AppModel: ObservableObject {
         }
     }
 
+    func refreshWorkspaceAnalysis(
+        symbol: String,
+        assetClass: AnalysisAssetClass,
+        session: String
+    ) async -> String {
+        let normalizedSymbol = symbol.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        let targetSymbol = normalizedSymbol.isEmpty
+            ? (assetClass == .crypto ? "KRW-BTC" : "005930.KS")
+            : normalizedSymbol
+        workspaceAnalysisGeneration += 1
+        let requestGeneration = workspaceAnalysisGeneration
+        isWorkspaceAnalysisLoading = true
+        workspaceAnalysisMessage = "\(targetSymbol) 멀티 타임프레임 데이터를 계산 중입니다."
+        defer {
+            if requestGeneration == workspaceAnalysisGeneration {
+                isWorkspaceAnalysisLoading = false
+            }
+        }
+
+        do {
+            let data = try await client.workspaceAnalysisData(
+                symbol: targetSymbol,
+                assetClass: assetClass,
+                source: .auto
+            )
+            let workspace = try JSONDecoder().decode(WorkspaceAnalysis.self, from: data)
+            guard requestGeneration == workspaceAnalysisGeneration else {
+                return "이전 종목 분석 응답을 폐기했습니다."
+            }
+            guard workspace.orderSubmissionAttempted == false else {
+                throw NSError(
+                    domain: "YongStockDesk.WorkspaceAnalysis",
+                    code: 1,
+                    userInfo: [NSLocalizedDescriptionKey: "분석 응답이 주문 제출 안전 계약을 위반했습니다."]
+                )
+            }
+
+            latestWorkspaceAnalysis = workspace
+            let dailyData = Self.workspaceAnalysisData(data, key: "daily")
+            latestMarketAnalysis = dailyData.flatMap(Self.parseMarketAnalysis)
+            workspaceAnalysisMessage = Self.workspaceAnalysisSummary(workspace)
+            statusLine = "\(targetSymbol) multi-timeframe analysis loaded"
+
+            let paperResponse = try? await client.paperTradingState()
+            guard requestGeneration == workspaceAnalysisGeneration else {
+                return "이전 종목 후속 응답을 폐기했습니다."
+            }
+            if let paperResponse {
+                paperTradingState = paperResponse.state
+                paperTradingMessage = "paper state 갱신 · 포지션 \(paperResponse.state.positions.count)개 · 주문 \(paperResponse.state.orders.count)건"
+            }
+
+            if assetClass == .stock {
+                let dashboard = try? await client.terminalDashboard(symbol: targetSymbol, session: session)
+                guard requestGeneration == workspaceAnalysisGeneration else {
+                    return "이전 종목 대시보드 응답을 폐기했습니다."
+                }
+                terminalDashboard = dashboard
+            } else {
+                terminalDashboard = nil
+            }
+            lastUpdated = Self.timeFormatter.string(from: Date())
+
+            let preview = dailyData.map(Self.marketAnalysisPreview)
+                ?? "\(targetSymbol) 일봉 상세 분석 데이터가 없습니다."
+            return preview + "\n\n" + Self.workspaceAnalysisSummary(workspace)
+        } catch {
+            guard requestGeneration == workspaceAnalysisGeneration else {
+                return "이전 종목 분석 오류를 폐기했습니다."
+            }
+            let message = Self.errorMessage(error)
+            latestWorkspaceAnalysis = nil
+            latestMarketAnalysis = nil
+            terminalDashboard = nil
+            workspaceAnalysisMessage = "\(targetSymbol) 분석 실패: \(message)"
+            statusLine = message
+            return workspaceAnalysisMessage
+        }
+    }
+
     func searchSymbols(query: String, session: String) async throws -> [LocalSymbolSearchItem] {
         let markets = session == "KR" ? ["KOSPI", "KOSDAQ"] : ["US", "CRYPTO"]
         return try await client.searchSymbols(query: query, markets: markets).matches
@@ -1564,16 +1822,19 @@ final class AppModel: ObservableObject {
     }
 
     func runCryptoReadiness(exchange: String, market: String) async {
+        cryptoReadiness = nil
         do {
             let response = try await client.cryptoReadiness(exchange: exchange, market: market)
             cryptoReadiness = response
-            cryptoExchangeMessage = "\(exchange) \(market) 준비 점검 통과 · 계좌/주문 가능 정보 조회 · 주문 제출 없음"
+            cryptoExchangeMessage = "\(exchange) \(market) \(response.ready ? "준비 점검 통과" : "준비 점검 차단") · \(response.message)"
         } catch {
+            cryptoReadiness = nil
             cryptoExchangeMessage = "\(exchange) 준비 점검 실패: \(Self.errorMessage(error))"
         }
     }
 
     func runCryptoOrderPrecheck(exchange: String, market: String, side: String, volume: Double, price: Double) async {
+        cryptoOrderPrecheck = nil
         do {
             let response = try await client.cryptoOrderPrecheck(
                 exchange: exchange,
@@ -1583,8 +1844,10 @@ final class AppModel: ObservableObject {
                 price: price
             )
             cryptoOrderPrecheck = response
-            cryptoExchangeMessage = "\(exchange) 사전검증 \(response.passed ? "통과" : "차단") · 예상 \(response.estimatedValue) KRW · 주문 제출 없음"
+            let blocker = response.blockers.first.map { " · \($0)" } ?? ""
+            cryptoExchangeMessage = "\(exchange) 사전검증 \(response.passed ? "통과" : "차단") · 예상 \(response.estimatedValue) KRW · 주문 제출 없음\(blocker)"
         } catch {
+            cryptoOrderPrecheck = nil
             cryptoExchangeMessage = "\(exchange) 주문 사전검증 실패: \(Self.errorMessage(error))"
         }
     }
@@ -1602,7 +1865,7 @@ final class AppModel: ObservableObject {
     }
 
     func runPaper(session: String) async -> String {
-        guard !killSwitchEngaged else {
+        guard !executionBlocked else {
             statusLine = "kill switch blocks paper run"
             return "긴급 중지 상태라 모의 주문 실행을 차단했습니다."
         }
@@ -1619,7 +1882,7 @@ final class AppModel: ObservableObject {
     }
 
     func runPaperOrderIntent(_ dashboard: TerminalDashboardSnapshot, session: String) async -> String {
-        guard !killSwitchEngaged else {
+        guard !executionBlocked else {
             statusLine = "kill switch blocks paper order intent"
             return "긴급 중지 상태라 선택 OrderIntent 모의 주문을 차단했습니다."
         }
@@ -1638,7 +1901,7 @@ final class AppModel: ObservableObject {
     }
 
     func runAutomationCycle() async -> String {
-        guard !killSwitchEngaged else {
+        guard !executionBlocked else {
             statusLine = "kill switch blocks automation"
             return "긴급 중지 상태라 자동화 큐 실행을 차단했습니다."
         }
@@ -1655,6 +1918,8 @@ final class AppModel: ObservableObject {
             let data = try await client.runAutomationCycle()
             latestAutomationRun = Self.automationCycleResponse(data)
             await refreshPaperTradingState()
+            await refreshStrategyConfigs(replacingMessage: false)
+            await refreshAutomationScheduler()
             statusLine = "automation cycle completed"
             return Self.automationCyclePreview(data)
         } catch {
@@ -2100,6 +2365,42 @@ final class AppModel: ObservableObject {
         return lines.joined(separator: "\n")
     }
 
+    private static func workspaceAnalysisData(_ data: Data, key: String) -> Data? {
+        guard let json = jsonDictionary(data),
+              let analyses = json["analyses"] as? [String: Any],
+              let analysis = analyses[key] as? [String: Any],
+              JSONSerialization.isValidJSONObject(analysis) else {
+            return nil
+        }
+        return try? JSONSerialization.data(withJSONObject: analysis)
+    }
+
+    private static func workspaceAnalysisSummary(_ workspace: WorkspaceAnalysis) -> String {
+        let source = workspace.dataSource?.rawValue.uppercased() ?? "AUTO"
+        let quoteAt = workspace.quoteAt ?? workspace.generatedAt ?? "기준 시각 없음"
+        let statuses = workspace.horizonPlans.map { plan in
+            let horizon: String
+            switch plan.horizon {
+            case .day: horizon = "단타"
+            case .swing: horizon = "스윙"
+            case .long: horizon = "장기"
+            case let .unknown(value): horizon = value
+            }
+            let status: String
+            switch plan.status {
+            case .actionable: status = "계획 계산됨"
+            case .wait: status = "조건 대기"
+            case .unavailable: status = "계산 불가"
+            case let .unknown(value): status = value
+            }
+            return "\(horizon) \(status)"
+        }.joined(separator: " · ")
+        let delayed = workspace.stale == true ? " · 데이터 지연 가능" : ""
+        let planLine = statuses.isEmpty ? "기간별 계획 데이터 없음" : statuses
+        let warningLine = workspace.warnings.first.map { "\n주의: \($0)" } ?? ""
+        return "멀티 타임프레임: \(planLine)\n데이터: \(source) · \(workspace.currency ?? "-") · \(quoteAt)\(delayed)\(warningLine)\n확인: 분석 과정에서 주문을 제출하지 않았습니다."
+    }
+
     private static func parseMarketAnalysis(_ data: Data) -> MarketAnalysisSnapshot? {
         guard let json = jsonDictionary(data) else {
             return nil
@@ -2142,8 +2443,13 @@ final class AppModel: ObservableObject {
             symbol: string(json["symbol"]) ?? "UNKNOWN",
             latestClose: candles.last?.close,
             previousClose: candles.dropLast().last?.close,
-            currency: "USD",
-            candles: Array(candles.suffix(80)),
+            market: string(json["market"]),
+            currency: string(json["currency"]) ?? "USD",
+            dataSource: string(json["dataSource"]),
+            timeframe: string(json["timeframe"]),
+            quoteAt: string(json["quoteAt"]),
+            stale: bool(json["stale"]) ?? false,
+            candles: Array(candles.suffix(Self.marketAnalysisCandleRetentionLimit)),
             tradeLabel: tradeSetup.flatMap { string($0["label"]) },
             entryPlan: tradeSetup.flatMap { string($0["entryPlan"]) },
             validIf: tradeSetup.flatMap { string($0["validIf"]) },
@@ -2164,13 +2470,14 @@ final class AppModel: ObservableObject {
             return prettyPreview(data)
         }
         let symbol = string(json["symbol"]) ?? "UNKNOWN"
+        let currency = string(json["currency"]) ?? "USD"
         var lines = ["\(symbol) 분석 요약"]
         if let candles = json["candles"] as? [[String: Any]],
            let latest = candles.last,
            let close = number(latest["close"]) {
             let previousClose = candles.dropLast().last.flatMap { number($0["close"]) }
             let change = previousClose.flatMap { $0 == 0 ? nil : (close / $0) - 1 }
-            lines.append("현재가 \(price(close, currency: "USD"))\(change.map { " · 전일대비 \(percent($0))" } ?? "")")
+            lines.append("현재가 \(price(close, currency: currency))\(change.map { " · 직전 봉 대비 \(percent($0))" } ?? "")")
         }
         if let tradeSetup = json["tradeSetup"] as? [String: Any] {
             appendLine(&lines, title: "판단", value: string(tradeSetup["label"]))
@@ -2181,7 +2488,7 @@ final class AppModel: ObservableObject {
         if let breakout = json["breakoutSignal"] as? [String: Any] {
             let status = string(breakout["status"]) ?? "unknown"
             let pattern = string(breakout["pattern"]) ?? "-"
-            let level = number(breakout["breakoutLevel"]).map { price($0, currency: "USD") } ?? "-"
+            let level = number(breakout["breakoutLevel"]).map { price($0, currency: currency) } ?? "-"
             lines.append("돌파 신호 \(status) · \(pattern) · 기준 \(level)")
             appendLine(&lines, title: "돌파 계획", value: string(breakout["entryPlan"]))
             appendLine(&lines, title: "돌파 무효화", value: string(breakout["invalidation"]))
@@ -2347,13 +2654,13 @@ final class AppModel: ObservableObject {
     private static func automationReasonLabel(_ reason: String) -> String {
         switch reason {
         case "no-credentials": return "검증된 Toss API 키가 없습니다."
-        case "paper-preview-no-credentials": return "Toss API 키가 없어 실거래 제출은 차단하고 broker 제출 없이 리허설했습니다."
-        case "paper-preview-account-selection-required": return "자동거래 계좌 선택 전이라 실거래 제출은 차단하고 broker 제출 없이 리허설했습니다."
-        case "paper-preview-ready": return "실거래 준비 조건은 충족됐지만 dry-run이라 주문 제출은 수행하지 않았습니다."
-        case "paper-preview-live-gate-closed": return "live gate가 닫혀 있어 실거래 제출은 차단하고 broker 제출 없이 리허설했습니다."
-        case "paper-automation-no-credentials": return "Toss API 키가 없어 실거래 제출 대신 로컬 모의 계좌에 자동화 결과를 기록했습니다."
-        case "paper-automation-account-selection-required": return "자동거래 계좌 선택 전이라 실거래 제출 대신 로컬 모의 계좌에 자동화 결과를 기록했습니다."
-        case "paper-automation-live-gate-closed": return "live gate가 닫혀 있어 실거래 제출 대신 로컬 모의 계좌에 자동화 결과를 기록했습니다."
+        case "paper-preview-no-credentials": return "Toss API 키 없이 paper 리허설을 실행했습니다."
+        case "paper-preview-account-selection-required": return "자동화 계좌 선택 전 상태로 paper 리허설을 실행했습니다."
+        case "paper-preview-ready": return "paper dry-run으로 broker 주문 제출 없이 리허설했습니다."
+        case "paper-preview-live-gate-closed": return "1.0.0 paper-only 정책에 따라 broker 제출 없이 리허설했습니다."
+        case "paper-automation-no-credentials": return "Toss API 키 없이 로컬 모의 계좌에 자동화 결과를 기록했습니다."
+        case "paper-automation-account-selection-required": return "자동화 계좌 선택 전 상태로 로컬 모의 계좌에 결과를 기록했습니다."
+        case "paper-automation-live-gate-closed": return "1.0.0 paper-only 정책에 따라 로컬 모의 계좌에 자동화 결과를 기록했습니다."
         case "no-enabled-strategies": return "활성화된 자동매매 전략이 없습니다."
         case "no-account": return "Toss 계좌를 찾지 못했습니다."
         case "account-selection-required": return "자동거래 계좌 선택이 필요합니다."
@@ -2372,8 +2679,8 @@ final class AppModel: ObservableObject {
         case "account-selection-required": return "Toss 화면에서 계좌 새로고침 후 자동거래에 사용할 계좌를 선택하세요."
         case "preferred-account-unavailable": return "Toss 화면에서 계좌 목록을 새로고침하고 사용할 계좌를 다시 선택하세요."
         case "paper-automation-no-credentials", "paper-automation-account-selection-required", "paper-automation-live-gate-closed":
-            return "모의 계좌 결과를 확인한 뒤 Toss 설정과 live gate를 순서대로 열어 실거래를 준비하세요."
-        default: return "Toss 진단, 전략 활성 상태, live gate를 순서대로 확인하세요."
+            return "모의 계좌 결과를 확인한 뒤 Toss 조회 상태와 RiskCheck를 점검하세요. 1.0.0은 실제 주문을 제출하지 않습니다."
+        default: return "Toss 진단, 전략 활성 상태, paper 안전 경계를 순서대로 확인하세요."
         }
     }
 
@@ -2526,22 +2833,7 @@ final class AppModel: ObservableObject {
     }
 
     private func liveTradingMessage(_ state: LocalLiveTradingState) -> String {
-        if state.effective {
-            return "실거래 제출 조건이 모두 충족되었습니다. 주문은 여전히 OrderIntent와 RiskCheck를 통과해야 합니다."
-        }
-        if !settings.liveTradingOperatorEnabled || !state.masterEnabled {
-            return "로컬 운영자 게이트가 OFF라 실거래 제출이 차단됩니다."
-        }
-        if brokerCredential?.status != "verified" {
-            return "검증 완료된 Toss API 키가 필요합니다."
-        }
-        if brokerAccountPreference == nil {
-            return "자동거래에 사용할 Toss 계좌가 선택되지 않아 실거래 제출이 차단됩니다."
-        }
-        if !state.featureEnabled || !state.userEnabled {
-            return "사용자 실거래 토글이 OFF입니다. 검증된 Toss 키와 자동거래 계좌 선택이 필요합니다."
-        }
-        return state.reason ?? "실거래 게이트가 닫혀 있습니다."
+        state.reason ?? "1.0.0 데스크톱은 Toss 조회·사전검증·paper 자동화 전용이며 실제 주문은 차단됩니다."
     }
 
     private static func errorMessage(_ error: Error) -> String {
@@ -2578,7 +2870,7 @@ final class AppModel: ObservableObject {
     }()
 
     private static var appVersion: String {
-        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.1.0"
+        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "개발 빌드"
     }
 
     private static var hostArchitecture: String {
@@ -2911,7 +3203,7 @@ private struct ReleaseStateLoader: Sendable {
             operatorChecklist: [
                 "새 Mac에서 Toss API 키를 다시 저장하고 자동거래 계좌를 선택하세요.",
                 "Toss 개발자 콘솔 허용 IP와 앱 연결 진단의 공인 IP가 일치하는지 확인하세요.",
-                "실거래 전 OrderIntent, RiskCheck, live gate, kill switch 상태를 확인하세요.",
+                "OrderIntent, RiskCheck, kill switch 상태를 확인하세요. 1.0.0은 paper-only입니다.",
             ]
         )
     }
@@ -3007,7 +3299,7 @@ enum WorkspaceTab: String, CaseIterable, Identifiable {
         case .overview:
             return "선택 종목의 차트, 기술 신호, 시장 상태를 한 화면에서 분석합니다."
         case .orderRisk:
-            return "주문 전 위험을 점검하고 모의·실거래 자동화의 실행 상태를 관리합니다."
+            return "주문 전 위험을 점검하고 paper 자동화의 실행 상태를 관리합니다."
         case .newsAlerts:
             return "종목과 시장 뉴스를 갱신하고 중요한 이벤트와 알림 조건을 확인합니다."
         case .replay:
@@ -3419,7 +3711,7 @@ struct ReleaseManifestSummary: Sendable {
         operatorChecklist ?? [
             "새 Mac에서는 Toss API 키를 앱 설정에서 다시 검증해 sidecar 저장소와 macOS Keychain에 저장해야 합니다.",
             "Toss 개발자 콘솔의 허용 IP와 앱의 연결 진단 공인 IP가 일치해야 합니다.",
-            "실거래는 앱의 로컬 운영자 게이트(ENABLE_LIVE_TRADING), 사용자 live 권한, credential, OrderIntent, RiskCheck, kill switch를 모두 통과해야 합니다.",
+            "1.0.0 데스크톱은 credential 상태와 관계없이 실제 주문을 차단하고 paper 계좌에만 기록합니다.",
         ]
     }
 }
@@ -3860,7 +4152,12 @@ struct MarketAnalysisSnapshot: Equatable {
     let symbol: String
     let latestClose: Double?
     let previousClose: Double?
+    let market: String?
     let currency: String
+    let dataSource: String?
+    let timeframe: String?
+    let quoteAt: String?
+    let stale: Bool
     let candles: [AnalysisCandle]
     let tradeLabel: String?
     let entryPlan: String?
@@ -4088,6 +4385,7 @@ struct TopCommandBar: View {
     @State private var showingSidecarLog = false
     @State private var showingCryptoSettings = false
     @State private var activeAction: CommandAction?
+    @State private var didEvaluateFirstRun = false
 
     var body: some View {
         HStack(spacing: 10) {
@@ -4187,6 +4485,7 @@ struct TopCommandBar: View {
                     )
                 }
             }
+            .disabled(model.killSwitchTransitionPending)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 9)
@@ -4198,18 +4497,27 @@ struct TopCommandBar: View {
             FirstRunSetupSheet(
                 selectedSymbol: selectedSymbol,
                 openToss: {
+                    model.completeOnboarding()
                     showingSetupGuide = false
                     showingTossSettings = true
                 },
+                openCrypto: {
+                    model.completeOnboarding()
+                    showingSetupGuide = false
+                    showingCryptoSettings = true
+                },
                 openStrategy: {
+                    model.completeOnboarding()
                     showingSetupGuide = false
                     showingStrategySettings = true
                 },
                 openSelfTest: {
+                    model.completeOnboarding()
                     showingSetupGuide = false
                     showingSelfTest = true
                 },
                 openDistribution: {
+                    model.completeOnboarding()
                     showingSetupGuide = false
                     showingDistribution = true
                 }
@@ -4247,6 +4555,15 @@ struct TopCommandBar: View {
         .sheet(isPresented: $showingCryptoSettings) {
             CryptoExchangeSheet()
                 .environmentObject(model)
+        }
+        .task {
+            guard !didEvaluateFirstRun else {
+                return
+            }
+            didEvaluateFirstRun = true
+            if !model.settings.hasCompletedOnboarding {
+                showingSetupGuide = true
+            }
         }
     }
 
@@ -4464,6 +4781,7 @@ struct FirstRunSetupSheet: View {
     @EnvironmentObject private var model: AppModel
     let selectedSymbol: String
     let openToss: () -> Void
+    let openCrypto: () -> Void
     let openStrategy: () -> Void
     let openSelfTest: () -> Void
     let openDistribution: () -> Void
@@ -4471,63 +4789,47 @@ struct FirstRunSetupSheet: View {
 
     private var setupItems: [SetupGuideItem] {
         let hasVerifiedCredential = model.brokerCredential?.status == "verified"
-        let hasAccountPreference = model.brokerAccountPreference != nil
-        let publicIp = model.brokerDiagnostics?.egress.ip
-        let publicIpStatus = publicIpGuide(for: model.brokerDiagnostics?.egress.status)
+        let verifiedCryptoExchanges = model.cryptoExchanges
+            .filter { $0.credential?.status == "verified" }
+            .map { $0.exchange.uppercased() }
         let selfTestOverall = model.appSelfTest?.overall
-        let enabledStrategies = model.strategyConfigs.filter { $0.status == "enabled" }.count
-        let draftStrategies = model.strategyConfigs.filter { $0.status == "draft" }.count
-        let liveEffective = model.localLiveTrading?.effective == true || model.brokerDiagnostics?.liveGate.liveTradingEffective == true
-        let releaseSummary = model.releaseManifestSummary()
 
         return [
             SetupGuideItem(
                 title: "1. 엔진 시작",
                 detail: model.health?.ok == true ? "Sidecar 정상 · \(model.health?.storageRoot ?? "App Support")" : model.statusLine,
-                action: model.health?.ok == true ? "로컬 분석 엔진이 응답 중입니다." : "엔진 시작 후 상태 갱신을 실행하세요.",
+                action: model.health?.ok == true ? "로컬 분석 엔진이 준비됐습니다." : "엔진 시작 후 상태 갱신을 실행하세요.",
                 status: model.health?.ok == true ? "pass" : "fail"
             ),
             SetupGuideItem(
-                title: "2. 앱 점검",
-                detail: model.appSelfTest.map { "통과 \($0.summary.pass) · 경고 \($0.summary.warn) · 실패 \($0.summary.fail)" } ?? "미실행",
-                action: selfTestOverall == nil ? "점검을 실행해 핵심 버튼 경로를 확인하세요." : selfTestOverall == "fail" ? "실패 항목을 먼저 해결하세요." : "진단 결과를 확인했습니다.",
-                status: selfTestOverall == "pass" ? "pass" : selfTestOverall == "fail" ? "fail" : "warn"
+                title: "2. 분석 모드",
+                detail: "\(selectedSymbol.uppercased()) · 뉴스 · 종목 민심 · 차트 · 모의투자",
+                action: "API 키 없이 바로 사용할 수 있습니다. 실주문은 생성하지 않습니다.",
+                status: model.health?.ok == true ? "pass" : "warn"
             ),
             SetupGuideItem(
                 title: "3. Toss API 키",
-                detail: hasVerifiedCredential ? "검증 완료" : model.brokerCredentialMessage,
-                action: hasVerifiedCredential ? "계좌 선택과 live gate 확인으로 진행할 수 있습니다." : "Toss 시트에서 clientId/clientSecret을 검증 후 저장하세요.",
-                status: hasVerifiedCredential ? "pass" : "warn"
+                detail: hasVerifiedCredential ? "검증 완료 · 읽기 전용 계좌 기능 사용 가능" : "선택 사항 · 연결 없음",
+                action: hasVerifiedCredential ? "계좌·보유·미체결 조회와 주문 사전검증을 사용할 수 있습니다." : "실계좌 조회가 필요할 때만 연결하세요.",
+                status: hasVerifiedCredential ? "pass" : "optional"
             ),
             SetupGuideItem(
-                title: "4. 자동거래 계좌",
-                detail: model.brokerAccountPreference.map { "#\($0.accountSeq) \($0.accountNo)" } ?? "선택 없음",
-                action: hasAccountPreference ? "OrderIntent/RiskCheck가 사용할 계좌가 선택되어 있습니다." : "검증 완료된 Toss 키로 BROKERAGE 계좌를 선택하세요.",
-                status: hasAccountPreference ? "pass" : "warn"
+                title: "4. Upbit·Bithumb API 키",
+                detail: verifiedCryptoExchanges.isEmpty ? "선택 사항 · 연결 없음" : "검증 완료: \(verifiedCryptoExchanges.joined(separator: ", "))",
+                action: verifiedCryptoExchanges.isEmpty ? "코인 잔고·사전검증이 필요할 때 읽기 전용 점검부터 연결하세요." : "거래소별 준비 점검과 주문 사전검증을 사용할 수 있습니다.",
+                status: verifiedCryptoExchanges.isEmpty ? "optional" : "pass"
             ),
             SetupGuideItem(
-                title: "5. 허용 IP",
-                detail: publicIp ?? publicIpStatus.detail,
-                action: publicIp == nil ? publicIpStatus.action : "Toss 설정에서 IP 복사 후 개발자 콘솔 허용 IP에 등록하세요.",
-                status: publicIp == nil ? "warn" : "pass"
+                title: "5. 안전 모드",
+                detail: "PAPER ONLY · Toss·Upbit·Bithumb 실제 주문 차단",
+                action: "1.0.0에서는 분석, 조회, 사전검증, 모의 자동화만 실행합니다.",
+                status: "pass"
             ),
             SetupGuideItem(
-                title: "6. 자동거래 전략",
-                detail: "활성 \(enabledStrategies)개 · 초안 \(draftStrategies)개 · 전체 \(model.strategyConfigs.count)개",
-                action: model.strategyConfigs.isEmpty ? "순환분할 또는 커스텀 전략 초안을 만들고 시뮬레이션하세요." : "활성화 전 시뮬레이션 결과와 RiskCheck를 확인하세요.",
-                status: enabledStrategies > 0 ? "pass" : "warn"
-            ),
-            SetupGuideItem(
-                title: "7. 실거래 게이트",
-                detail: model.liveGateLabel,
-                action: liveEffective ? "실거래 제출 가능 상태입니다. 주문은 계속 OrderIntent/RiskCheck를 통과해야 합니다." : "초기 상태에서는 차단이 정상입니다. 실거래 전 Toss 키, 계좌, live 토글, kill switch를 확인하세요.",
-                status: liveEffective ? "pass" : "warn"
-            ),
-            SetupGuideItem(
-                title: "8. 배포 상태",
-                detail: releaseSummary?.readinessDisplayLabel ?? "릴리즈 미확인",
-                action: releaseSummary?.readyForExternalDistribution == true ? "다른 Mac 무경고 배포 조건을 충족했습니다." : "Developer ID 서명과 Apple 공증 전에는 Gatekeeper 경고가 날 수 있습니다.",
-                status: releaseSummary?.readyForExternalDistribution == true ? "pass" : "warn"
+                title: "6. 앱 점검",
+                detail: model.appSelfTest.map { "통과 \($0.summary.pass) · 경고 \($0.summary.warn) · 실패 \($0.summary.fail)" } ?? "선택 사항 · 미실행",
+                action: selfTestOverall == "fail" ? "실패 항목을 확인하세요." : "문제가 있을 때 앱 점검과 로그를 사용하세요.",
+                status: selfTestOverall == "pass" ? "pass" : selfTestOverall == "fail" ? "fail" : "optional"
             ),
         ]
     }
@@ -4550,14 +4852,17 @@ struct FirstRunSetupSheet: View {
                 VStack(alignment: .leading, spacing: 5) {
                     Text("첫 실행 설정")
                         .font(.title3.weight(.semibold))
-                    Text("새 Mac에서 분석, Toss, 전략, 실거래 안전 게이트를 순서대로 준비합니다.")
+                    Text("분석만 바로 시작하거나, 필요할 때 Toss·Upbit·Bithumb을 선택해 연결할 수 있습니다.")
                         .font(.caption)
                         .foregroundStyle(Color.terminalMuted)
                 }
                 Spacer()
-                Button("닫기") {
+                Button("나중에") {
+                    model.completeOnboarding()
                     dismiss()
                 }
+                .accessibilityLabel("나중에")
+                .accessibilityIdentifier("나중에")
             }
 
             HStack(spacing: 8) {
@@ -4596,19 +4901,41 @@ struct FirstRunSetupSheet: View {
                     }
                 }
                 .disabled(isRefreshing)
+                .accessibilityLabel(model.health == nil ? "엔진 시작" : "상태 갱신")
+                .accessibilityIdentifier(model.health == nil ? "엔진 시작" : "상태 갱신")
                 Button("Toss 설정") {
                     openToss()
                 }
+                .accessibilityLabel("Toss 설정")
+                .accessibilityIdentifier("Toss 설정")
+                Button("코인 설정") {
+                    openCrypto()
+                }
+                .accessibilityLabel("코인 설정")
+                .accessibilityIdentifier("코인 설정")
                 Button("전략 설정") {
                     openStrategy()
                 }
+                .accessibilityLabel("전략 설정")
+                .accessibilityIdentifier("전략 설정")
                 Button("앱 점검") {
                     openSelfTest()
                 }
+                .accessibilityLabel("앱 점검")
+                .accessibilityIdentifier("앱 점검")
                 Button("배포 점검") {
                     openDistribution()
                 }
+                .accessibilityLabel("배포 점검")
+                .accessibilityIdentifier("배포 점검")
                 Spacer()
+                Button("분석 모드로 시작") {
+                    model.completeOnboarding()
+                    dismiss()
+                }
+                .keyboardShortcut(.defaultAction)
+                .accessibilityLabel("분석 모드로 시작")
+                .accessibilityIdentifier("분석 모드로 시작")
             }
         }
         .padding(18)
@@ -4625,21 +4952,12 @@ struct FirstRunSetupSheet: View {
 
     private var nextActionSummary: String {
         if model.health?.ok != true {
-            return "먼저 엔진을 시작하세요. 나머지 설정은 sidecar health 이후 확인됩니다."
+            return "먼저 엔진을 시작하세요. 분석과 뉴스·민심 기능은 엔진이 준비되면 사용할 수 있습니다."
         }
-        if model.appSelfTest == nil {
-            return "앱 점검을 실행해 핵심 버튼 경로를 확인하세요."
+        if model.brokerCredential?.status != "verified" && model.cryptoExchanges.allSatisfy({ $0.credential?.status != "verified" }) {
+            return "준비됐습니다. 분석 모드로 시작하고, 계좌 조회가 필요할 때만 Toss 또는 코인 거래소를 연결하세요."
         }
-        if model.brokerCredential?.status != "verified" {
-            return "Toss API 키 검증이 다음 단계입니다. 키는 sidecar 암호화 저장소와 macOS Keychain에 보관됩니다."
-        }
-        if model.brokerAccountPreference == nil {
-            return "자동거래에 사용할 Toss BROKERAGE 계좌를 선택하세요."
-        }
-        if model.strategyConfigs.isEmpty {
-            return "순환분할 또는 커스텀 전략을 만들고 시뮬레이션하세요."
-        }
-        return "운영 준비 항목을 확인했습니다. 실거래는 live gate와 안전 경계를 통과할 때만 열립니다."
+        return "선택한 API 연결 상태를 확인했습니다. 1.0.0은 연결 여부와 관계없이 실제 주문을 생성하지 않습니다."
     }
 
     private func refreshSetupStatus() async {
@@ -4657,43 +4975,10 @@ struct FirstRunSetupSheet: View {
             await model.refreshWorkerControl()
             await model.refreshAutomationScheduler()
             await model.refreshStrategyConfigs()
+            await model.refreshCryptoExchanges()
         }
     }
 
-    private func publicIpGuide(for status: String?) -> (detail: String, action: String) {
-        switch status {
-        case "not-requested":
-            return (
-                "공인 IP 미조회",
-                "Toss 설정의 공인 IP 확인 버튼으로 현재 공인 IP를 조회하세요."
-            )
-        case "skipped":
-            return (
-                "공인 IP 조회 스킵",
-                "오프라인 또는 수동 점검 중이면 Toss 개발자 콘솔 허용 IP를 직접 확인하세요."
-            )
-        case "unavailable":
-            return (
-                "공인 IP 확인 실패",
-                "네트워크 연결을 확인한 뒤 Toss 설정에서 공인 IP 확인을 다시 실행하세요."
-            )
-        case "checked":
-            return (
-                "공인 IP 값 없음",
-                "Toss 설정에서 공인 IP 확인을 다시 실행하고 결과가 표시되는지 확인하세요."
-            )
-        case let status?:
-            return (
-                "공인 IP 상태 미확인",
-                "알 수 없는 진단 상태(\(status))입니다. Toss 설정에서 공인 IP 확인을 다시 실행하세요."
-            )
-        case nil:
-            return (
-                "진단 전",
-                "Toss 설정의 공인 IP 확인 버튼으로 현재 공인 IP를 조회하세요."
-            )
-        }
-    }
 }
 
 struct SetupGuideItem: Identifiable, Equatable {
@@ -4737,6 +5022,7 @@ struct SetupGuideRow: View {
         case "pass": return "통과"
         case "warn": return "주의"
         case "fail": return "실패"
+        case "optional": return "선택"
         default: return item.status
         }
     }
@@ -4746,6 +5032,7 @@ struct SetupGuideRow: View {
         case "pass": return .green
         case "warn": return .amber
         case "fail": return .red
+        case "optional": return .blue
         default: return .blue
         }
     }
@@ -5008,7 +5295,7 @@ struct TossCredentialSheet: View {
             }
             Button("취소", role: .cancel) {}
         } message: {
-            Text("sidecar 암호화 저장소와 macOS Keychain 백업에서 Toss credential을 삭제합니다. 삭제 후 실계좌 조회, 자동거래 계좌 선택, 사용자 실거래 토글은 다시 설정해야 합니다.")
+            Text("sidecar 암호화 저장소와 macOS Keychain 백업에서 Toss credential을 삭제합니다. 삭제 후 계좌·보유·미체결 조회와 자동화 계좌 선택을 다시 설정해야 합니다.")
         }
     }
 
@@ -5058,55 +5345,6 @@ struct TossCredentialSheet: View {
 
 struct LiveTradingControlPanel: View {
     @EnvironmentObject private var model: AppModel
-    @State private var isUpdatingUserToggle = false
-    @State private var showingOperatorEnableConfirmation = false
-    @State private var showingUserEnableConfirmation = false
-
-    private var userToggleBinding: Binding<Bool> {
-        Binding(
-            get: {
-                model.localLiveTrading?.featureEnabled == true || model.localLiveTrading?.userEnabled == true
-            },
-            set: { enabled in
-                if enabled {
-                    showingUserEnableConfirmation = true
-                    return
-                }
-                setUserLiveTrading(enabled)
-            }
-        )
-    }
-
-    private var operatorToggleBinding: Binding<Bool> {
-        Binding(
-            get: { model.settings.liveTradingOperatorEnabled },
-            set: { enabled in
-                if enabled {
-                    showingOperatorEnableConfirmation = true
-                    return
-                }
-                model.setLocalLiveTradingOperatorEnabled(enabled)
-            }
-        )
-    }
-
-    private var canToggleUserLiveTrading: Bool {
-        model.health?.ok == true &&
-            model.brokerCredential?.status == "verified" &&
-            model.brokerAccountPreference != nil &&
-            !isUpdatingUserToggle
-    }
-
-    private func setUserLiveTrading(_ enabled: Bool) {
-        guard !isUpdatingUserToggle else {
-            return
-        }
-        isUpdatingUserToggle = true
-        Task {
-            await model.setLocalLiveTradingUserEnabled(enabled)
-            isUpdatingUserToggle = false
-        }
-    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -5125,26 +5363,17 @@ struct LiveTradingControlPanel: View {
             }
 
             HStack(spacing: 8) {
-                StatusPill(model.liveGateLabel, tone: model.liveGateTone)
+                StatusPill("PAPER ONLY", tone: .green)
+                StatusPill(model.brokerCredential?.status == "verified" ? "Toss 조회 연결" : "Toss 미연결", tone: model.brokerCredential?.status == "verified" ? .green : .muted)
                 StatusPill(model.localLiveTrading?.localRuntime == true ? "로컬 sidecar" : "런타임 미확인", tone: model.localLiveTrading?.localRuntime == true ? .green : .amber)
-                StatusPill(model.localLiveTrading?.effective == true ? "주문 제출 가능" : "제출 차단", tone: model.localLiveTrading?.effective == true ? .green : .red)
+                StatusPill("실주문 차단", tone: .red)
             }
 
-            Text(model.localLiveTradingMessage)
+            Text("1.0.0은 Toss token·계좌·보유·미체결 조회, 주문 사전검증과 paper 자동화를 지원합니다. 실제 주문은 결과 불명 주문 복구와 재시작 멱등성 검증이 포함된 뒤 별도 버전에서 엽니다.")
                 .font(.caption)
                 .foregroundStyle(Color.terminalText)
                 .fixedSize(horizontal: false, vertical: true)
-
-            Toggle("로컬 운영자 게이트 ENABLE_LIVE_TRADING", isOn: operatorToggleBinding)
-                .disabled(model.isStartingSidecar)
-            Text("켜면 sidecar를 재시작하고 로컬 엔진에 ENABLE_LIVE_TRADING=true를 전달합니다. 꺼짐 상태에서는 모든 실거래 제출이 차단됩니다.")
-                .font(.caption2)
-                .foregroundStyle(Color.terminalMuted)
-                .fixedSize(horizontal: false, vertical: true)
-
-            Toggle(isUpdatingUserToggle ? "사용자 실거래 토글 변경 중" : "사용자 실거래 토글", isOn: userToggleBinding)
-                .disabled(!canToggleUserLiveTrading)
-            Text(canToggleUserLiveTrading ? "토글 ON 후에도 OrderIntent, RiskCheck, Toss 계좌, kill switch를 모두 통과해야 주문됩니다." : "검증 완료된 Toss API 키와 자동거래 계좌 선택이 있어야 사용자 실거래 토글을 켤 수 있습니다.")
+            Text(model.localLiveTradingMessage)
                 .font(.caption2)
                 .foregroundStyle(Color.terminalMuted)
                 .fixedSize(horizontal: false, vertical: true)
@@ -5152,30 +5381,6 @@ struct LiveTradingControlPanel: View {
         .padding(12)
         .background(Color.terminalPanel, in: RoundedRectangle(cornerRadius: 8))
         .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.terminalLine))
-        .confirmationDialog(
-            "로컬 운영자 게이트 켜기",
-            isPresented: $showingOperatorEnableConfirmation,
-            titleVisibility: .visible
-        ) {
-            Button("ENABLE_LIVE_TRADING 켜기", role: .destructive) {
-                model.setLocalLiveTradingOperatorEnabled(true)
-            }
-            Button("취소", role: .cancel) {}
-        } message: {
-            Text("sidecar를 재시작하고 로컬 엔진에 ENABLE_LIVE_TRADING=true를 전달합니다. 실거래 주문은 여전히 Toss credential, 선택 계좌, 사용자 토글, OrderIntent, RiskCheck, kill switch를 모두 통과해야 합니다.")
-        }
-        .confirmationDialog(
-            "사용자 실거래 토글 켜기",
-            isPresented: $showingUserEnableConfirmation,
-            titleVisibility: .visible
-        ) {
-            Button("사용자 실거래 토글 켜기", role: .destructive) {
-                setUserLiveTrading(true)
-            }
-            Button("취소", role: .cancel) {}
-        } message: {
-            Text("검증된 Toss credential과 자동거래 계좌 선택 상태에서 사용자 live 권한을 켭니다. 켠 뒤에도 실거래 주문은 OrderIntent, RiskCheck, 로컬 운영자 게이트, kill switch를 모두 통과해야 합니다.")
-        }
     }
 }
 
@@ -5858,7 +6063,6 @@ struct DistributionSheet: View {
         let egressStatus = model.brokerDiagnostics?.egress.status
         let egressIp = model.brokerDiagnostics?.egress.ip
         let egressDisplay = publicIpDisplay(for: egressStatus)
-        let liveEffective = model.localLiveTrading?.effective == true || model.brokerDiagnostics?.liveGate.liveTradingEffective == true
         let selfTestOverall = model.appSelfTest?.overall
         let selfTestFailures = model.appSelfTest?.summary.blockingFailures ?? 0
         let handoffReady = !handoffEntries.isEmpty && handoffEntries.allSatisfy(\.hasRequiredFiles)
@@ -5947,10 +6151,10 @@ struct DistributionSheet: View {
                 status: egressIp == nil ? "warn" : "pass"
             ),
             InstallChecklistItem(
-                title: "실거래 게이트",
+                title: "주문 모드",
                 detail: model.liveGateLabel,
-                action: liveEffective ? "실거래 제출 조건이 열려도 주문은 OrderIntent/RiskCheck를 통과해야 합니다." : "기본 차단 상태입니다. 실거래 전 Toss 키, 계좌, live 토글, kill switch를 확인하세요.",
-                status: liveEffective ? "pass" : "warn"
+                action: "1.0.0 데스크톱은 조회·사전검증·paper 자동화만 지원하며 실제 주문 제출은 항상 차단합니다.",
+                status: "pass"
             ),
             InstallChecklistItem(
                 title: "자동화 안전 상태",
@@ -6210,7 +6414,7 @@ struct DistributionSheet: View {
                         if !manifest.readinessNextSteps.isEmpty {
                             ReleaseBulletList(title: "다음 조치", items: manifest.readinessNextSteps)
                         }
-                        ReleaseBulletList(title: "Toss/실거래 운영 체크", items: manifest.readinessOperatorChecklist)
+                        ReleaseBulletList(title: "Toss/paper 운영 체크", items: manifest.readinessOperatorChecklist)
                     }
                     .padding(12)
                     .background(Color.terminalPanel2, in: RoundedRectangle(cornerRadius: 8))
@@ -6238,7 +6442,7 @@ struct DistributionSheet: View {
                     Text("· DMG/ZIP 실파일은 앱 내부가 아니라 패키징 결과 폴더에 생성됩니다.")
                     Text("· Toss API 키는 새 Mac에서 다시 검증해 sidecar 저장소와 macOS Keychain에 저장하고, 자동거래 계좌를 다시 선택해야 합니다.")
                     Text("· 공인 IP가 바뀌면 Toss 개발자 콘솔 허용 IP와 앱의 연결 진단 결과가 일치해야 합니다.")
-                    Text("· 실거래 버튼은 OrderIntent, RiskCheck, credential, live 권한, 환경 플래그, kill switch를 모두 통과해야 열립니다.")
+                    Text("· 1.0.0 데스크톱은 Toss·Upbit·Bithumb 실제 주문을 열지 않으며 자동화 결과는 paper 계좌에만 기록됩니다.")
                 }
                 .font(.caption)
                 .foregroundStyle(Color.terminalMuted)
@@ -6841,7 +7045,6 @@ struct CryptoExchangeSheet: View {
     @State private var volume = "0.001"
     @State private var price = "100000000"
     @State private var isWorking = false
-    @State private var showingEnableLiveConfirmation = false
 
     private var currentState: CryptoExchangeStateView? {
         model.cryptoExchanges.first { $0.exchange == exchange }
@@ -6853,7 +7056,7 @@ struct CryptoExchangeSheet: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("코인 거래소 연결")
                         .font(.title2.weight(.bold))
-                    Text("Upbit·Bithumb 연결을 점검하고 별도 게이트로 자동 전략의 실거래 제출을 제어합니다.")
+                    Text("Upbit·Bithumb을 읽기 전용으로 점검하고 주문 사전검증과 paper 자동화에 사용합니다.")
                         .font(.caption)
                         .foregroundStyle(Color.terminalMuted)
                 }
@@ -6953,35 +7156,52 @@ struct CryptoExchangeSheet: View {
                     }
                     .disabled((Double(volume) ?? 0) <= 0 || (Double(price) ?? 0) <= 0)
                     Spacer()
-                    StatusPill(model.cryptoReadiness?.ready == true ? "준비 통과" : "점검 대기", tone: model.cryptoReadiness?.ready == true ? .green : .amber)
+                    StatusPill(
+                        model.cryptoReadiness == nil ? "점검 대기" : model.cryptoReadiness?.ready == true ? "준비 통과" : "준비 차단",
+                        tone: model.cryptoReadiness == nil ? .muted : model.cryptoReadiness?.ready == true ? .green : .red
+                    )
                 }
-                Text("이 두 점검 버튼은 실제 주문을 생성하지 않습니다. 자동 전략 주문은 아래 코인 실거래 게이트와 시뮬레이션, 잔고 사전검증, 긴급 중지를 모두 통과해야 합니다.")
+                if let readiness = model.cryptoReadiness, readiness.exchange == exchange, readiness.market == market.uppercased() {
+                    Text(readiness.message)
+                        .font(.caption2)
+                        .foregroundStyle(readiness.ready ? Color.terminalGreen : Color.terminalAmber)
+                        .fixedSize(horizontal: false, vertical: true)
+                    HStack(spacing: 7) {
+                        if let ticker = readiness.ticker {
+                            StatusPill("현재가 ₩\(Int(ticker.tradePrice.rounded()).formatted())", tone: ticker.fresh ? .blue : .red)
+                        }
+                        if let minTotal = readiness.orderConstraints?.bid.minTotal {
+                            StatusPill("최소 매수 ₩\(Int(minTotal.rounded()).formatted())", tone: .muted)
+                        }
+                        StatusPill("주문 제출 없음", tone: .green)
+                    }
+                }
+                if let precheck = model.cryptoOrderPrecheck, precheck.exchange == exchange, precheck.market == market.uppercased() {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(precheck.passed ? "사전검증 통과" : "사전검증 차단")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(precheck.passed ? Color.terminalGreen : Color.terminalRed)
+                        ForEach(Array(precheck.blockers.prefix(4).enumerated()), id: \.offset) { _, blocker in
+                            Text("· \(blocker)")
+                                .font(.caption2)
+                                .foregroundStyle(Color.terminalMuted)
+                        }
+                    }
+                }
+                Text("이 두 점검 버튼은 실제 주문을 생성하지 않습니다. 1.0.0의 코인 자동 전략은 paper 계좌에서만 실행됩니다.")
                     .font(.caption2)
                     .foregroundStyle(Color.terminalMuted)
             }
 
             PanelCard(
-                title: "코인 자동거래 게이트",
-                badge: model.settings.cryptoLiveTradingOperatorEnabled ? "LIVE" : "PAPER",
-                tone: model.settings.cryptoLiveTradingOperatorEnabled ? .red : .green
+                title: "코인 자동화 모드",
+                badge: "PAPER ONLY",
+                tone: .green
             ) {
-                HStack {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(model.settings.cryptoLiveTradingOperatorEnabled ? "실제 주문 제출 허용" : "paper 자동화 전용")
-                            .font(.callout.weight(.semibold))
-                        Text("기본값은 OFF입니다. ON이면 활성 코인 전략이 조건 충족 시 선택 거래소로 실제 주문을 제출할 수 있습니다.")
-                            .font(.caption2)
-                            .foregroundStyle(Color.terminalMuted)
-                    }
-                    Spacer()
-                    Button(model.settings.cryptoLiveTradingOperatorEnabled ? "실거래 끄기" : "실거래 켜기", role: model.settings.cryptoLiveTradingOperatorEnabled ? nil : .destructive) {
-                        if model.settings.cryptoLiveTradingOperatorEnabled {
-                            model.setCryptoLiveTradingOperatorEnabled(false)
-                        } else {
-                            showingEnableLiveConfirmation = true
-                        }
-                    }
-                }
+                Text("API 키 검증, 잔고·주문가능정보 조회, 주문 사전검증은 지원합니다. 실제 주문은 체결·부분체결·재시작 멱등성 동기화가 포함되기 전까지 차단합니다.")
+                    .font(.caption)
+                    .foregroundStyle(Color.terminalMuted)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
             Text(model.cryptoExchangeMessage)
@@ -6998,18 +7218,6 @@ struct CryptoExchangeSheet: View {
             secretKey = ""
             model.cryptoReadiness = nil
             model.cryptoOrderPrecheck = nil
-        }
-        .confirmationDialog(
-            "코인 실거래를 활성화하시겠습니까?",
-            isPresented: $showingEnableLiveConfirmation,
-            titleVisibility: .visible
-        ) {
-            Button("실제 주문 제출 허용", role: .destructive) {
-                model.setCryptoLiveTradingOperatorEnabled(true)
-            }
-            Button("취소", role: .cancel) {}
-        } message: {
-            Text("활성 전략이 시뮬레이션, 거래소 API 키, 잔고, 긴급 중지 조건을 통과하면 Upbit 또는 Bithumb에 실제 주문이 제출됩니다.")
         }
     }
 }
@@ -7032,9 +7240,13 @@ struct StrategySettingsSheet: View {
     @State private var basePrice = 100.0
     @State private var basePriceSource = "기본값"
     @State private var notional = 1_000.0
+    @State private var orderSizingMode: String?
+    @State private var quantity = 1.0
     @State private var rungCount = 5
     @State private var buyDropPct = 1.0
+    @State private var rungGapPct = 1.0
     @State private var sellRisePct = 1.0
+    @State private var stopLossPct = 3.0
     @State private var maxDailyTrades = 10
     @State private var maxLossPct = 15.0
     @State private var cooldownMinutes = 5
@@ -7042,7 +7254,15 @@ struct StrategySettingsSheet: View {
     @State private var copiedStrategyReport = false
 
     private var totalExposure: Double {
-        mode == "loop-grid" ? notional : notional * Double(rungCount)
+        if orderSizingMode == "quantity" {
+            let count = mode == "loop-grid" ? 1 : rungCount
+            return (0..<count).reduce(0) { total, index in
+                let drop = buyDropPct + rungGapPct * Double(index)
+                let entry = max(basePrice * (1 - drop / 100), 0)
+                return total + entry * quantity
+            }
+        }
+        return mode == "loop-grid" ? notional : notional * Double(rungCount)
     }
 
     private var selectedPreset: StrategyPresetOption {
@@ -7074,8 +7294,8 @@ struct StrategySettingsSheet: View {
             !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
             basePrice.isFinite &&
             basePrice > 0 &&
-            notional.isFinite &&
-            notional > 0 &&
+            ((orderSizingMode == "quantity" && quantity.isFinite && quantity > 0) ||
+             (orderSizingMode != "quantity" && notional.isFinite && notional > 0)) &&
             buyDropPct > 0 &&
             sellRisePct > 0 &&
             maxLossPct > 0 &&
@@ -7088,7 +7308,7 @@ struct StrategySettingsSheet: View {
                 VStack(alignment: .leading, spacing: 5) {
                     Text("자동매매 전략")
                         .font(.title3.weight(.semibold))
-                    Text("전략은 로컬 엔진에 초안으로 저장되고, 시뮬레이션 통과 후에만 활성화됩니다. 실거래는 종목별 실행 거래소와 별도 live gate를 따릅니다.")
+                    Text("전략은 로컬 엔진에 초안으로 저장되고, 시뮬레이션 통과 후에만 활성화됩니다. 1.0.0의 활성 전략은 종목별 paper 계좌에서만 실행됩니다.")
                         .font(.caption)
                         .foregroundStyle(Color.terminalMuted)
                         .fixedSize(horizontal: false, vertical: true)
@@ -7248,7 +7468,7 @@ struct StrategySettingsSheet: View {
                             Text("Bithumb").tag("bithumb")
                         }
                         .pickerStyle(.segmented)
-                        Text("코인 전략은 연속 스케줄러와 paper 계좌에서 먼저 검증할 수 있습니다. 코인 설정에서 별도 실거래 게이트를 켠 경우에만 Upbit·Bithumb 주문 제출이 허용됩니다.")
+                        Text("코인 전략은 연속 스케줄러와 paper 계좌에서 검증합니다. 1.0.0에서는 Upbit·Bithumb 실제 주문 제출이 항상 차단됩니다.")
                             .font(.caption2)
                             .foregroundStyle(Color.terminalMuted)
                     }
@@ -7263,8 +7483,22 @@ struct StrategySettingsSheet: View {
                     .disabled(model.strategyPriceSuggestion(symbol: symbol)?.price == nil)
                 }
                 StrategyNumberField(title: mode == "loop-grid" ? "1회 매수 금액" : "차수당 금액", value: $notional)
+                if orderSizingMode == "quantity" {
+                    StrategyNumberField(title: "1회 주문 수량", value: $quantity)
+                    Text("고정 수량 전략입니다. 가격이 바뀌어도 주문 수량을 유지합니다.")
+                        .font(.caption2)
+                        .foregroundStyle(Color.terminalMuted)
+                } else if orderSizingMode == "notional" {
+                    Text("고정 주문금액 전략입니다. 실행 가격에서 수량을 다시 계산합니다.")
+                        .font(.caption2)
+                        .foregroundStyle(Color.terminalMuted)
+                }
                 StrategyNumberField(title: "매수 하락률 %", value: $buyDropPct)
+                if mode == "percent-grid" {
+                    StrategyNumberField(title: "차수 간격 %", value: $rungGapPct)
+                }
                 StrategyNumberField(title: "매도 상승률 %", value: $sellRisePct)
+                StrategyNumberField(title: "손절률 %", value: $stopLossPct)
                 StrategyNumberField(title: "추가매수 중단선 %", value: $maxLossPct)
 
                 if mode == "percent-grid" {
@@ -7360,7 +7594,7 @@ struct StrategySettingsSheet: View {
                                         HStack(spacing: 6) {
                                             StatusPill(intent.side == "buy" ? "매수" : "매도", tone: intent.side == "buy" ? .green : .amber)
                                             StatusPill(intent.status == "draft" ? "초안" : "차단", tone: intent.status == "draft" ? .blue : .red)
-                                            Text("\(intent.symbol) \(intent.quantity)주 · \(price(intent.limitPrice, currency: simulationCurrency(simulation))) · \(money(intent.notional, currency: simulationCurrency(simulation)))")
+                                            Text("\(intent.symbol) \(quantityLabel(intent.quantity))주 · \(price(intent.limitPrice, currency: simulationCurrency(simulation))) · \(money(intent.notional, currency: simulationCurrency(simulation)))")
                                                 .font(.caption2.monospacedDigit())
                                                 .foregroundStyle(Color.terminalText)
                                             Spacer()
@@ -7432,14 +7666,20 @@ struct StrategySettingsSheet: View {
             maxDailyTrades: maxDailyTrades,
             maxLossPct: maxLossPct,
             cooldownMinutes: cooldownMinutes,
-            executionVenue: market == "CRYPTO" ? executionVenue : "toss"
+            executionVenue: market == "CRYPTO" ? executionVenue : "toss",
+            orderSizingMode: orderSizingMode,
+            quantity: orderSizingMode == "quantity" ? quantity : nil,
+            rungGapPct: rungGapPct,
+            stopLossPct: stopLossPct,
+            priceAnchorSource: basePriceSource == "최근 분석 현재가" ? "market" : "manual",
+            priceAnchorCapturedAt: basePriceSource == "최근 분석 현재가" ? model.latestMarketAnalysis?.quoteAt : nil
         )
         await run {
             if let editingConfig {
-                await model.updateStrategyDraft(editingConfig, input: input)
+                _ = await model.updateStrategyDraft(editingConfig, input: input)
                 editingConfigId = nil
             } else {
-                await model.createStrategyDraft(input)
+                _ = await model.createStrategyDraft(input)
             }
         }
     }
@@ -7470,8 +7710,12 @@ struct StrategySettingsSheet: View {
         }
         let normalized = selectedSymbol.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
         symbol = normalized.isEmpty ? "NVDA" : normalized
-        market = selectedSession == "KR" ? "KR" : "US"
-        executionVenue = "toss"
+        let isCryptoSymbol = normalized.hasPrefix("KRW-") ||
+            normalized.hasSuffix("-USD") ||
+            normalized.hasSuffix("USDT") ||
+            normalized.hasSuffix("USDC")
+        market = isCryptoSymbol ? "CRYPTO" : selectedSession == "KR" ? "KR" : "US"
+        executionVenue = isCryptoSymbol ? "upbit" : "toss"
         applyPreset(selectedPresetId, updateName: true)
         applySuggestedBasePrice(force: true)
     }
@@ -7482,6 +7726,7 @@ struct StrategySettingsSheet: View {
             mode = option.mode
             rungCount = option.rungCount
             buyDropPct = option.buyDropPct
+            rungGapPct = option.buyDropPct
             sellRisePct = option.sellRisePct
             maxLossPct = option.maxLossPct
             maxDailyTrades = option.maxDailyTrades
@@ -7504,6 +7749,12 @@ struct StrategySettingsSheet: View {
         suppressPresetChange = true
         selectedPresetId = StrategyPresetOption.all.contains { $0.id == presetId } ? presetId : "custom"
         mode = config.mode == "loop-grid" ? "loop-grid" : "percent-grid"
+        orderSizingMode = config.orderSizing?.mode
+        quantity = config.orderSizing?.quantity ?? quantity
+        if config.orderSizing?.mode == "notional", let configuredNotional = config.orderSizing?.notional {
+            notional = configuredNotional
+        }
+        stopLossPct = config.exitRules?.stopLossPct ?? stopLossPct
         if mode == "loop-grid" {
             let loop = config.loop
             basePrice = loop?.anchorPrice ?? config.priceAnchor?.price ?? config.currentPrice
@@ -7518,7 +7769,8 @@ struct StrategySettingsSheet: View {
             basePrice = grid?.basePrice ?? config.priceAnchor?.price ?? config.currentPrice
             rungCount = max(1, min(rungs.count == 0 ? rungCount : rungs.count, 20))
             notional = rungs.first?.notional ?? notional
-            buyDropPct = estimateRungStep(rungs.map { $0.buyDropPct }, fallback: buyDropPct)
+            buyDropPct = rungs.first?.buyDropPct ?? buyDropPct
+            rungGapPct = estimateRungStep(rungs.map { $0.buyDropPct }, fallback: rungGapPct)
             sellRisePct = rungs.first?.sellRisePct ?? sellRisePct
         }
         if let riskLimits = config.riskLimits {
@@ -7672,10 +7924,7 @@ struct StrategyConfigRow: View {
                         readiness.paperAutomationReady ? "모의 자동화 준비" : "모의 자동화 차단",
                         tone: readiness.paperAutomationReady ? .green : .red
                     )
-                    StatusPill(
-                        readiness.liveSubmissionReady ? "실거래 제출 준비" : "실거래 제출 차단",
-                        tone: readiness.liveSubmissionReady ? .green : .amber
-                    )
+                    StatusPill("1.0.0 실주문 차단", tone: .red)
                     StatusPill(
                         readiness.workerPaused ? "워커 정지" : "워커 대기",
                         tone: readiness.workerPaused ? .amber : .muted
@@ -7765,17 +8014,11 @@ struct StrategyConfigRow: View {
         if let blocker = readiness.blockers.first {
             return "자동화 차단: \(blocker)"
         }
-        if let liveBlocker = readiness.liveBlockers.first {
-            return "Live 차단: \(liveBlocker)"
-        }
-        if let nextAction = readiness.nextActions.first, !readiness.liveSubmissionReady {
-            return "다음 조치: \(nextAction)"
-        }
-        if readiness.liveSubmissionReady {
-            return "모의 자동화와 실거래 제출 준비가 모두 완료되었습니다."
-        }
         if readiness.paperAutomationReady {
-            return "모의 자동화는 가능하며, 실거래 제출은 Toss와 live gate 확인 후 열립니다."
+            return "모의 자동화를 사용할 수 있습니다. 1.0.0에서는 Toss 연결 여부와 관계없이 실제 주문을 제출하지 않습니다."
+        }
+        if let nextAction = readiness.nextActions.first {
+            return "다음 조치: \(nextAction)"
         }
         return nil
     }
@@ -7784,8 +8027,8 @@ struct StrategyConfigRow: View {
         if !readiness.blockers.isEmpty {
             return Color.terminalRed
         }
-        if !readiness.liveBlockers.isEmpty {
-            return Color.terminalAmber
+        if readiness.paperAutomationReady {
+            return Color.terminalGreen
         }
         return Color.terminalMuted
     }
@@ -8147,7 +8390,7 @@ struct OverviewTab: View {
 
                 HStack(spacing: 0) {
                     SignalStackPanel(analysis: analysis)
-                    NewsImpactPanel(events: model.newsEvents)
+                    NewsImpactPanel(events: model.newsEvents, selectedSymbol: selectedSymbol)
                     PositionMetricsPanel(selectedSymbol: selectedSymbol, analysis: analysis)
                 }
                 .frame(height: 214)
@@ -8243,7 +8486,7 @@ struct OrderRiskTab: View {
                                 isLoading = false
                             }
                         }
-                        .disabled(model.health == nil || model.killSwitchEngaged || isLoading)
+                        .disabled(model.health == nil || model.executionBlocked || isLoading)
                         Button("자동화 점검") {
                             Task {
                                 isLoading = true
@@ -8282,7 +8525,7 @@ struct OrderRiskTab: View {
                         Button("자동화 1회 실행") {
                             showingAutomationRunConfirmation = true
                         }
-                        .disabled(model.health == nil || model.killSwitchEngaged || model.workerPausedEffective || isLoading)
+                        .disabled(model.health == nil || model.executionBlocked || model.workerPausedEffective || isLoading)
                     }
                     .padding(.bottom, 8)
 
@@ -8318,7 +8561,7 @@ struct OrderRiskTab: View {
                         .disabled(
                             model.health == nil ||
                             isLoading ||
-                            (model.automationSchedulerState?.enabled != true && (model.killSwitchEngaged || model.workerPausedEffective))
+                            (model.automationSchedulerState?.enabled != true && (model.executionBlocked || model.workerPausedEffective))
                         )
                         Button("스케줄러 상태 갱신") {
                             Task {
@@ -8349,7 +8592,7 @@ struct OrderRiskTab: View {
                         .font(.caption)
                         .foregroundStyle(Color.terminalMuted)
                         .fixedSize(horizontal: false, vertical: true)
-                    Text("앱과 Sidecar가 실행 중일 때만 동작합니다. live gate가 닫혀 있으면 paper 계좌로 실행되고, 열려 있으면 OrderIntent·RiskCheck·Toss 계좌·kill switch를 모두 통과한 주문만 제출됩니다.")
+                    Text("앱과 Sidecar가 실행 중일 때만 동작합니다. 1.0.0의 연속 자동 실행은 항상 paper 계좌에만 기록되며 실제 주문을 제출하지 않습니다.")
                         .font(.caption2)
                         .foregroundStyle(Color.terminalMuted)
                         .fixedSize(horizontal: false, vertical: true)
@@ -8369,7 +8612,7 @@ struct OrderRiskTab: View {
             }
             Button("취소", role: .cancel) {}
         } message: {
-            Text("활성 전략을 한 번 실행합니다. 현재 \(model.liveGateLabel) 상태이며, live gate가 열린 환경에서는 OrderIntent, RiskCheck, Toss credential, 선택 계좌, kill switch를 모두 통과한 주문만 제출될 수 있습니다. 실행 전 자동화 점검을 먼저 확인하세요.")
+            Text("활성 전략을 한 번 실행합니다. 현재 \(model.liveGateLabel) 상태이며 결과는 paper 계좌에만 기록됩니다. 실행 전 RiskCheck와 kill switch를 확인하세요.")
         }
         .confirmationDialog(
             "연속 자동 실행 시작",
@@ -8383,7 +8626,7 @@ struct OrderRiskTab: View {
             }
             Button("취소", role: .cancel) {}
         } message: {
-            Text("활성 전략을 앱이 열린 동안 반복 실행합니다. 현재 \(model.liveGateLabel) 상태입니다. 실거래 게이트가 열려 있으면 실제 주문이 제출될 수 있으므로 모의 실행과 사전검증을 먼저 확인하세요.")
+            Text("활성 전략을 앱이 열린 동안 반복 실행합니다. 현재 \(model.liveGateLabel) 상태이며 모든 결과는 paper 계좌에만 기록됩니다. 시작 전 RiskCheck와 kill switch를 확인하세요.")
         }
         .task {
             await model.refreshAutomationScheduler()
@@ -8496,6 +8739,8 @@ struct NewsAlertsTab: View {
     let selectedSession: String
     @Binding var resultPreview: String
     @State private var isRefreshing = false
+    @State private var redditClientId = ""
+    @State private var redditClientSecret = ""
 
     var body: some View {
         ScrollView {
@@ -8546,6 +8791,54 @@ struct NewsAlertsTab: View {
                     }
                 }
 
+                CommunitySentimentPanel(
+                    snapshot: model.communitySentiment,
+                    selectedSymbol: selectedSymbol,
+                    message: model.communitySentimentMessage
+                )
+
+                PanelCard(
+                    title: "미국 Reddit 민심 연결",
+                    badge: model.redditCredentialStored ? "OAUTH ON" : "선택 사항",
+                    tone: model.redditCredentialStored ? .green : .blue
+                ) {
+                    Text("Reddit 개발자 앱의 Client ID와 Secret을 이 Mac의 Keychain에만 저장합니다. 연결하면 미국 종목 민심에 공식 OAuth 게시글·댓글 근거가 추가됩니다.")
+                        .font(.caption)
+                        .foregroundStyle(Color.terminalMuted)
+                        .fixedSize(horizontal: false, vertical: true)
+                    HStack {
+                        TextField("Reddit Client ID", text: $redditClientId)
+                            .textFieldStyle(.roundedBorder)
+                        SecureField("Reddit Client Secret", text: $redditClientSecret)
+                            .textFieldStyle(.roundedBorder)
+                    }
+                    HStack {
+                        Button("저장 후 엔진 재시작") {
+                            model.saveRedditCredential(
+                                clientId: redditClientId,
+                                clientSecret: redditClientSecret
+                            )
+                            redditClientSecret = ""
+                        }
+                        .disabled(
+                            redditClientId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
+                                redditClientSecret.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                        )
+                        Button("연결 삭제", role: .destructive) {
+                            model.deleteRedditCredential()
+                            redditClientId = ""
+                            redditClientSecret = ""
+                        }
+                        .disabled(!model.redditCredentialStored)
+                        Spacer()
+                        StatusPill(model.redditCredentialStored ? "Keychain 저장됨" : "미연결", tone: model.redditCredentialStored ? .green : .muted)
+                    }
+                    Text(model.redditCredentialMessage)
+                        .font(.caption2)
+                        .foregroundStyle(Color.terminalMuted)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
                 PanelCard(title: "조건 평가 결과", badge: "실제 데이터", tone: .blue) {
                     if let dashboard = model.terminalDashboard {
                         ForEach(dashboard.watchlistAlertEvaluations) { evaluation in
@@ -8563,10 +8856,27 @@ struct NewsAlertsTab: View {
                     }
                 }
 
-                PanelCard(title: "실시간 뉴스 피드", badge: "\(model.newsEvents.count)", tone: .blue) {
+                PanelCard(title: "공식 뉴스 피드", badge: "\(model.newsEvents.count)", tone: .blue) {
+                    Text(model.newsSourceStatusMessage)
+                        .font(.caption2)
+                        .foregroundStyle(model.newsSourceErrors.isEmpty ? Color.terminalMuted : Color.terminalAmber)
+                    if let generatedAt = model.newsLastGeneratedAt {
+                        Text("마지막 sidecar 갱신: \(generatedAt)")
+                            .font(.system(.caption2, design: .monospaced))
+                            .foregroundStyle(Color.terminalMuted)
+                    }
+                    ForEach(Array(model.newsSourceErrors.prefix(3).enumerated()), id: \.offset) { _, sourceError in
+                        Text("· \(sourceError.sourceId): \(sourceError.message)")
+                            .font(.caption2)
+                            .foregroundStyle(Color.terminalAmber)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                     if model.newsEvents.isEmpty {
                         EmptyState(model.health == nil ? "엔진을 시작하면 공식/RSS 뉴스 이벤트를 불러올 수 있습니다." : "아직 불러온 뉴스가 없습니다. 상단의 뉴스 갱신 버튼으로 공식/RSS 이벤트를 가져오세요.")
                     } else {
+                        Text("앱 실행 중에는 2분마다 자동 갱신하고 중복 이벤트는 저장하지 않습니다.")
+                            .font(.caption2)
+                            .foregroundStyle(Color.terminalMuted)
                         ForEach(model.newsEvents.prefix(14)) { event in
                             NewsEventRow(event: event)
                         }
@@ -8575,6 +8885,17 @@ struct NewsAlertsTab: View {
             }
             .padding(12)
         }
+    }
+
+    private var communityMarket: String {
+        let normalized = selectedSymbol.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        if normalized.hasPrefix("KRW-") || normalized.hasSuffix("-USD") || normalized.hasSuffix("USDT") {
+            return "CRYPTO"
+        }
+        if selectedSession.uppercased() == "KR" {
+            return normalized.hasSuffix(".KQ") ? "KOSDAQ" : "KOSPI"
+        }
+        return "US"
     }
 
     private var tabResultPreview: String {
@@ -8588,22 +8909,29 @@ struct NewsAlertsTab: View {
         let requestedSymbol = selectedSymbol.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
         let symbol = requestedSymbol.isEmpty ? "NVDA" : requestedSymbol
         isRefreshing = true
+        defer { isRefreshing = false }
         resultPreview = "\(symbol) 뉴스와 관심목록 알림 조건을 갱신 중입니다."
-        await model.refreshNews()
-        await model.refreshTerminalDashboard(symbol: symbol, session: selectedSession)
+        async let newsRefresh: Void = model.refreshNews()
+        async let communityRefresh: Void = model.refreshCommunitySentiment(symbol: symbol, market: communityMarket)
+        async let dashboardRefresh: Void = model.refreshTerminalDashboard(symbol: symbol, session: selectedSession)
+        _ = await (newsRefresh, communityRefresh, dashboardRefresh)
         let dashboard = model.terminalDashboard?.symbol == symbol ? model.terminalDashboard : nil
         let evaluations = dashboard?.watchlistAlertEvaluations ?? []
         let triggered = evaluations.filter { $0.state == "triggered" }.count
         let credibilityCount = dashboard?.newsCredibility.count ?? 0
+        let requestedCanonicalSymbol = canonicalCommunitySymbol(symbol)
+        let currentCommunity = model.communitySentiment.flatMap { snapshot in
+            snapshot.canonicalSymbol.uppercased() == requestedCanonicalSymbol ? snapshot : nil
+        }
         resultPreview = [
             "뉴스·알림 갱신 요약",
             "- 종목: \(symbol) · 세션: \(selectedSession)",
             "- 공식/RSS 뉴스: \(model.newsEvents.count)건",
+            "- 커뮤니티 근거: \(currentCommunity?.evidenceCount ?? 0)건 · 신뢰도 \(currentCommunity?.confidence ?? 0)%",
             "- 관심목록 조건 평가: \(evaluations.count)건",
             "- 발동 조건: \(triggered)건",
             "- 뉴스 신뢰도 소스: \(credibilityCount)개",
         ].joined(separator: "\n")
-        isRefreshing = false
     }
 
     private func alertScopeLabel(_ scope: String) -> String {
@@ -8819,7 +9147,7 @@ struct PlaybookTab: View {
 
                     PanelCard(title: "자동 워커 연결", badge: "운영", tone: .blue) {
                         ChecklistRow(ok: true, title: "모의 실행 허용", detail: "플레이북 조건 충족 시 paper state에 주문 기록", state: "ON", tone: .green)
-                        ChecklistRow(ok: false, title: "실거래 실행 차단", detail: "live gate가 OFF라 broker submit 호출 금지", state: "OFF", tone: .red)
+                        ChecklistRow(ok: false, title: "실거래 실행 차단", detail: "1.0.0 desktop policy로 broker submit 호출 금지", state: "OFF", tone: .red)
                         ChecklistRow(ok: model.terminalDashboard?.playbook.workerMode == "paper-only", title: "플레이북 저장소", detail: "local-engine dashboard store에서 종목별 플레이북을 유지합니다.", state: model.terminalDashboard?.playbook.workerMode ?? "대기", tone: .green)
                         ChecklistRow(ok: !model.workerPausedEffective, title: "워커 제어", detail: model.workerControlMessage, state: model.workerPausedEffective ? "일시중지" : "감시", tone: model.workerPausedEffective ? .amber : .green)
                         Toggle("워커 일시중지", isOn: Binding(
@@ -8834,6 +9162,7 @@ struct PlaybookTab: View {
                             }
                         ))
                         .padding(.top, 8)
+                        .disabled(model.workerControlTransitionPending || model.killSwitchTransitionPending)
                     }
                 }
             }
@@ -8953,7 +9282,7 @@ struct DecisionPanel: View {
             VStack(alignment: .leading, spacing: 7) {
                 Text("판단 패널")
                     .font(.headline)
-                Text("추천은 주문이 아니라 OrderIntent 후보입니다. 실거래는 인증 정보, 실거래 권한, RiskCheck, 긴급 중지를 모두 통과해야 합니다.")
+                Text("추천은 주문이 아니라 OrderIntent 후보입니다. 1.0.0에서는 RiskCheck를 통과해도 paper 주문만 생성합니다.")
                     .font(.caption)
                     .foregroundStyle(Color.terminalMuted)
                     .fixedSize(horizontal: false, vertical: true)
@@ -9002,7 +9331,7 @@ struct DecisionPanel: View {
                             resultPreview = await model.runPaperOrderIntent(dashboard, session: selectedSession)
                         }
                     }
-                    .disabled(model.health == nil || dashboard == nil || model.killSwitchEngaged || isLoading)
+                    .disabled(model.health == nil || dashboard == nil || model.executionBlocked || isLoading)
                     Button(isLoading ? "처리 중" : "계획 저장") {
                         Task {
                             guard let dashboard else {
@@ -9122,7 +9451,7 @@ struct EventTapeView: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            TapePane(title: "이벤트 테이프", trailing: "실시간") {
+            TapePane(title: "이벤트 테이프", trailing: "최신 저장") {
                 if model.newsEvents.isEmpty {
                     TapeRow(time: "대기", title: "뉴스 이벤트 없음", detail: "뉴스 버튼으로 공식/RSS 이벤트를 불러오세요.", tag: "뉴스")
                 } else {
@@ -9303,6 +9632,7 @@ struct MenuBarStatusView: View {
                     }
                 }
             ))
+            .disabled(model.workerControlTransitionPending || model.killSwitchTransitionPending)
             Button(report.killSwitchActionTitle) {
                 Task {
                     await model.setKillSwitchEngaged(
@@ -9311,6 +9641,7 @@ struct MenuBarStatusView: View {
                     )
                 }
             }
+            .disabled(model.killSwitchTransitionPending)
             if !report.latestAlertTitles.isEmpty {
                 Divider()
                 ForEach(Array(report.latestAlertTitles.enumerated()), id: \.offset) { _, title in
@@ -9442,7 +9773,7 @@ struct MarketStrip: View {
             MarketBox(title: "뉴스/RSS", value: "\(model.newsEvents.count)건", delta: newsDelta, tone: newsTone)
             MarketBox(title: "전략 활성", value: strategyValue, delta: strategyDelta, tone: strategyTone)
             MarketBox(title: "Paper 현금", value: paperValue, delta: paperDelta, tone: paperTone)
-            MarketBox(title: "Live gate", value: model.liveGateLabel, delta: model.killSwitchEngaged ? "긴급 중지" : "OrderIntent 경유", tone: model.liveGateTone)
+            MarketBox(title: "주문 모드", value: model.liveGateLabel, delta: model.killSwitchEngaged ? "긴급 중지" : "실주문 차단", tone: model.liveGateTone)
         }
         .frame(height: 76)
         .background(Color.terminalPanel)
@@ -9453,17 +9784,25 @@ struct MarketStrip: View {
 }
 
 struct ChartControlState: Equatable {
-    var timeframe = "15m"
+    var timeframe = "90d"
     var showHMA = true
     var showRSI = false
     var showVolume = true
-    var showNewsMarkers = true
+    var showSignalMarkers = true
 
     var visibleCandleLimit: Int {
         switch timeframe {
-        case "1m": return 80
-        case "1D": return 90
-        default: return 32
+        case "30d": return 30
+        case "1y": return 252
+        default: return 90
+        }
+    }
+
+    var timeframeLabel: String {
+        switch timeframe {
+        case "30d": return "최근 30일"
+        case "1y": return "최근 1년"
+        default: return "최근 90일"
         }
     }
 }
@@ -9509,14 +9848,14 @@ struct ChartHeader: View {
             }
             Spacer()
             HStack(spacing: 6) {
-                SmallControlButton("1m", active: controls.timeframe == "1m") {
-                    controls.timeframe = "1m"
+                SmallControlButton("30일", active: controls.timeframe == "30d") {
+                    controls.timeframe = "30d"
                 }
-                SmallControlButton("15m", active: controls.timeframe == "15m") {
-                    controls.timeframe = "15m"
+                SmallControlButton("90일", active: controls.timeframe == "90d") {
+                    controls.timeframe = "90d"
                 }
-                SmallControlButton("1D", active: controls.timeframe == "1D") {
-                    controls.timeframe = "1D"
+                SmallControlButton("1년", active: controls.timeframe == "1y") {
+                    controls.timeframe = "1y"
                 }
                 SmallControlButton("HMA", active: controls.showHMA) {
                     controls.showHMA.toggle()
@@ -9527,8 +9866,8 @@ struct ChartHeader: View {
                 SmallControlButton("거래량", active: controls.showVolume) {
                     controls.showVolume.toggle()
                 }
-                SmallControlButton("뉴스 마커", active: controls.showNewsMarkers) {
-                    controls.showNewsMarkers.toggle()
+                SmallControlButton("신호 마커", active: controls.showSignalMarkers) {
+                    controls.showSignalMarkers.toggle()
                 }
             }
         }
@@ -9567,8 +9906,8 @@ struct PriceChart: View {
         return score >= 50 ? .amber : .red
     }
 
-    private var newsImpactText: String {
-        analysis?.breakoutStatus.map { analysisStatusLabel($0) } ?? "뉴스 대기"
+    private var breakoutStateText: String {
+        analysis?.breakoutStatus.map { analysisStatusLabel($0) } ?? "돌파 대기"
     }
 
     var body: some View {
@@ -9578,7 +9917,7 @@ struct PriceChart: View {
             VStack(spacing: 7) {
                 BadgeLine(title: "현재 시그널", value: currentSignalText, tone: analysis == nil ? .muted : .green)
                 BadgeLine(title: "모델 신뢰도", value: qualityText, tone: qualityTone)
-                BadgeLine(title: "돌파/뉴스", value: newsImpactText, tone: analysis == nil ? .muted : .amber)
+                BadgeLine(title: "돌파 상태", value: breakoutStateText, tone: analysis == nil ? .muted : .amber)
                 BadgeLine(title: "차트 보기", value: chartControlSummary, tone: .blue)
             }
             .frame(width: 270)
@@ -9590,11 +9929,11 @@ struct PriceChart: View {
 
     private var chartControlSummary: String {
         [
-            controls.timeframe,
+            controls.timeframeLabel,
             controls.showHMA ? "HMA" : nil,
             controls.showRSI ? "RSI" : nil,
             controls.showVolume ? "VOL" : nil,
-            controls.showNewsMarkers ? "NEWS" : nil,
+            controls.showSignalMarkers ? "SIGNAL" : nil,
         ]
             .compactMap { $0 }
             .joined(separator: " · ")
@@ -9734,7 +10073,7 @@ struct CandlestickChart: View {
                     }
                 }
 
-                if controls.showNewsMarkers {
+                if controls.showSignalMarkers {
                     ForEach(Array(chartMarkers.enumerated()), id: \.offset) { index, marker in
                         ChartMarker(label: marker.label, color: marker.color)
                             .position(
@@ -9869,13 +10208,27 @@ struct SignalStackPanel: View {
 
 struct NewsImpactPanel: View {
     let events: [LocalNewsEvent]
+    let selectedSymbol: String
+
+    private var relevantEvents: [LocalNewsEvent] {
+        let normalized = selectedSymbol.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        let macroTags: Set<String> = ["rate-policy", "employment", "gdp", "trade"]
+        let isCrypto = normalized.contains("BTC") || normalized.contains("ETH") || normalized.hasPrefix("KRW-")
+        return events.filter { event in
+            event.tickers.contains { $0.uppercased() == normalized } ||
+                !macroTags.isDisjoint(with: Set(event.tags)) ||
+                (isCrypto && event.tags.contains("crypto"))
+        }
+    }
 
     var body: some View {
-        DetailPane(title: "뉴스 영향", trailing: "중복제거") {
+        DetailPane(title: "관련 뉴스", trailing: "종목+거시") {
             if events.isEmpty {
                 SignalRow(tag: "대기", text: "뉴스 버튼으로 공식/RSS 이벤트를 불러오세요.", value: "-", tone: .muted)
+            } else if relevantEvents.isEmpty {
+                SignalRow(tag: "없음", text: "선택 종목 또는 주요 거시지표와 직접 연결된 뉴스가 없습니다.", value: selectedSymbol.uppercased(), tone: .muted)
             } else {
-                ForEach(events.prefix(5)) { event in
+                ForEach(relevantEvents.prefix(5)) { event in
                     SignalRow(tag: event.importance, text: event.title, value: event.tickers.first ?? "뉴스", tone: event.importance == "high" ? .amber : .blue)
                 }
             }
@@ -10528,6 +10881,15 @@ struct SourceScoreRow: View {
 struct NewsEventRow: View {
     let event: LocalNewsEvent
 
+    private var destination: URL? {
+        guard let url = URL(string: event.url),
+              let scheme = url.scheme?.lowercased(),
+              scheme == "http" || scheme == "https" else {
+            return nil
+        }
+        return url
+    }
+
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
             Image(systemName: event.importance == "high" ? "bell.badge" : "newspaper")
@@ -10540,9 +10902,15 @@ struct NewsEventRow: View {
                         .foregroundStyle(Color.terminalMuted)
                     StatusPill(event.importance, tone: event.importance == "high" ? .amber : .blue)
                 }
-                Text(event.title)
-                    .font(.caption.weight(.semibold))
-                    .lineLimit(2)
+                if let destination {
+                    Link(event.title, destination: destination)
+                        .font(.caption.weight(.semibold))
+                        .lineLimit(2)
+                } else {
+                    Text(event.title)
+                        .font(.caption.weight(.semibold))
+                        .lineLimit(2)
+                }
                 if !event.tickers.isEmpty {
                     Text(event.tickers.joined(separator: "  "))
                         .font(.system(.caption2, design: .monospaced))
@@ -10555,6 +10923,148 @@ struct NewsEventRow: View {
         .overlay(alignment: .bottom) {
             Rectangle().fill(Color.terminalLine.opacity(0.65)).frame(height: 1)
         }
+    }
+}
+
+private func canonicalCommunitySymbol(_ value: String) -> String {
+    var symbol = value.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+    if symbol.hasSuffix(".KS") || symbol.hasSuffix(".KQ") {
+        symbol.removeLast(3)
+    }
+    if symbol.hasPrefix("KRW-") {
+        symbol.removeFirst(4)
+    }
+    if symbol.hasSuffix("USDT") {
+        symbol.removeLast(4)
+    } else if symbol.hasSuffix("-USD") {
+        symbol.removeLast(4)
+    }
+    return symbol
+}
+
+struct CommunitySentimentPanel: View {
+    let snapshot: CommunitySentimentSnapshot?
+    let selectedSymbol: String
+    let message: String
+
+    private var normalizedSelectedSymbol: String {
+        canonicalCommunitySymbol(selectedSymbol)
+    }
+
+    private var currentSnapshot: CommunitySentimentSnapshot? {
+        guard snapshot?.canonicalSymbol.uppercased() == normalizedSelectedSymbol else {
+            return nil
+        }
+        return snapshot
+    }
+
+    var body: some View {
+        PanelCard(
+            title: "종목 민심",
+            badge: currentSnapshot.map { "신뢰도 \($0.confidence)%" } ?? "대기",
+            tone: currentSnapshot?.lowEvidence == false ? .green : .amber
+        ) {
+            if let snapshot = currentSnapshot {
+                HStack(spacing: 8) {
+                    StatusPill("공포 \(snapshot.painScore)", tone: snapshot.painScore >= 45 ? .red : .muted)
+                    StatusPill("FOMO \(snapshot.gajuaScore)", tone: snapshot.gajuaScore >= 45 ? .amber : .muted)
+                    StatusPill("분열 \(snapshot.divisionScore)", tone: snapshot.divisionScore >= 45 ? .amber : .muted)
+                    StatusPill("근거 \(snapshot.evidenceCount)", tone: snapshot.lowEvidence ? .amber : .blue)
+                    StatusPill(communityRegimeLabel(snapshot.sentimentRegime), tone: snapshot.lowEvidence ? .amber : .green)
+                }
+                Text(snapshot.lowEvidence ? "근거가 부족해 방향을 단정하지 않습니다. 아래 원문과 소스 상태를 먼저 확인하세요." : snapshot.verdict)
+                    .font(.caption)
+                    .foregroundStyle(Color.terminalText)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                DisclosureGroup("수집 근거 자세히") {
+                    VStack(alignment: .leading, spacing: 10) {
+                        HStack(alignment: .top, spacing: 12) {
+                            VStack(alignment: .leading, spacing: 5) {
+                                Text("핵심 요인")
+                                    .font(.caption.weight(.semibold))
+                                ForEach(snapshot.factors.sorted { $0.score > $1.score }.prefix(3)) { factor in
+                                    Text("· \(factor.label) \(factor.value) · \(factor.score)")
+                                        .font(.caption2)
+                                        .foregroundStyle(Color.terminalMuted)
+                                }
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+
+                            VStack(alignment: .leading, spacing: 5) {
+                                Text("소스 상태")
+                                    .font(.caption.weight(.semibold))
+                                ForEach(snapshot.sourceStats.prefix(6)) { source in
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text("· \(source.label): \(communitySourceStatusLabel(source.status)) · \(source.itemCount)건")
+                                            .font(.caption2)
+                                            .foregroundStyle(source.status == "error" ? Color.terminalRed : Color.terminalMuted)
+                                        if let reason = source.reason?.trimmingCharacters(in: .whitespacesAndNewlines),
+                                           !reason.isEmpty {
+                                            Text("  \(reason)")
+                                                .font(.caption2)
+                                                .foregroundStyle(Color.terminalMuted)
+                                                .fixedSize(horizontal: false, vertical: true)
+                                        }
+                                    }
+                                }
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+
+                        ForEach(snapshot.snippets.prefix(3)) { snippet in
+                            if let url = safeWebURL(snippet.url) {
+                                Link(destination: url) {
+                                    HStack {
+                                        Text("[\(snippet.sourceLabel)] \(snippet.title)")
+                                            .font(.caption2)
+                                            .lineLimit(1)
+                                        Spacer()
+                                        Text(snippet.reason)
+                                            .font(.caption2)
+                                            .foregroundStyle(Color.terminalMuted)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    .padding(.top, 6)
+                }
+            } else {
+                EmptyState(message)
+            }
+        }
+    }
+
+    private func communityRegimeLabel(_ value: String) -> String {
+        switch value {
+        case "panic": return "공포 우세"
+        case "hype": return "과열 우세"
+        case "divided": return "의견 분열"
+        case "calm": return "차분"
+        default: return "표본 부족"
+        }
+    }
+
+    private func communitySourceStatusLabel(_ value: String) -> String {
+        switch value {
+        case "ok": return "정상"
+        case "empty": return "근거 없음"
+        case "configuration-required": return "API 설정 필요"
+        case "spike-only": return "수동 확인"
+        case "skipped": return "비활성"
+        case "error": return "오류"
+        default: return value
+        }
+    }
+
+    private func safeWebURL(_ value: String) -> URL? {
+        guard let url = URL(string: value),
+              let scheme = url.scheme?.lowercased(),
+              scheme == "http" || scheme == "https" else {
+            return nil
+        }
+        return url
     }
 }
 
@@ -10909,7 +11419,7 @@ struct AutomationRunPreviewPanel: View {
             return "활성 전략 \(strategies)개를 확인했지만 이번 실행은 건너뛰었습니다. \(reasonLabel(reason))"
         }
         if run.result.status == "skipped" {
-            return "활성 전략 \(strategies)개를 확인했지만 이번 실행은 건너뛰었습니다. Toss 설정, live gate, worker 상태를 확인하세요."
+            return "활성 전략 \(strategies)개를 확인했지만 이번 실행은 건너뛰었습니다. Toss 조회 설정, RiskCheck, worker 상태를 확인하세요."
         }
         return "활성 전략 \(strategies)개를 확인했습니다. 이번 tick에서는 발동 조건이 없어 주문 후보가 생성되지 않았습니다."
     }
@@ -10917,13 +11427,13 @@ struct AutomationRunPreviewPanel: View {
     private func reasonLabel(_ reason: String) -> String {
         switch reason {
         case "no-credentials": return "검증된 Toss API 키가 없어 자동화 실행을 건너뛰었습니다. Toss 설정에서 credential을 검증 후 저장하세요."
-        case "paper-preview-no-credentials": return "Toss API 키가 없어 실거래 제출은 차단하고, 활성 전략은 broker 제출 없이 리허설했습니다."
-        case "paper-preview-account-selection-required": return "자동거래 계좌 선택 전이라 실거래 제출은 차단하고, 활성 전략은 broker 제출 없이 리허설했습니다."
-        case "paper-preview-ready": return "Toss/live gate는 준비됐지만 dry-run이므로 주문 제출은 수행하지 않았습니다."
-        case "paper-preview-live-gate-closed": return "live gate가 닫혀 있어 실거래 제출은 차단하고 broker 제출 없이 리허설했습니다."
-        case "paper-automation-no-credentials": return "Toss API 키가 없어 실거래 제출 대신 로컬 모의 계좌에 자동화 결과를 기록했습니다."
-        case "paper-automation-account-selection-required": return "자동거래 계좌 선택 전이라 실거래 제출 대신 로컬 모의 계좌에 자동화 결과를 기록했습니다."
-        case "paper-automation-live-gate-closed": return "live gate가 닫혀 있어 실거래 제출 대신 로컬 모의 계좌에 자동화 결과를 기록했습니다."
+        case "paper-preview-no-credentials": return "Toss API 키 없이 활성 전략을 paper 모드로 리허설했습니다."
+        case "paper-preview-account-selection-required": return "자동화 계좌 선택 전 상태로 활성 전략을 paper 모드로 리허설했습니다."
+        case "paper-preview-ready": return "paper dry-run으로 broker 주문 제출 없이 리허설했습니다."
+        case "paper-preview-live-gate-closed": return "1.0.0 paper-only 정책에 따라 broker 제출 없이 리허설했습니다."
+        case "paper-automation-no-credentials": return "Toss API 키 없이 로컬 모의 계좌에 자동화 결과를 기록했습니다."
+        case "paper-automation-account-selection-required": return "자동화 계좌 선택 전 상태로 로컬 모의 계좌에 결과를 기록했습니다."
+        case "paper-automation-live-gate-closed": return "1.0.0 paper-only 정책에 따라 로컬 모의 계좌에 자동화 결과를 기록했습니다."
         case "no-enabled-strategies": return "활성화된 자동매매 전략이 없습니다."
         case "no-account": return "Toss 계좌를 찾지 못했습니다."
         case "account-selection-required": return "자동거래 계좌 선택이 필요합니다."
@@ -11206,17 +11716,17 @@ final class NotificationService {
 }
 
 private extension Color {
-    static let terminalBackground = Color(red: 0.047, green: 0.059, blue: 0.055)
-    static let terminalTopbar = Color(red: 0.071, green: 0.086, blue: 0.078)
-    static let terminalPanel = Color(red: 0.090, green: 0.106, blue: 0.098)
-    static let terminalPanel2 = Color(red: 0.114, green: 0.137, blue: 0.125)
-    static let terminalPanel3 = Color(red: 0.141, green: 0.169, blue: 0.153)
-    static let terminalLine = Color(red: 0.204, green: 0.239, blue: 0.216)
-    static let terminalText = Color(red: 0.949, green: 0.945, blue: 0.918)
-    static let terminalMuted = Color(red: 0.608, green: 0.651, blue: 0.616)
-    static let terminalGreen = Color(red: 0.329, green: 0.741, blue: 0.478)
-    static let terminalRed = Color(red: 0.882, green: 0.435, blue: 0.388)
-    static let terminalAmber = Color(red: 0.851, green: 0.667, blue: 0.290)
-    static let terminalBlue = Color(red: 0.424, green: 0.659, blue: 0.875)
+    static let terminalBackground = Color(red: 0.027, green: 0.063, blue: 0.098)
+    static let terminalTopbar = Color(red: 0.035, green: 0.075, blue: 0.114)
+    static let terminalPanel = Color(red: 0.047, green: 0.090, blue: 0.133)
+    static let terminalPanel2 = Color(red: 0.067, green: 0.122, blue: 0.173)
+    static let terminalPanel3 = Color(red: 0.082, green: 0.145, blue: 0.204)
+    static let terminalLine = Color(red: 0.129, green: 0.208, blue: 0.275)
+    static let terminalText = Color(red: 0.933, green: 0.965, blue: 0.973)
+    static let terminalMuted = Color(red: 0.569, green: 0.659, blue: 0.718)
+    static let terminalGreen = Color(red: 0.263, green: 0.839, blue: 0.682)
+    static let terminalRed = Color(red: 1.000, green: 0.490, blue: 0.525)
+    static let terminalAmber = Color(red: 0.953, green: 0.718, blue: 0.416)
+    static let terminalBlue = Color(red: 0.431, green: 0.667, blue: 1.000)
     static let terminalViolet = Color(red: 0.647, green: 0.549, blue: 0.894)
 }

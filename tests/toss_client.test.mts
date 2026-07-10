@@ -42,8 +42,8 @@ const withMockFetch = async (
   }
 };
 
-const tokenResponse = () => jsonResponse({
-  access_token: "test-access-token",
+const tokenResponse = (accessToken = "test-access-token") => jsonResponse({
+  access_token: accessToken,
   token_type: "Bearer",
   expires_in: 3600,
 });
@@ -91,6 +91,64 @@ test("toss client sends account header for closed order history", async () => {
   );
 });
 
+test("toss client separates cached tokens when the client secret changes", async () => {
+  await withMockFetch(
+    [
+      tokenResponse("first-access-token"),
+      tokenResponse("rotated-access-token"),
+    ],
+    async (calls) => {
+      const firstClient = createTossClient({ clientId: "same-client-id", clientSecret: "first-secret" });
+      const rotatedClient = createTossClient({ clientId: "same-client-id", clientSecret: "rotated-secret" });
+
+      assert.equal(await firstClient.verifyToken(), "first-access-token");
+      assert.equal(await rotatedClient.verifyToken(), "rotated-access-token");
+      assert.equal(calls.filter((call) => call.url.endsWith("/oauth2/token")).length, 2);
+    },
+  );
+});
+
+test("toss client shares an in-flight token request across parallel market reads", async () => {
+  await withMockFetch(
+    [
+      tokenResponse("shared-access-token"),
+      jsonResponse({ result: [{ symbol: "AAPL", timestamp: null, lastPrice: "200.00", currency: "USD" }] }),
+      jsonResponse({ result: [{ symbol: "NVDA", timestamp: null, lastPrice: "180.00", currency: "USD" }] }),
+    ],
+    async (calls) => {
+      const client = createTossClient({ clientId: "parallel-client-id", clientSecret: "parallel-secret" });
+      const [apple, nvidia] = await Promise.all([
+        client.getPrices(["AAPL"]),
+        client.getPrices(["NVDA"]),
+      ]);
+
+      assert.equal(apple[0]?.symbol, "AAPL");
+      assert.equal(nvidia[0]?.symbol, "NVDA");
+      assert.equal(calls.filter((call) => call.url.endsWith("/oauth2/token")).length, 1);
+      assert.equal((calls[1]?.init?.headers as Record<string, string>).Authorization, "Bearer shared-access-token");
+      assert.equal((calls[2]?.init?.headers as Record<string, string>).Authorization, "Bearer shared-access-token");
+    },
+  );
+});
+
+test("toss client applies timeout signals to token and API requests", async () => {
+  await withMockFetch(
+    [
+      tokenResponse(),
+      jsonResponse({ result: [] }),
+    ],
+    async (calls) => {
+      const client = createTossClient({ clientId: "client-id", clientSecret: "client-secret" });
+      await client.getPrices(["AAPL"]);
+
+      assert.ok(calls[0]?.init?.signal instanceof AbortSignal);
+      assert.ok(calls[1]?.init?.signal instanceof AbortSignal);
+      assert.equal(calls[0]?.init?.signal?.aborted, false);
+      assert.equal(calls[1]?.init?.signal?.aborted, false);
+    },
+  );
+});
+
 test("toss client retries 429 responses without reissuing token", async () => {
   await withMockFetch(
     [
@@ -108,6 +166,98 @@ test("toss client retries 429 responses without reissuing token", async () => {
       assert.equal(prices[0]?.symbol, "AAPL");
       assert.equal(calls.length, 3);
       assert.equal(calls.filter((call) => call.url.endsWith("/oauth2/token")).length, 1);
+    },
+  );
+});
+
+test("toss client refreshes a revoked token once for read-only requests", async () => {
+  await withMockFetch(
+    [
+      tokenResponse("revoked-access-token"),
+      jsonResponse({ error: { code: "unauthorized", message: "Token revoked" } }, { status: 401 }),
+      tokenResponse("fresh-access-token"),
+      jsonResponse({ result: [{ symbol: "AAPL", timestamp: null, lastPrice: "200.00", currency: "USD" }] }),
+    ],
+    async (calls) => {
+      const client = createTossClient({ clientId: "client-id", clientSecret: "client-secret" });
+      const prices = await client.getPrices(["AAPL"]);
+
+      assert.equal(prices[0]?.symbol, "AAPL");
+      assert.equal(calls.filter((call) => call.url.endsWith("/oauth2/token")).length, 2);
+      assert.equal((calls[1]?.init?.headers as Record<string, string>).Authorization, "Bearer revoked-access-token");
+      assert.equal((calls[3]?.init?.headers as Record<string, string>).Authorization, "Bearer fresh-access-token");
+    },
+  );
+});
+
+test("toss client does not retry order POST requests after a 429 response", async () => {
+  await withMockFetch(
+    [
+      tokenResponse(),
+      jsonResponse({ error: { requestId: "order-r1", code: "rate-limit-exceeded", message: "Too many orders" } }, {
+        status: 429,
+        headers: { "Retry-After": "1" },
+      }),
+    ],
+    async (calls) => {
+      const client = createTossClient({ clientId: "client-id", clientSecret: "client-secret" });
+
+      await assert.rejects(
+        client.createOrder(7, {
+          clientOrderId: "order-1",
+          symbol: "AAPL",
+          side: "BUY",
+          orderType: "LIMIT",
+          quantity: "1",
+          price: "100",
+          timeInForce: "DAY",
+          confirmHighValueOrder: false,
+        }),
+        (error: unknown) => {
+          assert.ok(error instanceof TossApiError);
+          assert.equal(error.status, 429);
+          assert.equal(error.requestId, "order-r1");
+          return true;
+        },
+      );
+
+      assert.equal(calls.length, 2);
+      assert.equal(calls.filter((call) => call.url.endsWith("/api/v1/orders")).length, 1);
+    },
+  );
+});
+
+test("toss client invalidates but never retries a 401 order POST", async () => {
+  await withMockFetch(
+    [
+      tokenResponse("revoked-order-token"),
+      jsonResponse({ error: { requestId: "order-401", code: "unauthorized", message: "Token revoked" } }, { status: 401 }),
+      tokenResponse("fresh-order-token"),
+    ],
+    async (calls) => {
+      const client = createTossClient({ clientId: "client-id", clientSecret: "client-secret" });
+
+      await assert.rejects(
+        client.createOrder(7, {
+          clientOrderId: "order-401",
+          symbol: "AAPL",
+          side: "BUY",
+          orderType: "LIMIT",
+          quantity: "1",
+          price: "100",
+          timeInForce: "DAY",
+          confirmHighValueOrder: false,
+        }),
+        (error: unknown) => {
+          assert.ok(error instanceof TossApiError);
+          assert.equal(error.status, 401);
+          return true;
+        },
+      );
+
+      assert.equal(calls.filter((call) => call.url.endsWith("/api/v1/orders")).length, 1);
+      assert.equal(await client.verifyToken(), "fresh-order-token");
+      assert.equal(calls.filter((call) => call.url.endsWith("/oauth2/token")).length, 2);
     },
   );
 });

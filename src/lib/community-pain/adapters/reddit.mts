@@ -1,18 +1,59 @@
+import { createHash } from "node:crypto";
+
 import {
   COMMUNITY_SOURCE_CONFIGS,
   REDDIT_MAX_COMMENT_POSTS,
   REDDIT_MAX_POSTS,
 } from "../config.mts";
 import type { CommunitySourceAdapter, RawCommunityItem } from "../types.mts";
-import { buildErrorResult, buildOkResult, fetchJson, mapWithConcurrency } from "./shared.mts";
+import {
+  buildErrorResult,
+  buildOkResult,
+  buildSkippedResult,
+  fetchJson,
+  fetchWithTimeout,
+  mapWithConcurrency,
+} from "./shared.mts";
 
 const config = COMMUNITY_SOURCE_CONFIGS.reddit;
 const subreddits = ["stocks", "wallstreetbets", "investing"];
-const userAgent = "CommunityPainMeter/1.0 by StockAnalysis";
+const userAgent = "YongStockDesk/1.0 macOS market research";
+const tokenCache = new Map<string, { accessToken: string; expiresAt: number }>();
 
-const redditHeaders = {
+const redditHeaders = (accessToken: string) => ({
   "User-Agent": userAgent,
+  Authorization: `Bearer ${accessToken}`,
   Accept: "application/json",
+});
+
+const getRedditAccessToken = async (clientId: string, clientSecret: string) => {
+  const cacheKey = createHash("sha256").update(`${clientId}\0${clientSecret}`).digest("hex");
+  const cached = tokenCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now() + 30_000) {
+    return cached.accessToken;
+  }
+  const response = await fetchWithTimeout("https://www.reddit.com/api/v1/access_token", {
+    method: "POST",
+    headers: {
+      Authorization: `Basic ${Buffer.from(`${clientId}:${clientSecret}`).toString("base64")}`,
+      "Content-Type": "application/x-www-form-urlencoded",
+      "User-Agent": userAgent,
+    },
+    body: new URLSearchParams({ grant_type: "client_credentials" }),
+  });
+  if (!response.ok) {
+    throw new Error(`Reddit OAuth HTTP ${response.status}`);
+  }
+  const payload = await response.json() as { access_token?: unknown; expires_in?: unknown };
+  if (typeof payload.access_token !== "string" || !payload.access_token) {
+    throw new Error("Reddit OAuth access token missing");
+  }
+  const expiresIn = Number(payload.expires_in);
+  tokenCache.set(cacheKey, {
+    accessToken: payload.access_token,
+    expiresAt: Date.now() + (Number.isFinite(expiresIn) && expiresIn > 0 ? expiresIn : 3_600) * 1_000,
+  });
+  return payload.access_token;
 };
 
 const parseSubmission = (data: Record<string, unknown>): RawCommunityItem | null => {
@@ -75,26 +116,36 @@ const parseCommentTree = (
   return items;
 };
 
-const fetchRedditComments = async (post: RawCommunityItem) => {
+const fetchRedditComments = async (post: RawCommunityItem, accessToken: string) => {
   const match = post.url.match(/\/comments\/([^/]+)/);
   const id = match?.[1] ?? post.id;
-  const url = `https://www.reddit.com/comments/${encodeURIComponent(id)}.json?limit=100&depth=2`;
-  const payload = await fetchJson(url, { headers: redditHeaders });
+  const url = `https://oauth.reddit.com/comments/${encodeURIComponent(id)}?limit=100&depth=2&raw_json=1`;
+  const payload = await fetchJson(url, { headers: redditHeaders(accessToken) });
   return Array.isArray(payload) && payload[1] ? parseCommentTree(payload[1], post) : [];
 };
 
 export const redditAdapter: CommunitySourceAdapter = {
   config,
   async fetchItems(context) {
+    const clientId = process.env.REDDIT_CLIENT_ID?.trim();
+    const clientSecret = process.env.REDDIT_CLIENT_SECRET?.trim();
+    if (!clientId || !clientSecret) {
+      return buildSkippedResult(
+        config,
+        "configuration-required",
+        "앱 뉴스 화면의 Reddit OAuth Keychain 설정 또는 REDDIT_CLIENT_ID·REDDIT_CLIENT_SECRET이 필요합니다.",
+      );
+    }
     const items: RawCommunityItem[] = [];
     const query = context.queryTerms[0] || context.canonicalSymbol;
     const subredditQuery = subreddits.map((subreddit) => `subreddit:${subreddit}`).join(" OR ");
-    const url = `https://www.reddit.com/search.json?q=${encodeURIComponent(
+    const url = `https://oauth.reddit.com/search?q=${encodeURIComponent(
       `(${query}) (${subredditQuery})`,
-    )}&sort=new&t=week&limit=${REDDIT_MAX_POSTS}`;
+    )}&sort=new&t=week&limit=${REDDIT_MAX_POSTS}&raw_json=1`;
 
     try {
-      const payload = await fetchJson(url, { headers: redditHeaders });
+      const accessToken = await getRedditAccessToken(clientId, clientSecret);
+      const payload = await fetchJson(url, { headers: redditHeaders(accessToken) });
       const children = Array.isArray(payload?.data?.children) ? payload.data.children : [];
       for (const child of children) {
         const data = child?.data;
@@ -104,21 +155,34 @@ export const redditAdapter: CommunitySourceAdapter = {
       const commentTargets = items
         .filter((item) => (item.commentCount ?? 0) > 0)
         .slice(0, REDDIT_MAX_COMMENT_POSTS);
+      let commentFailureCount = 0;
       const commentBundles = await mapWithConcurrency(
         commentTargets,
         async (post) => {
           try {
-            return fetchRedditComments(post);
+            return await fetchRedditComments(post, accessToken);
           } catch {
+            commentFailureCount += 1;
             return [];
           }
         },
       );
-      return buildOkResult({ config, context, url, items: [...items, ...commentBundles.flat()] });
+      const result = buildOkResult({ config, context, url, items: [...items, ...commentBundles.flat()] });
+      if (commentFailureCount === 0) {
+        return result;
+      }
+      const completedRatio = commentTargets.length > 0
+        ? (commentTargets.length - commentFailureCount) / commentTargets.length
+        : 1;
+      return {
+        ...result,
+        confidenceWeight: result.confidenceWeight * Math.max(0.5, completedRatio),
+        reason: `Reddit 댓글 ${commentFailureCount}/${commentTargets.length}건 수집에 실패해 신뢰도를 낮췄습니다.`,
+      };
     } catch (error) {
       return buildErrorResult(
         config,
-        error instanceof Error ? error.message : "Reddit 공개 JSON 수집 실패",
+        error instanceof Error ? error.message : "Reddit 공식 OAuth 수집 실패",
         url,
       );
     }

@@ -7,6 +7,7 @@ import { createCryptoBroker } from "../src/adapters/crypto/crypto-broker.ts";
 import { createDevAuthSession, DEV_AUTH_COOKIE } from "../src/lib/auth/dev-session.ts";
 import { getLiveTradingGate } from "../src/lib/automation/live-trading.ts";
 import { getLoopGridState, recordLoopGridBuy, recordLoopGridSell } from "../src/lib/automation/loop-state.ts";
+import { getGridLots, openGridLot } from "../src/lib/automation/grid-state.ts";
 import { parseStrategyConfigPayload } from "../src/lib/automation/http.ts";
 import {
   countActiveFeatureUsers,
@@ -354,6 +355,62 @@ test("evaluatePercentGrid emits fractional crypto quantity", () => {
   assert.equal(result.buys[0]?.quantity, 0.00010101);
 });
 
+test("fixed quantity sizing keeps stock quantity independent of trigger price", () => {
+  const config = buildStrategy({
+    mode: "percent-grid",
+    market: "KR",
+    symbol: "005930",
+    currentPrice: 100,
+    orderSizing: { mode: "quantity", quantity: 2 },
+    grid: {
+      basePrice: 100,
+      rungs: [
+        { index: 1, buyDropPct: 1, sellRisePct: 5, notional: 198 },
+        { index: 2, buyDropPct: 5, sellRisePct: 5, notional: 190 },
+      ],
+    },
+    riskLimits: {
+      maxDailyBuys: 2,
+      maxDailySells: 2,
+      maxPositionValue: 388,
+      maxLossPct: 15,
+      maxHoldHours: 24 * 365,
+    },
+    exitRules: { takeProfitPct: 5, stopLossPct: 3, rescueMode: "cancel-and-liquidate" },
+  });
+  const result = simulateAutomationStrategy({ userId: "quantity-user", config });
+  assert.equal(result.riskCheck.passed, true);
+  assert.deepEqual(result.orderIntents.map((intent) => intent.quantity), [2, 2]);
+  assert.deepEqual(result.orderIntents.map((intent) => intent.notional), [198, 190]);
+});
+
+test("fixed notional sizing emits fractional crypto quantity", () => {
+  const config = buildStrategy({
+    mode: "percent-grid",
+    market: "CRYPTO",
+    executionVenue: "upbit",
+    symbol: "KRW-BTC",
+    currentPrice: 100_000_000,
+    orderSizing: { mode: "notional", notional: 50_000 },
+    grid: {
+      basePrice: 100_000_000,
+      rungs: [{ index: 1, buyDropPct: 1, sellRisePct: 5, notional: 50_000 }],
+    },
+    riskLimits: {
+      maxDailyBuys: 1,
+      maxDailySells: 1,
+      maxPositionValue: 50_000,
+      maxLossPct: 15,
+      maxHoldHours: 24 * 365,
+    },
+    exitRules: { takeProfitPct: 5, stopLossPct: 3, rescueMode: "cancel-and-liquidate" },
+  });
+  const result = simulateAutomationStrategy({ userId: "crypto-notional-user", config });
+  assert.equal(result.riskCheck.passed, true);
+  assert.equal(result.orderIntents[0]?.quantity, 0.00050505);
+  assert.equal(result.orderIntents[0]?.notional, 50_000);
+});
+
 test("loop-grid state opens on buy and resets anchor on sell", async () => {
   const userId = `user-${Date.now()}-state`;
   const strategyId = `strategy-${Date.now()}-state`;
@@ -566,6 +623,157 @@ test("strategy config hash ignores status and simulation metadata", () => {
       updatedAt: "2026-06-18T00:00:00.000Z",
     }),
   );
+  assert.notEqual(
+    getStrategyConfigHash(base),
+    getStrategyConfigHash({ ...base, orderSizing: { mode: "quantity", quantity: 2 } }),
+  );
+  assert.notEqual(
+    getStrategyConfigHash(base),
+    getStrategyConfigHash({ ...base, exitRules: { ...base.exitRules, stopLossPct: 7 } }),
+  );
+});
+
+const filledBroker: BrokerPort = {
+  async submitOrder(request) {
+    return {
+      brokerOrderId: `paper-${request.orderIntentId}`,
+      status: "filled",
+      submittedAt: "2026-06-18T00:10:00.000Z",
+    };
+  },
+  async cancelOrder(request) {
+    return {
+      brokerOrderId: request.brokerOrderId,
+      status: "canceled",
+      submittedAt: "2026-06-18T00:10:00.000Z",
+    };
+  },
+};
+
+test("grid stop loss liquidates weighted lots before normal entries", async () => {
+  const userId = `user-${Date.now()}-grid-stop`;
+  const strategyId = `strategy-${Date.now()}-grid-stop`;
+  await openGridLot(userId, strategyId, { rungIndex: 1, entryPrice: 100, quantity: 2 });
+  await openGridLot(userId, strategyId, { rungIndex: 2, entryPrice: 90, quantity: 1 });
+  const config = buildStrategy({
+    id: strategyId,
+    status: "enabled",
+    mode: "percent-grid",
+    market: "KR",
+    currentPrice: 100,
+    grid: {
+      basePrice: 100,
+      rungs: [
+        { index: 1, buyDropPct: 1, sellRisePct: 5, notional: 200 },
+        { index: 2, buyDropPct: 10, sellRisePct: 5, notional: 100 },
+      ],
+    },
+    riskLimits: { maxDailyBuys: 2, maxDailySells: 2, maxPositionValue: 300, maxLossPct: 15, maxHoldHours: 24 * 365 },
+    exitRules: { takeProfitPct: 5, stopLossPct: 3, rescueMode: "cancel-and-liquidate" },
+  });
+
+  const result = await runAutomationWorkerTick({
+    userId,
+    config,
+    marketPrice: 93,
+    broker: filledBroker,
+    liveTradingEnabled: false,
+    accountSeq: 0,
+    today: "2026-06-18",
+  });
+
+  assert.equal(result.orders.length, 1);
+  assert.equal(result.orders[0]?.stepId, "grid-stop-loss");
+  assert.equal(result.orders[0]?.quantity, 3);
+  assert.equal(result.strategyTransition?.completed, true);
+  assert.equal((await getGridLots(userId, strategyId)).length, 0);
+});
+
+test("loop stop loss keeps holding state when liquidation is blocked", async () => {
+  const userId = `user-${Date.now()}-loop-stop`;
+  const strategyId = `strategy-${Date.now()}-loop-stop`;
+  await recordLoopGridBuy(userId, strategyId, {
+    anchorPrice: 100,
+    entryPrice: 99,
+    quantity: 2,
+    executedAt: "2026-06-18T00:00:00.000Z",
+  });
+  const config = buildStrategy({
+    id: strategyId,
+    status: "enabled",
+    mode: "loop-grid",
+    market: "KR",
+    currentPrice: 100,
+    loop: loopPlan,
+    riskLimits: { maxDailyBuys: 2, maxDailySells: 2, maxPositionValue: 1000, maxLossPct: 15, maxHoldHours: 24 * 365 },
+    exitRules: { takeProfitPct: 5, stopLossPct: 3, rescueMode: "cancel-and-liquidate" },
+  });
+  const blockedBroker: BrokerPort = {
+    async submitOrder(request) { throw new LiveTradingDisabledError(request); },
+    async cancelOrder() { throw new Error("not used"); },
+  };
+
+  const result = await runAutomationWorkerTick({
+    userId,
+    config,
+    marketPrice: 95,
+    broker: blockedBroker,
+    liveTradingEnabled: false,
+    accountSeq: 0,
+    today: "2026-06-18",
+  });
+
+  assert.equal(result.orders[0]?.stepId, "loop-stop-loss");
+  assert.equal(result.orders[0]?.status, "blocked");
+  assert.equal(result.strategyTransition?.completed, false);
+  assert.equal((await getLoopGridState(userId, strategyId, loopPlan)).positionState, "holding");
+});
+
+test("ladder stop-loss retries after a failed liquidation even when price recovers", async () => {
+  const userId = `user-${Date.now()}-ladder-stop-retry`;
+  const strategyId = `strategy-${Date.now()}-ladder-stop-retry`;
+  const config = buildStrategy({
+    id: strategyId,
+    status: "enabled",
+    currentPrice: 100,
+    ladder: [
+      { id: "buy-1", side: "buy", price: 95, notional: 190, condition: "buy" },
+      { id: "sell-1", side: "sell", price: 105, notional: 210, condition: "sell" },
+    ],
+    exitRules: { takeProfitPct: 5, stopLossPct: 4, rescueMode: "cancel-and-liquidate" },
+  });
+  const blockedBroker: BrokerPort = {
+    async submitOrder(request) { throw new LiveTradingDisabledError(request); },
+    async cancelOrder() { throw new Error("not used"); },
+  };
+
+  const first = await runAutomationWorkerTick({
+    userId,
+    config,
+    marketPrice: 95,
+    broker: blockedBroker,
+    liveTradingEnabled: false,
+    accountSeq: 0,
+    today: "2026-06-18",
+    resolveExitQuantity: async () => 2,
+    resolveEntryPrice: async () => 100,
+  });
+  assert.equal(first.orders[0]?.status, "blocked");
+
+  const second = await runAutomationWorkerTick({
+    userId,
+    config,
+    marketPrice: 99,
+    broker: filledBroker,
+    liveTradingEnabled: false,
+    accountSeq: 0,
+    today: "2026-06-18",
+    resolveExitQuantity: async () => 2,
+    resolveEntryPrice: async () => 100,
+  });
+  assert.equal(second.orders[0]?.stepId, "stop-loss");
+  assert.equal(second.orders[0]?.status, "submitted");
+  assert.equal(second.triggers, 0);
 });
 
 test("runAutomationWorkerTick blocks loop-grid orders when live trading is disabled", async () => {

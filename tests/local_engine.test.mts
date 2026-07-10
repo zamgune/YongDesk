@@ -66,6 +66,7 @@ test("local engine health returns sidecar metadata", async () => {
   const payload = await response.json() as {
     ok?: boolean;
     engine?: string;
+    version?: string;
     pid?: number;
     workingDirectory?: string;
     sidecarBuildId?: string;
@@ -73,6 +74,8 @@ test("local engine health returns sidecar metadata", async () => {
   };
   assert.equal(payload.ok, true);
   assert.equal(payload.engine, "stock-analysis-local-engine");
+  const packageJson = JSON.parse(await readFile(join(process.cwd(), "package.json"), "utf8")) as { version?: string };
+  assert.equal(payload.version, packageJson.version);
   assert.equal(payload.pid, process.pid);
   assert.equal(payload.workingDirectory, process.cwd());
   assert.equal(payload.sidecarBuildId, "test-sidecar-build");
@@ -109,6 +112,68 @@ test("local engine rejects unsupported routes", async () => {
   assert.equal(response.status, 404);
 });
 
+test("local engine exposes community sentiment through the sidecar contract", async () => {
+  const response = await handleLocalEngineRequest(new Request(
+    "http://127.0.0.1:38771/api/community-pain/NVDA?market=US&sources=blind",
+  ));
+  assert.equal(response.status, 200);
+  const payload = await response.json() as {
+    symbol?: string;
+    sentimentRegime?: string;
+    lowEvidence?: boolean;
+    sourceStats?: Array<{ id?: string; status?: string }>;
+  };
+  assert.equal(payload.symbol, "NVDA");
+  assert.equal(payload.sentimentRegime, "low_evidence");
+  assert.equal(payload.lowEvidence, true);
+  assert.deepEqual(payload.sourceStats, [{
+    id: "blind",
+    label: "블라인드",
+    policyStatus: "spike",
+    status: "spike-only",
+    confidenceWeight: 0.35,
+    reason: "공개 웹 접근이 차단되어 자동 수집하지 않습니다.",
+    candidateCount: 0,
+    recentItemCount: 0,
+    itemCount: 0,
+    postCount: 0,
+    commentItemCount: 0,
+    replyCount: 0,
+    dateParseCoverage: 0,
+    timedOut: false,
+  }]);
+});
+
+test("local engine rejects invalid community sentiment inputs", async () => {
+  const missingSymbol = await handleLocalEngineRequest(new Request(
+    "http://127.0.0.1:38771/api/community-pain/%20?market=US&sources=blind",
+  ));
+  assert.equal(missingSymbol.status, 400);
+
+  const invalidMarket = await handleLocalEngineRequest(new Request(
+    "http://127.0.0.1:38771/api/community-pain/NVDA?market=%40%40&sources=blind",
+  ));
+  assert.equal(invalidMarket.status, 400);
+});
+
+test("local engine community refresh bypasses a completed cache entry", async () => {
+  const endpoint = "http://127.0.0.1:38771/api/community-pain/CACHE1?market=US&sources=blind";
+  const firstResponse = await handleLocalEngineRequest(new Request(endpoint));
+  assert.equal(firstResponse.status, 200);
+  const first = await firstResponse.json() as { generatedAt?: string };
+
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  const cachedResponse = await handleLocalEngineRequest(new Request(endpoint));
+  const cached = await cachedResponse.json() as { generatedAt?: string };
+  assert.equal(cached.generatedAt, first.generatedAt);
+
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  const refreshedResponse = await handleLocalEngineRequest(new Request(`${endpoint}&refresh=1`));
+  assert.equal(refreshedResponse.status, 200);
+  const refreshed = await refreshedResponse.json() as { generatedAt?: string };
+  assert.notEqual(refreshed.generatedAt, first.generatedAt);
+});
+
 test("local engine searches Korean symbols with bilingual names", async () => {
   const response = await handleLocalEngineRequest(new Request(
     "http://127.0.0.1:38771/api/local/symbol-search?q=%EC%82%BC%EC%84%B1&markets=KOSPI,KOSDAQ&limit=5",
@@ -138,8 +203,15 @@ test("local engine exposes fail-closed crypto exchange setup", async () => {
   const readinessResponse = await handleLocalEngineRequest(new Request(
     "http://127.0.0.1:38771/api/local/crypto-exchanges/upbit/readiness?market=KRW-BTC",
   ));
-  assert.equal(readinessResponse.status, 412);
-  const readiness = await readinessResponse.json() as { orderSubmissionAttempted?: boolean };
+  assert.equal(readinessResponse.status, 200);
+  const readiness = await readinessResponse.json() as {
+    ready?: boolean;
+    readonlyChecks?: Record<string, boolean>;
+    orderSubmissionAttempted?: boolean;
+  };
+  assert.equal(readiness.ready, false);
+  assert.equal(readiness.readonlyChecks?.ticker, false);
+  assert.equal(readiness.readonlyChecks?.orderConstraints, false);
   assert.equal(readiness.orderSubmissionAttempted, false);
 
   const precheckResponse = await handleLocalEngineRequest(new Request(
@@ -153,6 +225,68 @@ test("local engine exposes fail-closed crypto exchange setup", async () => {
   assert.equal(precheckResponse.status, 412);
   const precheck = await precheckResponse.json() as { orderSubmissionAttempted?: boolean };
   assert.equal(precheck.orderSubmissionAttempted, false);
+});
+
+test("Upbit readiness uses official tick size and response timestamp freshness", async () => {
+  const previousUserId = process.env.STOCK_ANALYSIS_LOCAL_USER_ID;
+  process.env.STOCK_ANALYSIS_LOCAL_USER_ID = `local-engine-upbit-readiness-${Date.now()}`;
+  const responseTimestamp = Date.now();
+  try {
+    await withMockFetch([
+      Response.json([{ currency: "KRW", balance: "10000000", locked: "0" }]),
+      Response.json([{ currency: "KRW", balance: "10000000", locked: "0" }]),
+      Response.json({
+        bid_fee: "0.0005",
+        ask_fee: "0.0005",
+        market: {
+          id: "KRW-BTC",
+          bid: { min_total: "5000" },
+          ask: { min_total: "5000" },
+        },
+      }),
+      Response.json([{
+        market: "KRW-BTC",
+        trade_price: 100_000_000,
+        timestamp: responseTimestamp,
+        trade_timestamp: responseTimestamp - 5 * 60 * 1_000,
+      }]),
+      Response.json([{
+        market: "KRW-BTC",
+        quote_currency: "KRW",
+        tick_size: "1000",
+        supported_levels: ["0", "10000"],
+      }]),
+    ], async (calls) => {
+      const credentialResponse = await handleLocalEngineRequest(new Request(
+        "http://127.0.0.1:38771/api/local/crypto-exchanges/upbit/credentials",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ accessKey: "upbit-access", secretKey: "upbit-secret" }),
+        },
+      ));
+      assert.equal(credentialResponse.status, 200);
+
+      const readinessResponse = await handleLocalEngineRequest(new Request(
+        "http://127.0.0.1:38771/api/local/crypto-exchanges/upbit/readiness?market=KRW-BTC",
+      ));
+      assert.equal(readinessResponse.status, 200);
+      const readiness = await readinessResponse.json() as {
+        ready?: boolean;
+        ticker?: { fresh?: boolean; lastTradeTimestamp?: string | null };
+        orderConstraints?: { bid?: { priceUnit?: number }; ask?: { priceUnit?: number } };
+      };
+      assert.equal(readiness.ready, true);
+      assert.equal(readiness.ticker?.fresh, true);
+      assert.ok(readiness.ticker?.lastTradeTimestamp);
+      assert.equal(readiness.orderConstraints?.bid?.priceUnit, 1000);
+      assert.equal(readiness.orderConstraints?.ask?.priceUnit, 1000);
+      assert.ok(calls.some((call) => call.url.includes("/v1/orderbook/instruments?markets=KRW-BTC")));
+    });
+  } finally {
+    if (previousUserId === undefined) delete process.env.STOCK_ANALYSIS_LOCAL_USER_ID;
+    else process.env.STOCK_ANALYSIS_LOCAL_USER_ID = previousUserId;
+  }
 });
 
 test("local engine server logs sanitized request status", async () => {
@@ -1140,8 +1274,8 @@ test("local engine exposes local broker diagnostics without secrets", async () =
       assert.equal(payload.liveGate?.accountPreferenceSelected, false);
       assert.equal(payload.liveGate?.liveTradingEffective, false);
       assert.equal(payload.liveGate?.rawLiveTradingEffective, false);
-      assert.equal(payload.liveGate?.gateStatus, 423);
-      assert.match(payload.liveGate?.gateReason ?? "", /마스터 게이트.*꺼져/);
+      assert.equal(payload.liveGate?.gateStatus, 501);
+      assert.match(payload.liveGate?.gateReason ?? "", /1\.0\.0.*실거래/);
       assert.equal(payload.liveGate?.killSwitchEngaged, false);
       assert.equal(payload.liveGate?.workerPaused, false);
       assert.equal(payload.liveGate?.automationQueueReady, false);
@@ -1243,7 +1377,7 @@ test("local engine does not persist rejected Toss broker credentials", async () 
   assert.equal(stored.accountPreference, null);
 });
 
-test("local engine blocks live trading user toggle until Toss credential is verified", async () => {
+test("local engine blocks Toss live trading in the desktop 1.0.0 runtime", async () => {
   const previousLiveTrading = process.env.ENABLE_LIVE_TRADING;
   process.env.ENABLE_LIVE_TRADING = "true";
   try {
@@ -1252,9 +1386,10 @@ test("local engine blocks live trading user toggle until Toss credential is veri
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ enabled: true }),
     }));
-    assert.equal(response.status, 412);
-    const payload = await response.json() as { error?: string };
-    assert.match(payload.error ?? "", /Toss API 키/);
+    assert.equal(response.status, 501);
+    const payload = await response.json() as { error?: string; orderSubmissionAttempted?: boolean };
+    assert.match(payload.error ?? "", /1\.0\.0.*실거래/);
+    assert.equal(payload.orderSubmissionAttempted, false);
 
     const stateResponse = await handleLocalEngineRequest(
       new Request("http://127.0.0.1:38771/api/local/live-trading"),
@@ -1385,7 +1520,7 @@ test("local engine previews Toss order precheck without submitting live orders",
   }
 });
 
-test("local engine can open live trading gate after verified Toss credential and local operator switch", async () => {
+test("local engine keeps Toss live trading blocked after credential verification", async () => {
   const previousLiveTrading = process.env.ENABLE_LIVE_TRADING;
   process.env.ENABLE_LIVE_TRADING = "true";
   try {
@@ -1419,21 +1554,23 @@ test("local engine can open live trading gate after verified Toss credential and
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ enabled: true }),
     }));
-    assert.equal(response.status, 200);
+    assert.equal(response.status, 501);
     const payload = await response.json() as {
-      liveTrading?: {
-        masterEnabled?: boolean;
-        userEnabled?: boolean;
-        featureEnabled?: boolean;
-        effective?: boolean;
-        localRuntime?: boolean;
-      };
+      error?: string;
+      orderSubmissionAttempted?: boolean;
     };
-    assert.equal(payload.liveTrading?.masterEnabled, true);
-    assert.equal(payload.liveTrading?.userEnabled, true);
-    assert.equal(payload.liveTrading?.featureEnabled, true);
-    assert.equal(payload.liveTrading?.effective, true);
-    assert.equal(payload.liveTrading?.localRuntime, true);
+    assert.match(payload.error ?? "", /1\.0\.0.*실거래/);
+    assert.equal(payload.orderSubmissionAttempted, false);
+
+    const stateResponse = await handleLocalEngineRequest(
+      new Request("http://127.0.0.1:38771/api/local/live-trading"),
+    );
+    const statePayload = await stateResponse.json() as {
+      liveTrading?: { userEnabled?: boolean; featureEnabled?: boolean; effective?: boolean };
+    };
+    assert.equal(statePayload.liveTrading?.userEnabled, false);
+    assert.equal(statePayload.liveTrading?.featureEnabled, false);
+    assert.equal(statePayload.liveTrading?.effective, false);
 
     const offResponse = await handleLocalEngineRequest(new Request("http://127.0.0.1:38771/api/local/live-trading", {
       method: "PUT",
@@ -1497,9 +1634,10 @@ test("local engine saves explicit Toss automation account preference", async () 
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ enabled: true }),
       }));
-      assert.equal(blockedToggle.status, 412);
-      const blockedPayload = await blockedToggle.json() as { error?: string };
-      assert.match(blockedPayload.error ?? "", /계좌/);
+      assert.equal(blockedToggle.status, 501);
+      const blockedPayload = await blockedToggle.json() as { error?: string; orderSubmissionAttempted?: boolean };
+      assert.match(blockedPayload.error ?? "", /1\.0\.0.*실거래/);
+      assert.equal(blockedPayload.orderSubmissionAttempted, false);
 
       const preferenceResponse = await handleLocalEngineRequest(new Request("http://127.0.0.1:38771/api/local/broker/account-preference", {
         method: "PUT",
@@ -1522,10 +1660,10 @@ test("local engine saves explicit Toss automation account preference", async () 
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ enabled: true }),
     }));
-    assert.equal(response.status, 200);
-    const payload = await response.json() as { liveTrading?: { effective?: boolean; featureEnabled?: boolean } };
-    assert.equal(payload.liveTrading?.effective, true);
-    assert.equal(payload.liveTrading?.featureEnabled, true);
+    assert.equal(response.status, 501);
+    const payload = await response.json() as { error?: string; orderSubmissionAttempted?: boolean };
+    assert.match(payload.error ?? "", /1\.0\.0.*실거래/);
+    assert.equal(payload.orderSubmissionAttempted, false);
   } finally {
     if (previousLiveTrading === undefined) {
       delete process.env.ENABLE_LIVE_TRADING;
@@ -1700,6 +1838,7 @@ test("local engine manages local automation strategy configs", async () => {
       market: "US",
       preset: "magic-split",
       mode: "percent-grid",
+      orderSizing: { mode: "quantity", quantity: 2 },
       currentPrice: 101,
       grid: {
         basePrice: 101,
@@ -1725,6 +1864,7 @@ test("local engine manages local automation strategy configs", async () => {
       name?: string;
       currentPrice?: number;
       lastSimulation?: unknown;
+      orderSizing?: { mode?: string; quantity?: number };
       grid?: { basePrice?: number; rungs?: Array<{ buyDropPct?: number; notional?: number }> };
       automationReadiness?: {
         paperAutomationReady?: boolean;
@@ -1736,6 +1876,7 @@ test("local engine manages local automation strategy configs", async () => {
   assert.equal(edited.config?.status, "draft");
   assert.equal(edited.config?.name, "ZXSTRAT 분할 전략 수정");
   assert.equal(edited.config?.currentPrice, 101);
+  assert.deepEqual(edited.config?.orderSizing, { mode: "quantity", quantity: 2 });
   assert.equal(edited.config?.grid?.basePrice, 101);
   assert.equal(edited.config?.grid?.rungs?.[0]?.buyDropPct, 1.5);
   assert.equal(edited.config?.grid?.rungs?.[0]?.notional, 800);
@@ -1786,10 +1927,11 @@ test("local engine manages local automation strategy configs", async () => {
       name?: string;
       status?: string;
       lastSimulation?: unknown;
+      orderSizing?: { mode?: string; quantity?: number };
       riskLimits?: { maxLossPct?: number };
     }>;
   };
-  assert.equal(exported.schemaVersion, 1);
+  assert.equal(exported.schemaVersion, 2);
   assert.equal(exported.safety?.credentialsIncluded, false);
   assert.equal(exported.safety?.accountPreferenceIncluded, false);
   assert.equal(exported.safety?.importedStatus, "draft");
@@ -1798,6 +1940,7 @@ test("local engine manages local automation strategy configs", async () => {
   assert.equal(exportedConfig?.name, "ZXSTRAT 분할 전략 수정");
   assert.equal(exportedConfig?.status, undefined);
   assert.equal(exportedConfig?.lastSimulation, undefined);
+  assert.deepEqual(exportedConfig?.orderSizing, { mode: "quantity", quantity: 2 });
 
   const importResponse = await handleLocalEngineRequest(new Request("http://127.0.0.1:38771/api/local/strategy-configs/import", {
     method: "POST",
@@ -1835,6 +1978,7 @@ test("local engine manages local automation strategy configs", async () => {
       status?: string;
       name?: string;
       lastSimulation?: unknown;
+      orderSizing?: { mode?: string; quantity?: number };
       automationReadiness?: { paperAutomationReady?: boolean };
     }>;
   };
@@ -1847,7 +1991,26 @@ test("local engine manages local automation strategy configs", async () => {
   assert.notEqual(imported.configs?.[0]?.id, "should-not-survive");
   assert.equal(imported.configs?.[0]?.status, "draft");
   assert.equal(imported.configs?.[0]?.lastSimulation, undefined);
+  assert.deepEqual(imported.configs?.[0]?.orderSizing, { mode: "quantity", quantity: 2 });
   assert.equal(imported.configs?.[0]?.automationReadiness?.paperAutomationReady, false);
+
+  const legacyImportResponse = await handleLocalEngineRequest(new Request("http://127.0.0.1:38771/api/local/strategy-configs/import", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      schemaVersion: 1,
+      configs: [exportedConfig],
+    }),
+  }));
+  assert.equal(legacyImportResponse.status, 200);
+  const legacyImported = await legacyImportResponse.json() as {
+    schemaVersion?: number;
+    configs?: Array<{ status?: string; orderSizing?: unknown; lastSimulation?: unknown }>;
+  };
+  assert.equal(legacyImported.schemaVersion, 1);
+  assert.equal(legacyImported.configs?.[0]?.status, "draft");
+  assert.equal(legacyImported.configs?.[0]?.orderSizing, undefined);
+  assert.equal(legacyImported.configs?.[0]?.lastSimulation, undefined);
 
   const configuredRoot = process.env.STOCK_ANALYSIS_STORAGE_ROOT;
   assert.ok(configuredRoot);
@@ -1951,6 +2114,108 @@ test("local automation cycle records enabled strategy orders into paper state wi
     assert.ok(state.executions.some((execution) => execution.symbol === "ZXPAUTO"));
     assert.ok(state.positions.some((position) => position.symbol === "ZXPAUTO" && position.quantity > 0));
     assert.ok((state.accounts.US.cash ?? 0) < 10_000);
+  } finally {
+    if (previousUserId === undefined) {
+      delete process.env.STOCK_ANALYSIS_LOCAL_USER_ID;
+    } else {
+      process.env.STOCK_ANALYSIS_LOCAL_USER_ID = previousUserId;
+    }
+  }
+});
+
+test("local automation cycle liquidates a stopped paper position and disables the strategy", async () => {
+  const previousUserId = process.env.STOCK_ANALYSIS_LOCAL_USER_ID;
+  const userId = `local-paper-stop-${Date.now()}`;
+  process.env.STOCK_ANALYSIS_LOCAL_USER_ID = userId;
+  try {
+    const createResponse = await handleLocalEngineRequest(new Request("http://127.0.0.1:38771/api/local/strategy-configs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: "ZXSTOP paper 손절",
+        symbol: "ZXSTOP",
+        market: "US",
+        preset: "magic-split",
+        mode: "percent-grid",
+        orderSizing: { mode: "quantity", quantity: 2 },
+        currentPrice: 90,
+        grid: {
+          basePrice: 100,
+          rungs: [{ index: 1, buyDropPct: 1, sellRisePct: 10, notional: 198 }],
+        },
+        riskLimits: {
+          maxDailyBuys: 4,
+          maxDailySells: 4,
+          maxPositionValue: 500,
+          maxLossPct: 20,
+          maxHoldHours: 8760,
+        },
+        exitRules: { takeProfitPct: 10, stopLossPct: 5, rescueMode: "cancel-and-liquidate" },
+      }),
+    }));
+    assert.equal(createResponse.status, 201);
+    const created = await createResponse.json() as { config?: { id?: string } };
+    const strategyId = created.config?.id;
+    assert.ok(strategyId);
+
+    const simulateResponse = await handleLocalEngineRequest(new Request(
+      `http://127.0.0.1:38771/api/local/strategy-configs/${strategyId}/simulate`,
+      { method: "POST" },
+    ));
+    assert.equal(simulateResponse.status, 200);
+    const enableResponse = await handleLocalEngineRequest(new Request(
+      `http://127.0.0.1:38771/api/local/strategy-configs/${strategyId}`,
+      {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: "enabled" }),
+      },
+    ));
+    assert.equal(enableResponse.status, 200);
+
+    const firstCycle = await handleLocalEngineRequest(new Request("http://127.0.0.1:38771/api/automation/cycle", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{}",
+    }));
+    assert.equal(firstCycle.status, 200);
+    let paperState = await readPaperTradingState(getPaperTradingStorageRootForUser(userId));
+    assert.equal(paperState.state.positions.find((position) => position.symbol === "ZXSTOP")?.quantity, 2);
+
+    const secondCycle = await handleLocalEngineRequest(new Request("http://127.0.0.1:38771/api/automation/cycle", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{}",
+    }));
+    assert.equal(secondCycle.status, 200);
+    const stopped = await secondCycle.json() as {
+      result?: {
+        evaluations?: Array<{
+          strategyId?: string;
+          strategyTransition?: { status?: string; reason?: string; completed?: boolean };
+        }>;
+      };
+    };
+    assert.ok(stopped.result?.evaluations?.some((evaluation) =>
+      evaluation.strategyId === strategyId
+      && evaluation.strategyTransition?.status === "disabled"
+      && evaluation.strategyTransition.reason === "stop-loss"
+      && evaluation.strategyTransition.completed === true
+    ));
+
+    paperState = await readPaperTradingState(getPaperTradingStorageRootForUser(userId));
+    assert.equal(paperState.state.positions.some((position) => position.symbol === "ZXSTOP"), false);
+    assert.ok(paperState.state.executions.some((execution) =>
+      execution.symbol === "ZXSTOP" && execution.side === "sell" && execution.quantity === 2
+    ));
+
+    const listResponse = await handleLocalEngineRequest(new Request("http://127.0.0.1:38771/api/local/strategy-configs"));
+    const listed = await listResponse.json() as {
+      configs?: Array<{ id?: string; status?: string; lastSimulation?: unknown }>;
+    };
+    const stoppedConfig = listed.configs?.find((config) => config.id === strategyId);
+    assert.equal(stoppedConfig?.status, "disabled");
+    assert.equal(stoppedConfig?.lastSimulation, undefined);
   } finally {
     if (previousUserId === undefined) {
       delete process.env.STOCK_ANALYSIS_LOCAL_USER_ID;
@@ -2231,15 +2496,16 @@ test("crypto strategy runs through shared paper automation without exchange subm
     const blockedLive = await blockedLiveResponse.json() as {
       result?: {
         cryptoAutomation?: {
+          reason?: string;
+          liveTradingEnabled?: boolean;
           submitted?: number;
           evaluations?: Array<{ strategyId?: string; status?: string; blockers?: string[] }>;
         };
       };
     };
     assert.equal(blockedLive.result?.cryptoAutomation?.submitted, 0);
-    const blockedEvaluation = blockedLive.result?.cryptoAutomation?.evaluations?.find((item) => item.strategyId === id);
-    assert.equal(blockedEvaluation?.status, "blocked");
-    assert.match(blockedEvaluation?.blockers?.join(" ") ?? "", /API 키/);
+    assert.equal(blockedLive.result?.cryptoAutomation?.liveTradingEnabled, false);
+    assert.equal(blockedLive.result?.cryptoAutomation?.reason, "paper-automation-crypto-live-not-supported");
   } finally {
     if (previousLive === undefined) delete process.env.ENABLE_LIVE_TRADING;
     else process.env.ENABLE_LIVE_TRADING = previousLive;

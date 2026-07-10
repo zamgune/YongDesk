@@ -35,6 +35,7 @@ import { TOSS_OPENAPI_BASE_URL } from "./contract.ts";
 const DEFAULT_BASE_URL = TOSS_OPENAPI_BASE_URL;
 // 토큰 expires_in 만료 전 미리 갱신할 여유 (초)
 const TOKEN_REFRESH_MARGIN_SEC = 120;
+const REQUEST_TIMEOUT_MS = 10_000;
 
 export type TossRateLimitSnapshot = {
   limit: number | null;
@@ -136,10 +137,17 @@ export const formatTossApiError = (
 
 type CachedToken = { accessToken: string; expiresAtMs: number };
 
-// 프로세스 내 토큰 캐시. 키는 client_id 해시 (시크릿은 키에 넣지 않음).
+// 프로세스 내 토큰 캐시. client_id와 client_secret의 fingerprint만 키로 사용합니다.
 const tokenCache = new Map<string, CachedToken>();
+const tokenRequests = new Map<string, Promise<CachedToken>>();
 
-const cacheKey = (clientId: string) => createHash("sha256").update(clientId).digest("hex");
+const cacheKey = (credentials: TossCredentials) => createHash("sha256")
+  .update(credentials.clientId)
+  .update("\0")
+  .update(credentials.clientSecret)
+  .digest("hex");
+
+const requestTimeoutSignal = () => AbortSignal.timeout(REQUEST_TIMEOUT_MS);
 
 const baseUrl = () => (process.env.TOSS_OPENAPI_BASE_URL ?? DEFAULT_BASE_URL).replace(/\/+$/, "");
 
@@ -153,6 +161,7 @@ const issueToken = async (credentials: TossCredentials): Promise<CachedToken> =>
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body,
+    signal: requestTimeoutSignal(),
   });
   const json = (await response.json().catch(() => null)) as
     | OAuth2TokenResponse
@@ -173,22 +182,33 @@ const issueToken = async (credentials: TossCredentials): Promise<CachedToken> =>
 };
 
 const getAccessToken = async (credentials: TossCredentials): Promise<string> => {
-  const key = cacheKey(credentials.clientId);
+  const key = cacheKey(credentials);
   const cached = tokenCache.get(key);
   if (cached && cached.expiresAtMs > Date.now()) {
     return cached.accessToken;
   }
-  const fresh = await issueToken(credentials);
-  tokenCache.set(key, fresh);
-  return fresh.accessToken;
+  const pending = tokenRequests.get(key);
+  if (pending) {
+    return (await pending).accessToken;
+  }
+  const request = issueToken(credentials);
+  tokenRequests.set(key, request);
+  try {
+    const fresh = await request;
+    tokenCache.set(key, fresh);
+    return fresh.accessToken;
+  } finally {
+    tokenRequests.delete(key);
+  }
 };
 
 type RequestOptions = {
-  method?: "GET" | "POST";
+  method?: "GET" | "HEAD" | "POST";
   accountSeq?: number;
   query?: Record<string, string | number | boolean | undefined>;
   body?: unknown;
   retry429?: number;
+  retry401?: number;
 };
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -253,18 +273,30 @@ const request = async <T>(
   if (options.body !== undefined) {
     headers["Content-Type"] = "application/json";
   }
+  const method = options.method ?? "GET";
 
   const response = await fetch(url, {
-    method: options.method ?? "GET",
+    method,
     headers,
     body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
+    signal: requestTimeoutSignal(),
   });
 
   const text = await response.text();
   const json = parseJson(text);
 
   if (!response.ok) {
-    if (response.status === 429 && (options.retry429 ?? 2) > 0) {
+    const retryableMethod = method === "GET" || method === "HEAD";
+    if (response.status === 401) {
+      tokenCache.delete(cacheKey(credentials));
+      if (retryableMethod && (options.retry401 ?? 1) > 0) {
+        return request<T>(credentials, path, {
+          ...options,
+          retry401: (options.retry401 ?? 1) - 1,
+        });
+      }
+    }
+    if (response.status === 429 && retryableMethod && (options.retry429 ?? 2) > 0) {
       const waitMs = readRetryAfterMs(response.headers) ?? 1000;
       await sleep(Math.min(waitMs, 5000));
       return request<T>(credentials, path, {
@@ -440,4 +472,7 @@ export const createTossClient = (credentials: TossCredentials) => ({
 export type TossClient = ReturnType<typeof createTossClient>;
 
 /** 테스트/안전장치용: 토큰 캐시를 비웁니다. */
-export const clearTossTokenCache = () => tokenCache.clear();
+export const clearTossTokenCache = () => {
+  tokenCache.clear();
+  tokenRequests.clear();
+};

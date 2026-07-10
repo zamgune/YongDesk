@@ -1,13 +1,17 @@
 {
   "name": "stocks-app",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "private": true,
   "packageManager": "yarn@1.22.22",
+  "engines": {
+    "node": ">=22 <26"
+  },
   "scripts": {
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
     "lint": "eslint .",
+    "docs:check": "node --experimental-strip-types scripts/check_docs_links.mts",
     "backtest:crypto-buy": "node --experimental-strip-types scripts/crypto_buy_backtest.mts",
     "local-engine": "node --experimental-loader ./scripts/ts_path_loader.mjs --experimental-strip-types scripts/local_engine.mts",
     "mac:app": "node --experimental-strip-types scripts/build_macos_app.mts",
@@ -36,8 +40,13 @@
     "test:automation": "node --experimental-loader ./scripts/ts_path_loader.mjs --test --experimental-strip-types tests/automation_strategy.test.mts",
     "test:crypto-buy": "node --test --experimental-strip-types tests/crypto_buy_signal.test.mts",
     "test:crypto-exchanges": "node --test --experimental-strip-types tests/crypto_exchange_client.test.mts",
+    "test:horizon-plans": "node --test --experimental-strip-types tests/horizon_exit_plans.test.mts",
+    "test:market-candles": "node --experimental-loader ./scripts/ts_path_loader.mjs --test --experimental-strip-types tests/session_candle_aggregation.test.mts tests/toss_market_data_provider.test.mts tests/upbit_market_data_provider.test.mts",
+    "test:market-analysis-contract": "node --experimental-loader ./scripts/ts_path_loader.mjs --test --experimental-strip-types tests/market_analysis_contract.test.mts",
     "test:community-pain": "node --test --experimental-strip-types tests/community_pain_signal.test.mts",
     "test:local-engine": "node --experimental-loader ./scripts/ts_path_loader.mjs --test --experimental-strip-types tests/local_engine.test.mts",
+    "test:local-engine-news": "node --experimental-loader ./scripts/ts_path_loader.mjs --test --experimental-strip-types tests/local_engine_news.test.mts",
+    "test:market-workspace": "node --experimental-loader ./scripts/ts_path_loader.mjs --test --experimental-strip-types tests/market_workspace.test.mts",
     "test:mac-release": "node --experimental-strip-types --test tests/macos_release_check.test.mts",
     "test:market-briefing": "node --test --experimental-strip-types tests/market_briefing.test.mts",
     "test:order-preview": "node --experimental-loader ./scripts/ts_path_loader.mjs --test --experimental-strip-types tests/order_preview.test.mts",
@@ -50,6 +59,7 @@
     "test:toss": "node --test --experimental-strip-types tests/toss_client.test.mts tests/toss_openapi_contract.test.mts",
     "test:toss-readiness": "node --test --experimental-strip-types tests/toss_live_readiness.test.mts",
     "test:trading": "node --experimental-loader ./scripts/ts_path_loader.mjs --test --experimental-strip-types tests/trading_risk_policy.test.mts tests/sync_order_fills.test.mts",
+    "verify:desktop-readiness": "node --experimental-strip-types scripts/verify_desktop_readiness.mts",
     "toss:contract": "node --experimental-strip-types scripts/check_toss_openapi_contract.mts",
     "toss:readiness": "node --experimental-strip-types scripts/check_toss_live_readiness.mts"
   },

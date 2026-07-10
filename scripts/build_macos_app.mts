@@ -2,7 +2,20 @@ import { spawnSync } from "node:child_process";
 import { cp, mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { existsSync, realpathSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
+
+import {
+  assertMacNodeVersion,
+  assertMacNodeVersionOverride,
+  normalizeMacBuildNumber,
+  readMacPackageVersion,
+  readPinnedMacNodeVersion,
+} from "./macos_release_config.mts";
+
+export {
+  normalizeMacBuildNumber,
+  parseMacPackageVersion,
+} from "./macos_release_config.mts";
 
 type TargetArch = "arm64" | "x64";
 
@@ -31,8 +44,44 @@ const normalizeTargetArch = (value: string): TargetArch => {
 const targetArch = normalizeTargetArch(process.env.MACOS_TARGET_ARCH?.trim() || process.arch);
 const swiftArch = targetArch === "x64" ? "x86_64" : "arm64";
 const machOArch = swiftArch;
-const nodeVersion = process.env.MACOS_NODE_VERSION?.trim() || process.version;
+let nodeVersion = "";
 let sourceNodeForDependencyResolution = process.execPath;
+
+export const buildMacInfoPlist = ({
+  version,
+  buildNumber,
+}: {
+  version: string;
+  buildNumber: string;
+}) => `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleDevelopmentRegion</key>
+  <string>ko</string>
+  <key>CFBundleDisplayName</key>
+  <string>StockAnalysis</string>
+  <key>CFBundleExecutable</key>
+  <string>StockAnalysisMac</string>
+  <key>CFBundleIdentifier</key>
+  <string>com.stockanalysis.mac</string>
+  <key>CFBundleInfoDictionaryVersion</key>
+  <string>6.0</string>
+  <key>CFBundleName</key>
+  <string>StockAnalysis</string>
+  <key>CFBundlePackageType</key>
+  <string>APPL</string>
+  <key>CFBundleShortVersionString</key>
+  <string>${version}</string>
+  <key>CFBundleVersion</key>
+  <string>${buildNumber}</string>
+  <key>LSMinimumSystemVersion</key>
+  <string>14.0</string>
+  <key>NSHighResolutionCapable</key>
+  <true/>
+</dict>
+</plist>
+`;
 
 const run = (command: string, args: string[], options: { capture?: boolean } = {}) => {
   const result = spawnSync(command, args, {
@@ -70,40 +119,12 @@ const copyIfExists = async (from: string, to: string) => {
   }
 };
 
-const writeInfoPlist = async () => {
-  await writeFile(join(contentsRoot, "Info.plist"), `<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>CFBundleDevelopmentRegion</key>
-  <string>ko</string>
-  <key>CFBundleDisplayName</key>
-  <string>StockAnalysis</string>
-  <key>CFBundleExecutable</key>
-  <string>StockAnalysisMac</string>
-  <key>CFBundleIdentifier</key>
-  <string>com.stockanalysis.mac</string>
-  <key>CFBundleInfoDictionaryVersion</key>
-  <string>6.0</string>
-  <key>CFBundleName</key>
-  <string>StockAnalysis</string>
-  <key>CFBundlePackageType</key>
-  <string>APPL</string>
-  <key>CFBundleShortVersionString</key>
-  <string>0.1.0</string>
-  <key>CFBundleVersion</key>
-  <string>1</string>
-  <key>LSMinimumSystemVersion</key>
-  <string>14.0</string>
-  <key>NSHighResolutionCapable</key>
-  <true/>
-</dict>
-</plist>
-`, "utf8");
+const writeInfoPlist = async (version: string, buildNumber: string) => {
+  await writeFile(join(contentsRoot, "Info.plist"), buildMacInfoPlist({ version, buildNumber }), "utf8");
   await writeFile(join(contentsRoot, "PkgInfo"), "APPL????", "utf8");
 };
 
-const copySidecar = async () => {
+const copySidecar = async (version: string, buildNumber: string) => {
   await mkdir(sidecarRoot, { recursive: true });
   const sidecarEntries = [
     "package.json",
@@ -128,6 +149,8 @@ const copySidecar = async () => {
     platform: process.platform,
     arch: targetArch,
     buildHostArch: process.arch,
+    version,
+    buildNumber,
     mode: "portable-local-sidecar",
   }, null, 2)}\n`, "utf8");
 };
@@ -152,6 +175,9 @@ const writeReleaseStatusIfProvided = async () => {
 };
 
 const normalizedNodeVersion = () => nodeVersion.startsWith("v") ? nodeVersion : `v${nodeVersion}`;
+
+const assertNodeBinaryVersion = (path: string, label: string) =>
+  assertMacNodeVersion(run(path, ["-v"], { capture: true }), nodeVersion, label);
 
 const downloadedNodeRuntimeRoot = async () => {
   const version = normalizedNodeVersion();
@@ -184,7 +210,7 @@ const sourceNodeBinary = async () => {
     }
     return realpath(nodeBinary);
   }
-  if (targetArch === process.arch) {
+  if (targetArch === process.arch && normalizedNodeVersion() === `v${process.versions.node}`) {
     return realpath(process.execPath);
   }
   const runtimeRoot = await downloadedNodeRuntimeRoot();
@@ -204,6 +230,7 @@ const copyNode = async () => {
   await mkdir(nodeRoot, { recursive: true });
   await mkdir(nodeLibRoot, { recursive: true });
   const sourceNode = await sourceNodeBinary();
+  assertNodeBinaryVersion(sourceNode, "Source Node runtime");
   sourceNodeForDependencyResolution = sourceNode;
   const destinationNode = join(nodeRoot, "node");
   const copied = new Map<string, string>([[sourceNode, destinationNode]]);
@@ -304,6 +331,10 @@ const resolveDependency = (dependency: string, originPath: string) => {
 const sourceNodePath = () => sourceNodeForDependencyResolution;
 
 const main = async () => {
+  const version = await readMacPackageVersion(repoRoot);
+  nodeVersion = await readPinnedMacNodeVersion(repoRoot);
+  assertMacNodeVersionOverride(process.env.MACOS_NODE_VERSION, nodeVersion);
+  const buildNumber = normalizeMacBuildNumber(process.env.MACOS_BUILD_NUMBER);
   run("swift", ["build", "--configuration", "release", "--package-path", packagePath, "--arch", swiftArch]);
   const binPath = run("swift", [
     "build",
@@ -322,16 +353,19 @@ const main = async () => {
   await mkdir(resourcesRoot, { recursive: true });
   await copyRequired(executablePath, join(macOSRoot, "StockAnalysisMac"));
   assertMachOArch(join(macOSRoot, "StockAnalysisMac"), "StockAnalysisMac");
-  await writeInfoPlist();
+  await writeInfoPlist(version, buildNumber);
   await copyNode();
-  await copySidecar();
+  await copySidecar(version, buildNumber);
   await writeReleaseStatusIfProvided();
   run("chmod", ["755", join(macOSRoot, "StockAnalysisMac"), join(nodeRoot, "node")]);
   signAppBundle();
-  console.log(`Created ${appRoot} (${targetArch})`);
+  assertNodeBinaryVersion(join(nodeRoot, "node"), "Bundled Node runtime");
+  console.log(`Created ${appRoot} (${targetArch}, version ${version}, build ${buildNumber})`);
 };
 
-main().catch((error) => {
-  console.error(error instanceof Error ? error.message : String(error));
-  process.exitCode = 1;
-});
+if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
+  main().catch((error) => {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exitCode = 1;
+  });
+}

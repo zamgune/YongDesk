@@ -14,19 +14,19 @@
 
 ```ts
 type HoldingHorizon = "day" | "swing" | "long";
-type RiskPreset = "conservative" | "balanced" | "aggressive";
 type PlanStatus = "actionable" | "wait" | "unavailable";
-type ExitTrigger = "intrabar" | "daily-close" | "monthly-close";
+type ExitTrigger = "hourly-close" | "daily-close" | "monthly-close";
 
 type AnalysisBasis = {
   generatedAt: string;
   quoteAt: string;
-  horizon: HoldingHorizon;
+  symbol: string;
+  market: string;
+  dataSource: string;
   timeframeLabel: string;
   currency: "KRW" | "USD";
   entryPrice: number;
   atr14: number | null;
-  vwap: number | null;
   support: number | null;
   resistance: number | null;
   sma20: number | null;
@@ -35,15 +35,7 @@ type AnalysisBasis = {
   weeklySma20: number | null;
   weeklySma60: number | null;
   chandelierLong: number | null;
-  marketBreadth: number | null;
-  marketGatePassed: boolean | null;
-  reliability: {
-    grade: "high" | "medium" | "low" | "insufficient-data";
-    sampleSize: number;
-    successRate: number | null;
-    averageMaxGainPct: number | null;
-    averageMaxDrawdownPct: number | null;
-  };
+  reliabilityGrade: "high" | "medium" | "low" | "insufficient-data";
 };
 
 type HorizonExitPlan = {
@@ -79,8 +71,8 @@ type HorizonExitPlan = {
 ## 3. 공통 규칙
 
 - `R = entryPrice - stopPrice`이며 `R <= 0`이면 `unavailable`이다.
-- 가격선은 기술 데이터로 결정한다. 위험 성향은 가격선을 바꾸지 않는다.
-- 위험 예산은 보수형 0.5%, 균형형 1.0%, 공격형 1.5%다. 계좌 연결 후 `허용손실금액 / R`로 권장 수량을 계산한다.
+- 가격선은 기술 데이터로 결정하며 계좌 규모와 주문 수량으로 임의 조정하지 않는다.
+- 이 계산기는 가격 계획만 만든다. 계좌 위험 예산과 권장 수량 계산은 주문 서랍의 별도 RiskCheck가 담당한다.
 - 국내 주식은 표시와 주문 적용 직전에 `normalizeKrLimitPrice`를 사용한다. 손절은 `down`, 익절은 `up` 방향으로 정규화한다.
 - 필수 데이터가 없으면 고정 퍼센트로 대체하지 않고 `unavailable`과 누락 필드를 반환한다.
 - `주문에 적용` 시 최신 데이터로 계획을 재계산한다. 이전 스냅샷과 가격선이 달라지면 변경 전후를 확인받는다.
@@ -89,11 +81,15 @@ type HorizonExitPlan = {
 
 ### 단타 — 당일~3거래일
 
-필수 데이터는 최근 5거래일 1분봉을 집계한 15분봉, 세션 VWAP, HMA20 기울기, ATR14, 최근 20개 15분봉의 저점과 저항이다.
+진입과 손절 계산의 주 봉은 1시간봉이다. 필수 데이터는 1시간봉 HMA20/50, ADX14, Choppiness14, 거래량 비율, ATR14, 최근 20개 봉의 저점과 저항이다.
+
+- 코인은 4시간봉을 방향 필터로 사용한다.
+- 주식은 정규장이 6시간 30분이라 4시간봉이 `4시간 + 2시간 30분`으로 갈리는 문제를 피하기 위해 일봉을 위험 방향 필터로만 사용한다. 실제 진입·손절 판단은 1시간봉으로 한다.
+- 형성 중인 1시간봉은 확정 신호로 사용하지 않는다.
 
 ```text
-structureStop = recentLow20 - 0.1 * ATR15m
-distance = clamp(entry - structureStop, 0.8 * ATR15m, 1.5 * ATR15m)
+structureStop = recentLow20 - 0.2 * ATR1h
+distance = clamp(entry - structureStop, 0.8 * ATR1h, 1.8 * ATR1h)
 stop = entry - distance
 R = entry - stop
 takeProfit1 = resistance가 entry+0.8R~entry+1.5R이면 resistance, 아니면 entry+1R
@@ -101,12 +97,15 @@ takeProfit2 = entry + 2R
 ```
 
 - 1차·2차 익절 비중은 각각 50%다.
-- 시장 게이트 실패, 현재가가 VWAP 아래, HMA20 하락 또는 가까운 저항까지 0.8R 미만이면 `wait`다.
-- 8개 15분봉 안에 +0.5R 진행이 없고 VWAP 아래라면 시간 기반 재검토를 표시한다.
+- 상위 방향 필터 실패, HMA 추세 실패, ADX·Choppiness 품질 실패, 거래량 확인 실패 또는 가까운 저항까지 0.8R 미만이면 `wait`다.
+- 손절은 1시간봉 종가 기준이다. 분석 화면에서 바로 broker stop으로 변환하지 않는다.
 
 ### 스윙 — 2~8주
 
-필수 데이터는 일봉 ATR14, 4시간봉 타이밍, `tradeSetup.failureLevel`, 저항선, SMA20, 22봉 Chandelier 3ATR과 신호 신뢰도다.
+필수 데이터는 일봉 ATR14, `tradeSetup.failureLevel`, 저항선, SMA20, 22봉 Chandelier 3ATR과 신호 신뢰도다.
+
+- 코인은 `일봉 방향 → 4시간봉 진입 → 1시간봉 재확인`을 사용한다.
+- 주식은 `일봉 방향 → 1시간봉 진입`을 사용한다. 세션 길이가 다른 4시간봉을 코인과 동일한 신호로 취급하지 않는다.
 
 ```text
 distance = clamp(entry - failureLevel, 1.5 * ATR1d, 2.5 * ATR1d)
@@ -118,12 +117,12 @@ trailingExit = max(SMA20, ChandelierLong)
 ```
 
 - 1차 30%, 2차 30%, 추적 보유 40%다.
-- 시장 게이트 실패, 신뢰도 `low`, 또는 무효선이 진입가 이상이면 `wait`다.
+- 종목 일봉 위험 게이트 실패, 진입 봉 추세 실패, 코인의 1시간 재확인 실패, 신뢰도 `low`, 또는 무효선이 진입가 이상이면 `wait`다.
 - 손절과 추적선은 일봉 종가 기준으로 평가한다.
 
 ### 장기 — 6개월 이상
 
-필수 데이터는 SMA200, 10개월 이동평균, 주봉 SMA20/60과 장기 시장 게이트다.
+필수 데이터는 SMA200, 완료된 월만 사용하는 10개월 이동평균, 주봉 SMA20/60과 장기 종목 일봉 위험 게이트다.
 
 ```text
 stop = max(SMA200, tenMonthAverage)
@@ -134,20 +133,22 @@ trailingExit = weeklySMA20
 ```
 
 - 2R에서 20%, 4R에서 20%만 부분 익절하고 잔여 60%는 추세를 추적한다.
-- 주봉 SMA20이 SMA60 이하이거나 장기 시장 게이트가 실패하면 `wait`다.
+- 주봉 SMA20이 SMA60 이하이거나 장기 종목 일봉 위험 게이트가 실패하면 `wait`다.
 - 무효선은 월말 종가 기준이며 `isBrokerStopEligible=false`다.
 
-## 5. 현재 데이터와 추가 필요 데이터
+## 5. 데이터 공급자와 현재 구현
 
-- 단타: 현재 일반 시장 데이터 공급자는 `1h | 1d | 1wk`만 지원한다. 실제 적용 전 Toss 1분봉 수집, 15분 집계와 세션 VWAP 경계가 필요하다.
-- 스윙: 기존 `tradeSetup`, `signalReliability`, `indicators.atrStops`, `indicators.chandelier`를 재사용한다. 원시 ATR14와 선택한 구조선도 응답에 명시한다.
-- 장기: 분석 내부의 EMA200·주봉 추세 계산을 공개 계약으로 올리고 SMA200 또는 10개월 이동평균을 추가한다.
-- 응답에는 각 값의 기준 시각, 봉 주기와 데이터 부족 사유를 포함한다.
+- Toss: 공식 1분봉을 정규장 마감에 정렬한 1시간봉으로 집계하고 일봉·주봉을 함께 사용한다. 장 초반 30분 부분 봉은 snapshot에만 남기고 지표에서는 제외하며, 현재 market week 주봉은 다음 주가 시작되기 전까지 형성 중으로 둔다. 캐시, 동일 요청 single-flight, 페이지 중복 제거와 비진전 cursor 차단을 적용한다.
+- Upbit: 현재는 `KRW-*` 시장만 허용하고 공개 REST의 60분·240분·일봉·주봉을 직접 사용한다. 시세 분석은 Upbit API 키가 없어도 가능하며 계좌 조회와 분리한다. 최근 캔들 간 무거래 공백이 있으면 시간 압축 왜곡을 경고하고 신규 진입을 대기한다.
+- Yahoo: Toss credential이 없는 첫 사용자와 예제 분석을 위한 주식 fallback이다. 화면에는 실제 `dataSource`를 명시한다.
+- 모든 응답은 `market`, `currency`, `dataSource`, `timeframe`, `quoteAt`, `generatedAt`과 데이터 부족 사유를 포함한다.
+- 형성 중인 봉과 주식의 부분 세션 봉은 지표 계산에서 제외한다. 부분 봉은 경고에 명시하며 4시간봉을 핵심 주식 신호로 쓰지 않는다.
+- 실시간 WebSocket 캔들은 이번 릴리스의 필수 조건이 아니다. 닫힌 봉 분석은 REST/polling으로 동작하고, 실시간 형성봉 갱신은 후속 기능이다.
 
 ## 6. 주문 적용 안전 규칙
 
 - 적용 버튼은 `actionable` 상태에서만 활성화한다.
-- 주문 서랍에는 진입가, 1·2차 익절가, 손절·무효선, 발동 기준, 분석 스냅샷과 위험 성향을 복사한다.
+- 주문 서랍에는 진입가, 1·2차 익절가, 손절·무효선, 발동 기준과 분석 스냅샷을 복사한다. 수량은 별도 RiskCheck를 통과해야 한다.
 - 복사는 `OrderIntent`를 생성하거나 broker 요청을 보내지 않는다.
 - 일반 stop 주문은 발동 시 시장가로 바뀌어 급변·갭 상황에서 표시가와 다르게 체결될 수 있음을 표시한다.
 - 장기 무효선은 알림 조건으로만 복사하고 stop 주문 필드에는 자동 제출 가능한 값으로 취급하지 않는다.

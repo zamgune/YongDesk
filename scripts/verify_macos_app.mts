@@ -1,15 +1,21 @@
 import { spawn, spawnSync } from "node:child_process";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import {
   TOSS_OPENAPI_BASE_URL,
   TOSS_OPENAPI_SPEC_VERSION,
 } from "../src/lib/toss/contract.ts";
+import {
+  assertMacNodeVersion,
+  parseMacPackageVersion,
+  readMacPackageVersion,
+  readPinnedMacNodeVersion,
+} from "./macos_release_config.mts";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const appRoot = resolve(process.argv[2] ?? join(repoRoot, "dist", "macos", "StockAnalysis.app"));
@@ -18,6 +24,32 @@ const resourcesRoot = join(contentsRoot, "Resources");
 const nodeBinary = join(resourcesRoot, "node", "bin", "node");
 const sidecarRoot = join(resourcesRoot, "sidecar");
 const sidecarLoaderImport = "data:text/javascript,import { register } from \"node:module\"; import { pathToFileURL } from \"node:url\"; register(\"./scripts/ts_path_loader.mjs\", pathToFileURL(\"./\"));";
+
+export type MacAppVersionConsistency = {
+  rootPackageVersion: string;
+  infoPlistVersion: string;
+  bundledPackageVersion: string;
+  verified: true;
+};
+
+export const assertMacAppVersionConsistency = ({
+  rootPackageVersion,
+  infoPlistVersion,
+  bundledPackageVersion,
+}: Omit<MacAppVersionConsistency, "verified">): MacAppVersionConsistency => {
+  const versions = new Set([rootPackageVersion, infoPlistVersion, bundledPackageVersion]);
+  if (versions.size !== 1) {
+    throw new Error(
+      `App version mismatch: root package=${rootPackageVersion}, Info.plist=${infoPlistVersion}, bundled package=${bundledPackageVersion}`,
+    );
+  }
+  return {
+    rootPackageVersion,
+    infoPlistVersion,
+    bundledPackageVersion,
+    verified: true,
+  };
+};
 
 const run = (command: string, args: string[], options: { cwd?: string; capture?: boolean } = {}) => {
   const result = spawnSync(command, args, {
@@ -332,10 +364,11 @@ const verifyStrategyBackupImport = async (baseUrl: string) => {
     const exportedConfigs = jsonArrayField(exportState, "configs") as JsonObject[];
     const exportedConfig = exportedConfigs.find((config) => config.sourceId === strategyId);
     if (
-      exportState.schemaVersion !== 1 ||
+      exportState.schemaVersion !== 2 ||
       exportSafety.credentialsIncluded !== false ||
       exportSafety.accountPreferenceIncluded !== false ||
       exportSafety.importedStatus !== "draft" ||
+      exportSafety.importedSimulation !== "discarded" ||
       !exportedConfig ||
       "status" in exportedConfig ||
       "lastSimulation" in exportedConfig
@@ -555,7 +588,7 @@ const waitForHealth = async (port: number) => {
   throw new Error(`Sidecar health check timed out: ${lastError instanceof Error ? lastError.message : String(lastError)}`);
 };
 
-const verifySidecar = async () => {
+const verifySidecar = async (expectedVersion: string) => {
   const storageRoot = await mkdtemp(join(tmpdir(), "stockanalysis-macos-verify-"));
   const port = await reservePort();
   const sidecarProcess = spawn(nodeBinary, [
@@ -587,7 +620,10 @@ const verifySidecar = async () => {
 
   let endpointChecks: SidecarEndpointChecks | null = null;
   try {
-    await waitForHealth(port);
+    const health = await waitForHealth(port);
+    if (health.version !== expectedVersion) {
+      throw new Error(`Sidecar health version mismatch: expected ${expectedVersion}, got ${String(health.version)}`);
+    }
     const baseUrl = `http://127.0.0.1:${port}`;
     const tossContractState = await fetchJson(`${baseUrl}/api/local/toss/openapi-contract`);
     const tossReadinessState = await fetchJson(`${baseUrl}/api/local/toss/readiness?symbol=NVDA`);
@@ -671,7 +707,8 @@ const verifySidecar = async () => {
     const cryptoExchanges = Array.isArray(cryptoExchangeState.exchanges) ? cryptoExchangeState.exchanges : [];
     if (
       cryptoExchanges.length !== 2 ||
-      cryptoReadinessState.status !== 412 ||
+      cryptoReadinessState.status !== 200 ||
+      cryptoReadinessState.payload.ready !== false ||
       cryptoReadinessState.payload.orderSubmissionAttempted !== false ||
       cryptoPrecheckState.status !== 412 ||
       cryptoPrecheckState.payload.orderSubmissionAttempted !== false
@@ -704,11 +741,12 @@ const verifySidecar = async () => {
       throw new Error("Account preference endpoint did not fail closed without Toss credentials");
     }
     if (
-      liveTradingState.status !== 412 ||
+      liveTradingState.status !== 501 ||
+      liveTradingState.payload.orderSubmissionAttempted !== false ||
       typeof liveTradingState.payload.error !== "string" ||
-      !liveTradingState.payload.error.includes("Toss API")
+      !liveTradingState.payload.error.includes("1.0.0")
     ) {
-      throw new Error("Live trading toggle endpoint did not fail closed without Toss credentials");
+      throw new Error("Live trading toggle endpoint did not preserve the desktop 1.0.0 paper-only boundary");
     }
     if (
       precheckState.status !== 412 ||
@@ -766,11 +804,14 @@ const verifySidecar = async () => {
 };
 
 const main = async () => {
+  const infoPlistPath = join(contentsRoot, "Info.plist");
+  const bundledPackagePath = join(sidecarRoot, "package.json");
   const requiredPaths = [
     appRoot,
-    join(contentsRoot, "Info.plist"),
+    infoPlistPath,
     join(contentsRoot, "MacOS", "StockAnalysisMac"),
     nodeBinary,
+    bundledPackagePath,
     join(sidecarRoot, "scripts", "local_engine.mts"),
     join(sidecarRoot, "src"),
   ];
@@ -780,22 +821,45 @@ const main = async () => {
     }
   }
 
-  run("plutil", ["-lint", join(contentsRoot, "Info.plist")]);
+  run("plutil", ["-lint", infoPlistPath]);
+  const versionChecks = assertMacAppVersionConsistency({
+    rootPackageVersion: await readMacPackageVersion(repoRoot),
+    infoPlistVersion: run("plutil", ["-extract", "CFBundleShortVersionString", "raw", "-o", "-", infoPlistPath], { capture: true }),
+    bundledPackageVersion: parseMacPackageVersion(
+      await readFile(bundledPackagePath, "utf8"),
+      "bundled package.json",
+    ),
+  });
+  const buildNumber = run("plutil", ["-extract", "CFBundleVersion", "raw", "-o", "-", infoPlistPath], { capture: true });
+  if (!/^[1-9]\d*$/.test(buildNumber)) {
+    throw new Error(`Info.plist CFBundleVersion must be a positive integer, got: ${buildNumber || "(empty)"}`);
+  }
   run("codesign", ["--verify", "--deep", "--strict", "--verbose=2", appRoot]);
-  const nodeVersion = run(nodeBinary, ["-v"], { capture: true });
-  const sidecarVerification = await verifySidecar();
+  const pinnedNodeVersion = await readPinnedMacNodeVersion(repoRoot);
+  const nodeVersion = assertMacNodeVersion(
+    run(nodeBinary, ["-v"], { capture: true }),
+    pinnedNodeVersion,
+    "Bundled Node runtime",
+  );
+  const sidecarVerification = await verifySidecar(versionChecks.rootPackageVersion);
 
   console.log(JSON.stringify({
     ok: true,
     appRoot,
+    version: versionChecks.rootPackageVersion,
+    buildNumber,
+    versionChecks,
     nodeVersion,
+    pinnedNodeVersion,
     sidecar: "verified",
     sidecarEndpointChecks: sidecarVerification.endpointChecks,
     sidecarOutputLines: sidecarVerification.output.trim().split("\n").filter(Boolean).slice(0, 16),
   }, null, 2));
 };
 
-main().catch((error) => {
-  console.error(error instanceof Error ? error.message : String(error));
-  process.exitCode = 1;
-});
+if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
+  main().catch((error) => {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exitCode = 1;
+  });
+}

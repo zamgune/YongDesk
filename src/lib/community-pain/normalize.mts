@@ -64,6 +64,12 @@ export const normalizeCommunitySymbol = (rawSymbol: string, market = "US") => {
   if (market === "KOSPI" || market === "KOSDAQ") {
     return cleaned.replace(/\.(KS|KQ)$/i, "").replace(/[^0-9]/g, "").slice(0, 6);
   }
+  if (market === "CRYPTO") {
+    return cleaned
+      .replace(/^KRW-/i, "")
+      .replace(/-USD$/i, "")
+      .replace(/USDT?$/i, "");
+  }
   return cleaned.replace(/\.(KS|KQ)$/i, "").replace(/-USD$/i, "");
 };
 

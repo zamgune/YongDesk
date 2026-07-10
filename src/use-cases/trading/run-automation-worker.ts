@@ -12,7 +12,7 @@ import {
 import { evaluateLoopGrid } from "./evaluate-loop-grid.ts";
 import { evaluatePercentGrid } from "./evaluate-percent-grid.ts";
 import type { OrderPrecheck } from "./precheck-order.ts";
-import { closeGridLot, getGridLots, openGridLot } from "@/lib/automation/grid-state";
+import { clearGridLots, closeGridLot, getGridLots, openGridLot } from "@/lib/automation/grid-state";
 import { getLoopGridState, recordLoopGridBuy, recordLoopGridSell } from "@/lib/automation/loop-state";
 import {
   getWorkerState,
@@ -49,6 +49,11 @@ export type AutomationWorkerTickResult = {
   triggers: number;
   orders: WorkerOrderOutcome[];
   logs: WorkerLog[];
+  strategyTransition?: {
+    status: "disabled";
+    reason: "stop-loss";
+    completed: boolean;
+  };
 };
 
 export type RunAutomationWorkerTickInput = {
@@ -75,6 +80,31 @@ export type RunAutomationWorkerTickInput = {
 
 const marketCurrency = (market: "US" | "KR" | "CRYPTO") => (market === "US" ? "USD" : "KRW");
 
+const activeStopLossPct = (config: AutomationStrategyConfig) =>
+  config.exitRules.rescueMode === "cancel-and-liquidate" &&
+  Number.isFinite(config.exitRules.stopLossPct) &&
+  config.exitRules.stopLossPct > 0
+    ? config.exitRules.stopLossPct
+    : null;
+
+const stopLossLevel = (entryPrice: number, stopLossPct: number) =>
+  entryPrice * (1 - stopLossPct / 100);
+
+// 워커 state 스키마를 늘리지 않고도 파일/Supabase 양쪽에서 손절 재시도를
+// 보존하기 위한 멱등 키입니다. 손절 주문 제출이 실패하거나 실거래 게이트에
+// 막힌 뒤에는 이 키가 남아 있는 동안 신규 진입/익절을 만들지 않습니다.
+const stopLossPendingKey = (strategyId: string) => `${strategyId}:stop-loss-pending`;
+
+const markStopLossPending = (state: StrategyWorkerState, strategyId: string) => ({
+  ...state,
+  executedStepKeys: [...new Set([...state.executedStepKeys, stopLossPendingKey(strategyId)])],
+});
+
+const clearStopLossPending = (state: StrategyWorkerState, strategyId: string) => ({
+  ...state,
+  executedStepKeys: state.executedStepKeys.filter((key) => key !== stopLossPendingKey(strategyId)),
+});
+
 /** 토스 clientOrderId 제약(≤36, [A-Za-z0-9-_])에 맞춘 결정적 멱등 키 */
 const toClientOrderId = (stepKey: string, today: string): string =>
   createHash("sha256").update(`${stepKey}:${today}`).digest("hex").slice(0, 32);
@@ -95,6 +125,7 @@ export const runAutomationWorkerTick = async ({
 }: RunAutomationWorkerTickInput): Promise<AutomationWorkerTickResult> => {
   const logs: WorkerLog[] = [];
   const orders: WorkerOrderOutcome[] = [];
+  let strategyTransition: AutomationWorkerTickResult["strategyTransition"];
 
   let state = await getWorkerState(userId, config.id, today);
 
@@ -141,6 +172,7 @@ export const runAutomationWorkerTick = async ({
     dailyBuys: state.buys,
     dailySells: state.sells,
     entryPrice,
+    stopLossPending: state.executedStepKeys.includes(stopLossPendingKey(config.id)),
   });
 
   for (const blocker of evaluation.blockers) {
@@ -225,15 +257,36 @@ export const runAutomationWorkerTick = async ({
           message: outcome.message,
         });
         if (outcome.status === "submitted") {
-          state = recordExecutedStep(state, exitStepKey, "sell");
+          state = clearStopLossPending(
+            recordExecutedStep(state, exitStepKey, "sell"),
+            config.id,
+          );
+        } else if (evaluation.exitSignal.kind === "stop-loss") {
+          state = markStopLossPending(state, config.id);
+        }
+        if (evaluation.exitSignal.kind === "stop-loss") {
+          strategyTransition = {
+            status: "disabled",
+            reason: "stop-loss",
+            completed: outcome.status === "submitted",
+          };
         }
       } else {
         logs.push({
           level: "info",
           message: `청산 신호(${evaluation.exitSignal.kind}) 발생했으나 매도 가능 보유 수량이 0입니다.`,
         });
+        if (evaluation.exitSignal.kind === "stop-loss") {
+          state = markStopLossPending(state, config.id);
+          strategyTransition = { status: "disabled", reason: "stop-loss", completed: false };
+        }
       }
     }
+  } else if (evaluation.exitSignal?.kind === "stop-loss") {
+    // holdings resolver가 없는 호출(예: 신호 전용 tick)에서도 손절 이후
+    // 가격 회복 시 신규 진입이 재개되지 않도록 pending을 영속화합니다.
+    state = markStopLossPending(state, config.id);
+    strategyTransition = { status: "disabled", reason: "stop-loss", completed: false };
   }
 
   await saveWorkerState(state);
@@ -247,6 +300,7 @@ export const runAutomationWorkerTick = async ({
     triggers: evaluation.triggers.length,
     orders,
     logs,
+    strategyTransition,
   };
 };
 
@@ -514,6 +568,72 @@ const runGridTick = async ({
   const currency = config.market === "US" ? "USD" : "KRW";
 
   const openLots = await getGridLots(userId, config.id);
+  const stopLossPct = activeStopLossPct(config);
+  const heldQuantity = openLots.reduce((sum, lot) => sum + lot.quantity, 0);
+  const weightedEntryPrice = heldQuantity > 0
+    ? openLots.reduce((sum, lot) => sum + lot.entryPrice * lot.quantity, 0) / heldQuantity
+    : 0;
+  const stopLevel = stopLossPct === null ? 0 : stopLossLevel(weightedEntryPrice, stopLossPct);
+  const stopPending = state.executedStepKeys.includes(stopLossPendingKey(config.id));
+  if (stopLossPct !== null && heldQuantity > 0 && (stopPending || marketPrice <= stopLevel)) {
+    const stepId = "grid-stop-loss";
+    const reason = `분할 전략 손절 발동 (평단 ${Math.round(weightedEntryPrice)} -${stopLossPct}% = ${Math.round(stopLevel)}, 현재가 ${Math.round(marketPrice)})`;
+    if (precheck) {
+      const check = await precheck({ side: "sell", symbol, quantity: heldQuantity, price: marketPrice, currency });
+      if (!check.ok) {
+        const outcome: WorkerOrderOutcome = {
+          stepId,
+          side: "sell",
+          limitPrice: null,
+          quantity: heldQuantity,
+          clientOrderId: "",
+          status: "rejected",
+          message: `손절 사전검증 거부: ${check.reason ?? "사유 미상"}`,
+        };
+        await saveWorkerState(markStopLossPending(state, config.id));
+        return {
+          strategyId: config.id,
+          symbol,
+          marketPrice,
+          liveTradingEnabled,
+          evaluatedAt: now,
+          triggers: 1,
+          orders: [outcome],
+          logs: [{ level: "warning", stepId, message: outcome.message }],
+          strategyTransition: { status: "disabled", reason: "stop-loss", completed: false },
+        };
+      }
+    }
+    const outcome = await submitExitOrder({
+      symbol,
+      quantity: heldQuantity,
+      exitStepKey: `${config.id}:${stepId}`,
+      reason,
+      broker,
+      accountSeq,
+      today: state.date,
+    });
+    if (outcome.status === "submitted") {
+      await clearGridLots(userId, config.id);
+      await saveWorkerState({
+        ...clearStopLossPending(state, config.id),
+        sells: state.sells + 1,
+      });
+    } else {
+      await saveWorkerState(markStopLossPending(state, config.id));
+    }
+    return {
+      strategyId: config.id,
+      symbol,
+      marketPrice,
+      liveTradingEnabled,
+      evaluatedAt: now,
+      triggers: 1,
+      orders: [outcome],
+      logs: [{ level: outcome.status === "submitted" ? "warning" : "error", stepId, message: outcome.message }],
+      strategyTransition: { status: "disabled", reason: "stop-loss", completed: outcome.status === "submitted" },
+    };
+  }
   const evaluation = evaluatePercentGrid({
     plan,
     marketPrice,
@@ -523,6 +643,7 @@ const runGridTick = async ({
     maxDailyBuys: config.riskLimits.maxDailyBuys,
     maxDailySells: config.riskLimits.maxDailySells,
     maxLossPct: config.riskLimits.maxLossPct,
+    orderSizing: config.orderSizing,
     fractionalQuantity: config.market === "CRYPTO",
   });
 
@@ -618,6 +739,76 @@ const runLoopGridTick = async ({
   const currency = config.market === "US" ? "USD" : "KRW";
 
   const loopState = await getLoopGridState(userId, config.id, plan);
+  const stopLossPct = activeStopLossPct(config);
+  const loopStopLevel = stopLossPct === null || !loopState.entryPrice
+    ? 0
+    : stopLossLevel(loopState.entryPrice, stopLossPct);
+  const stopPending = state.executedStepKeys.includes(stopLossPendingKey(config.id));
+  if (
+    stopLossPct !== null &&
+    loopState.positionState === "holding" &&
+    loopState.entryPrice &&
+    loopState.quantity > 0 &&
+    (stopPending || marketPrice <= loopStopLevel)
+  ) {
+    const stepId = "loop-stop-loss";
+    const reason = `반복 전략 손절 발동 (진입가 ${Math.round(loopState.entryPrice)} -${stopLossPct}% = ${Math.round(loopStopLevel)}, 현재가 ${Math.round(marketPrice)})`;
+    if (precheck) {
+      const check = await precheck({ side: "sell", symbol, quantity: loopState.quantity, price: marketPrice, currency });
+      if (!check.ok) {
+        const outcome: WorkerOrderOutcome = {
+          stepId,
+          side: "sell",
+          limitPrice: null,
+          quantity: loopState.quantity,
+          clientOrderId: "",
+          status: "rejected",
+          message: `손절 사전검증 거부: ${check.reason ?? "사유 미상"}`,
+        };
+        await saveWorkerState(markStopLossPending(state, config.id));
+        return {
+          strategyId: config.id,
+          symbol,
+          marketPrice,
+          liveTradingEnabled,
+          evaluatedAt: now,
+          triggers: 1,
+          orders: [outcome],
+          logs: [{ level: "warning", stepId, message: outcome.message }],
+          strategyTransition: { status: "disabled", reason: "stop-loss", completed: false },
+        };
+      }
+    }
+    const outcome = await submitExitOrder({
+      symbol,
+      quantity: loopState.quantity,
+      exitStepKey: `${config.id}:${stepId}`,
+      reason,
+      broker,
+      accountSeq,
+      today: state.date,
+    });
+    if (outcome.status === "submitted") {
+      await recordLoopGridSell(userId, config.id, { sellPrice: marketPrice, executedAt: now });
+      await saveWorkerState({
+        ...clearStopLossPending(state, config.id),
+        sells: state.sells + 1,
+      });
+    } else {
+      await saveWorkerState(markStopLossPending(state, config.id));
+    }
+    return {
+      strategyId: config.id,
+      symbol,
+      marketPrice,
+      liveTradingEnabled,
+      evaluatedAt: now,
+      triggers: 1,
+      orders: [outcome],
+      logs: [{ level: outcome.status === "submitted" ? "warning" : "error", stepId, message: outcome.message }],
+      strategyTransition: { status: "disabled", reason: "stop-loss", completed: outcome.status === "submitted" },
+    };
+  }
   const evaluation = evaluateLoopGrid({
     plan,
     marketPrice,
@@ -628,6 +819,7 @@ const runLoopGridTick = async ({
     maxDailySells: config.riskLimits.maxDailySells,
     maxPositionValue: config.riskLimits.maxPositionValue,
     maxLossPct: config.riskLimits.maxLossPct,
+    orderSizing: config.orderSizing,
     now,
     fractionalQuantity: config.market === "CRYPTO",
   });

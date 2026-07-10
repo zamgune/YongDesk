@@ -9,10 +9,16 @@ import {
   collectMacSigningReadinessReport,
   type MacSigningReadinessReport,
 } from "./check_macos_signing.mts";
+import {
+  assertMacNodeVersion,
+  readMacPackageVersion,
+  readPinnedMacNodeVersion,
+} from "./macos_release_config.mts";
 
 export type MacReleaseManifest = {
   app?: string;
   version?: string;
+  buildNumber?: string;
   platform?: string;
   arch?: string;
   builtAt?: string;
@@ -50,6 +56,8 @@ export type MacReleaseIndexEntry = {
   readyForExternalDistribution?: boolean | null;
   status?: string | null;
   sidecarVerified?: boolean | null;
+  buildNumber?: string | null;
+  bundledNodeVersion?: string | null;
   minimumMacOS?: string | null;
   supportedArchitectures?: string[];
   files?: MacReleaseIndexArtifact[];
@@ -58,6 +66,8 @@ export type MacReleaseIndexEntry = {
 export type MacReleaseIndex = {
   app?: string;
   version?: string;
+  buildNumber?: string;
+  bundledNodeVersion?: string;
   platform?: string;
   generatedAt?: string;
   releaseRoot?: string;
@@ -92,6 +102,7 @@ export type MacReleaseCheckReport = {
   label: string;
   app: string;
   version: string;
+  buildNumber: string;
   arch: string;
   builtAt: string;
   signingIdentity: string;
@@ -126,6 +137,8 @@ export type MacReleaseSetCheckReport = {
   label: string;
   app: string;
   version: string;
+  buildNumber: string;
+  bundledNodeVersion: string | null;
   generatedAt: string;
   releaseRoot: string;
   installGuide: string | null;
@@ -163,6 +176,11 @@ export type MacReleaseSigningReadinessSummary = {
   issues: string[];
   warnings: string[];
   nextSteps: string[];
+};
+
+export type MacReleaseExpectations = {
+  version: string;
+  nodeVersion: string;
 };
 
 export const summarizeMacSigningReadiness = (
@@ -356,6 +374,7 @@ const architectureWarning = (arch: string) => {
 export const assessMacRelease = (
   manifest: MacReleaseManifest,
   files: MacReleaseFileCheck[],
+  expectations?: MacReleaseExpectations,
 ): MacReleaseCheckReport => {
   const signingIdentity = manifest.signingIdentity?.trim() || "ad-hoc";
   const developerIdSigned = signingIdentity.startsWith("Developer ID Application:");
@@ -389,6 +408,23 @@ export const assessMacRelease = (
   const issues: string[] = [];
   const warnings: string[] = [];
   const nextSteps: string[] = [];
+
+  if (expectations && manifest.version !== expectations.version) {
+    issues.push(`릴리즈 버전이 현재 package.json과 다릅니다: expected ${expectations.version}, got ${manifest.version ?? "missing"}`);
+    nextSteps.push("현재 package.json 기준으로 macOS 릴리즈를 다시 생성하세요.");
+  }
+  if (expectations) {
+    try {
+      assertMacNodeVersion(
+        compatibility.bundledNodeVersion ?? "",
+        expectations.nodeVersion,
+        "Manifest bundled Node version",
+      );
+    } catch (error) {
+      issues.push(error instanceof Error ? error.message : String(error));
+      nextSteps.push(".node-version 기준으로 macOS 릴리즈를 다시 생성하세요.");
+    }
+  }
 
   if (!hasDmg) {
     issues.push("DMG 설치 파일이 없습니다.");
@@ -458,6 +494,7 @@ export const assessMacRelease = (
     label: status === "external-ready" ? "외부 배포 준비" : status === "local-test" ? "로컬 테스트 빌드" : "배포물 불완전",
     app: manifest.app ?? "StockAnalysis",
     version: manifest.version ?? "0.0.0",
+    buildNumber: manifest.buildNumber ?? "-",
     arch: manifest.arch ?? "unknown",
     builtAt: manifest.builtAt ?? "-",
     signingIdentity,
@@ -479,7 +516,7 @@ export const assessMacRelease = (
       "앱 배포 시트의 설치 후 점검을 실행해 sidecar, App Support 저장소, 뉴스/RSS, 전략 저장소 상태를 확인하세요.",
       "새 Mac에서는 Toss API 키를 앱 설정에서 다시 검증해 sidecar 저장소와 macOS Keychain에 저장하고 자동거래 계좌를 선택해야 합니다.",
       "Toss 개발자 콘솔의 허용 IP와 앱의 연결 진단 공인 IP가 일치해야 합니다.",
-      "실거래는 앱의 로컬 운영자 게이트(ENABLE_LIVE_TRADING), 사용자 live 권한, credential, 선택 계좌, OrderIntent, RiskCheck, kill switch를 모두 통과해야 합니다.",
+      "1.0.0은 credential 상태와 관계없이 실제 주문을 차단하고 OrderIntent·RiskCheck 결과를 paper 계좌에만 기록합니다.",
     ],
     files,
   };
@@ -495,12 +532,13 @@ const defaultReleaseSetChecklist = [
   "Applications로 앱을 옮긴 뒤 배포 > 설치 후 점검을 실행합니다.",
   "Toss API 키는 Mac마다 다시 검증해 sidecar 저장소와 macOS Keychain에 저장하고 자동거래 계좌를 다시 선택합니다.",
   "Toss 허용 IP와 앱 연결 진단 공인 IP가 일치해야 합니다.",
-  "실거래는 OrderIntent, RiskCheck, credential, live gate, kill switch를 모두 통과해야 합니다.",
+  "1.0.0은 Toss·Upbit·Bithumb 실제 주문을 차단하며 OrderIntent·RiskCheck 결과는 paper 전용입니다.",
 ];
 
 export const assessMacReleaseSet = (
   index: MacReleaseIndex,
   files: MacReleaseIndexFileCheck[],
+  expectations?: MacReleaseExpectations,
 ): MacReleaseSetCheckReport => {
   const entries = index.entries ?? [];
   const entryByArch = new Map(entries.map((entry) => [entry.arch ?? "unknown", entry]));
@@ -515,6 +553,36 @@ export const assessMacReleaseSet = (
   const issues: string[] = [];
   const warnings: string[] = [];
   const nextSteps: string[] = [];
+
+  if (expectations && index.version !== expectations.version) {
+    issues.push(`릴리즈 인덱스 버전이 현재 package.json과 다릅니다: expected ${expectations.version}, got ${index.version ?? "missing"}`);
+    nextSteps.push("현재 package.json 기준으로 macOS 릴리즈 세트를 다시 생성하세요.");
+  }
+  if (expectations) {
+    const declaredNodeVersions = [
+      { label: "Release index bundled Node version", version: index.bundledNodeVersion },
+      ...requiredEntries.map((entry) => ({
+        label: `${entry.arch ?? "unknown"} release entry bundled Node version`,
+        version: entry.bundledNodeVersion ?? undefined,
+      })),
+    ];
+    let nodeVersionMismatch = false;
+    for (const declared of declaredNodeVersions) {
+      try {
+        assertMacNodeVersion(
+          declared.version ?? "",
+          expectations.nodeVersion,
+          declared.label,
+        );
+      } catch (error) {
+        nodeVersionMismatch = true;
+        issues.push(error instanceof Error ? error.message : String(error));
+      }
+    }
+    if (nodeVersionMismatch) {
+      nextSteps.push(".node-version 기준으로 arm64/x64 릴리즈 세트를 다시 생성하세요.");
+    }
+  }
 
   if (entries.length === 0) {
     issues.push("릴리즈 인덱스에 배포 항목이 없습니다.");
@@ -617,6 +685,8 @@ export const assessMacReleaseSet = (
     label: status === "external-ready" ? "외부 배포 준비" : status === "local-test" ? "로컬 테스트 빌드" : "배포물 불완전",
     app: index.app ?? "StockAnalysis",
     version: index.version ?? "0.0.0",
+    buildNumber: index.buildNumber ?? "-",
+    bundledNodeVersion: index.bundledNodeVersion ?? null,
     generatedAt: index.generatedAt ?? "-",
     releaseRoot: index.releaseRoot ?? defaultReleaseRoot,
     installGuide: index.installGuide ?? null,
@@ -650,6 +720,10 @@ const main = async () => {
   const requireExternal = args.includes("--require-external");
   const writeReport = args.includes("--write-report");
   const positionalArgs = args.filter((arg) => !arg.startsWith("--"));
+  const expectations: MacReleaseExpectations = {
+    version: await readMacPackageVersion(repoRoot),
+    nodeVersion: await readPinnedMacNodeVersion(repoRoot),
+  };
   if (checkReleaseSet) {
     const explicitIndexPath = positionalArgs[0];
     const indexPath = explicitIndexPath ? resolve(explicitIndexPath) : await findLatestMacReleaseIndex();
@@ -658,7 +732,7 @@ const main = async () => {
     }
     const index = await readMacReleaseIndex(indexPath);
     const files = await checkMacReleaseIndexFiles(index);
-    const report = assessMacReleaseSet(index, files);
+    const report = assessMacReleaseSet(index, files, expectations);
     const signingReadiness = summarizeMacSigningReadiness(collectMacSigningReadinessReport());
     const output = { indexPath, ...report, signingReadiness };
     if (writeReport) {
@@ -680,7 +754,7 @@ const main = async () => {
   }
   const manifest = await readMacReleaseManifest(manifestPath);
   const files = await checkMacReleaseFiles(manifest);
-  const report = assessMacRelease(manifest, files);
+  const report = assessMacRelease(manifest, files, expectations);
   const signingReadiness = summarizeMacSigningReadiness(collectMacSigningReadinessReport());
   const output = { manifestPath, ...report, signingReadiness };
   if (writeReport) {
