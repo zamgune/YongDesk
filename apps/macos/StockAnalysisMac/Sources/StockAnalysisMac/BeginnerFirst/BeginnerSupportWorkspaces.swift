@@ -340,6 +340,18 @@ struct BeginnerAssetsWorkspace: View {
                             BeginnerStatusBadge("잠금 \(quantityText(position.lockedQuantity))", color: BeginnerPalette.amber)
                         }
                     }
+                    if position.averagePrice != nil || position.currentPrice != nil {
+                        HStack(spacing: 8) {
+                            if let averagePrice = position.averagePrice {
+                                Text("평단 \(beginnerPrice(averagePrice, currency: position.currency))")
+                            }
+                            if let currentPrice = position.currentPrice {
+                                Text("현재가 \(beginnerPrice(currentPrice, currency: position.currency))")
+                            }
+                        }
+                        .font(.caption2)
+                        .foregroundStyle(BeginnerPalette.muted)
+                    }
                 }
 
                 Spacer(minLength: 12)
@@ -350,7 +362,7 @@ struct BeginnerAssetsWorkspace: View {
                          : "평가 미지원")
                         .font(.subheadline.weight(.bold))
                     if let profitLoss = position.profitLoss {
-                        Text("\(profitLoss >= 0 ? "+" : "")\(beginnerPrice(profitLoss, currency: position.currency)) · \(beginnerPercent(position.profitLossRate))")
+                        Text("\(profitLoss >= 0 ? "+" : "")\(beginnerPrice(profitLoss, currency: position.currency)) · \(portfolioProfitRateText(position.profitLossRate))")
                             .font(.caption2.weight(.semibold))
                             .foregroundStyle(profitLoss >= 0 ? BeginnerPalette.green : BeginnerPalette.red)
                     } else {
@@ -465,6 +477,11 @@ struct BeginnerAssetsWorkspace: View {
 
     private func quantityText(_ value: Double) -> String {
         value.rounded() == value ? Int(value).formatted() : value.formatted(.number.precision(.fractionLength(3)))
+    }
+
+    private func portfolioProfitRateText(_ value: Double?) -> String {
+        guard let value else { return "-" }
+        return value.formatted(.number.precision(.fractionLength(2)).sign(strategy: .always())) + "%"
     }
 
     private func providerTitle(_ provider: String) -> String {
