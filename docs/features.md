@@ -49,8 +49,9 @@
 | 안전장치 | 설치·계좌 바인딩, 수동/자동화 gate, worker control, kill switch | 구현됨 | sidecar fail-closed, KST 매수 한도, `unknown` 주문 전역 잠금 | 차단 경계 |
 | Toss | credential 검증·저장, 계좌 선택, 공인 IP 확인 | 외부 설정 필요 | 사용자 키와 Toss 허용 IP 등록 필요 | 없음 |
 | Toss | 국내·미국 주식 지정가 주문 | 구현됨 | 단일 Mac·선택 계좌에서 수동 기본 OFF. 매수 건당 10만원·KST 일 30만원, USD 환율 fail-closed | 실 API 인수 필요 |
-| 코인 | Upbit·Bithumb credential, 잔고·주문가능정보·현재가·최소금액 사전검증 | 외부 설정 필요 | 거래소별 API 키 필요, 실제 주문은 호출하지 않음 | 없음 |
-| 코인 | Upbit·Bithumb limit 주문 어댑터 | 부분 구현 | 1.0.0은 체결·부분체결 동기화 전까지 live 경로를 강제 차단 | 없음 |
+| 코인 | Upbit·Bithumb credential, 잔고·주문가능정보·현재가·최소금액 사전검증 | 외부 설정 필요 | 거래소별 API 키 필요. 조회·사전검증은 주문을 호출하지 않음 | 없음 |
+| 코인 | Upbit KRW 수동 지정가 주문 | 구현됨 | 이 Mac의 검증된 Upbit API, 읽기 전용 QA, typed 수동 토글, RiskCheck·잔고·호가 재검증, 주문 요약 재입력을 모두 통과해야 함 | 실 API 인수 필요 |
+| 코인 | Bithumb 실주문·모든 코인 자동매매·시장가 | 후속 | 현재 배포본은 paper 자동화만 허용 | 차단 경계 |
 | 배포 | arm64/x64 앱·DMG·ZIP·manifest 생성·설치 검증 | 구현됨 | 생성·검증 도구가 구현됨. 1.0.0 로컬 검증 기록은 릴리스 이력에 보존되며, 새 패키지는 아키텍처별로 다시 검증해야 함 | 없음 |
 | 배포 | Gatekeeper 경고 없는 공개 배포 | 외부 설정 필요 | Developer ID, notarization과 stapling 필요 | 없음 |
 
@@ -66,7 +67,7 @@
 6. 분석 화면은 최근 종가와 일봉 차트 뒤에 단타·스윙·장기 계획, 신호, 뉴스·민심 근거를 점진적으로 표시한다.
 7. 모의 주문은 사용자가 drawer를 연 뒤에만 기존 paper 흐름으로 진행하며 실브로커를 호출하지 않는다.
 8. 전략 설정은 `초안 저장 → 조건 확인 → 시뮬레이션 → 활성화` 순서와 scheduler·자동화 일시중지·kill switch 동작을 유지한다.
-9. Toss 수동 지정가 실거래는 설정의 QA·수동 토글을 통과한 단일 Mac/선택 계좌에서만 가능하다. Toss 자동화와 코인 자동화는 별도 해제 전 paper-only다.
+9. Toss 수동 지정가와 Upbit KRW 수동 지정가는 각각 설정의 읽기 전용 QA·수동 토글을 통과한 단일 Mac/검증 API에서만 가능하다. Toss 자동화와 코인 자동매매는 별도 해제 전 paper-only다.
 
 문장형 전략 조립기는 여전히 HTML 시안이다. Beginner-first 레이아웃 적용이 기존 전략 계약이나 자동화 순서를 변경한 것은 아니다.
 

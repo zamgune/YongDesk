@@ -1034,6 +1034,10 @@ private struct BeginnerAPIConnectionWorkspace: View {
     @State private var cryptoSide = "buy"
     @State private var cryptoVolume = "0.001"
     @State private var cryptoPrice = "100000000"
+    @State private var credentialSaveFailure: String?
+    @State private var cryptoQaConfirmation = ""
+    @State private var cryptoManualConfirmation = ""
+    @State private var cryptoOrderConfirmation = ""
 
     private var credential: BrokerCredentialView? {
         if selectedProvider == .toss {
@@ -1155,10 +1159,22 @@ private struct BeginnerAPIConnectionWorkspace: View {
                         }
                     }
 
-                    Text(statusMessage)
-                        .font(.caption2)
-                        .foregroundStyle(statusColor)
+                    if let credentialSaveFailure {
+                        HStack(alignment: .top, spacing: 7) {
+                            Image(systemName: "xmark.octagon.fill")
+                                .foregroundStyle(BeginnerPalette.red)
+                            Text(credentialSaveFailure)
+                        }
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(BeginnerPalette.red)
                         .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityIdentifier("beginner-api-save-failure")
+                    } else {
+                        Text(statusMessage)
+                            .font(.caption2)
+                            .foregroundStyle(statusColor)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 }
                 .padding(14)
                 .background(BeginnerPalette.backgroundDeep.opacity(0.42), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
@@ -1167,7 +1183,9 @@ private struct BeginnerAPIConnectionWorkspace: View {
                         .stroke(BeginnerPalette.line)
                 }
 
-                Text("API 연결은 선택 사항입니다. 이 버전에서는 연결·조회·사전검증만 제공하며 실제 주문은 계속 차단됩니다.")
+                Text(selectedProvider == .upbit
+                     ? "Upbit는 읽기 전용 QA를 통과한 이 Mac에서만 수동 지정가 주문을 별도로 열 수 있습니다. 기본 OFF이며 자동매매·시장가·Bithumb 실주문은 계속 차단됩니다."
+                     : "API 연결은 선택 사항입니다. Toss는 별도 실거래 정책을 따르며, Bithumb은 연결·조회·사전검증과 paper 자동화만 제공합니다.")
                     .font(.caption)
                     .foregroundStyle(BeginnerPalette.amber)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -1205,6 +1223,7 @@ private struct BeginnerAPIConnectionWorkspace: View {
         .task(id: selectedProvider) {
             identifier = ""
             secret = ""
+            credentialSaveFailure = nil
             showingAdvanced = false
             await refreshProviderState()
         }
@@ -1387,12 +1406,126 @@ private struct BeginnerAPIConnectionWorkspace: View {
                     .foregroundStyle(precheck.passed ? BeginnerPalette.green : BeginnerPalette.amber)
                     .fixedSize(horizontal: false, vertical: true)
             }
+
+            if selectedProvider == .upbit {
+                Divider().overlay(BeginnerPalette.line)
+                upbitManualLiveTradingContent
+            }
+        }
+        .task(id: selectedProvider) {
+            if selectedProvider == .upbit {
+                await model.refreshCryptoLiveTrading()
+            }
+        }
+    }
+
+    private var upbitManualLiveTradingContent: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                BeginnerStatusBadge("Upbit 수동 지정가", color: BeginnerPalette.blue)
+                BeginnerStatusBadge(model.cryptoLiveTrading?.manualEnabled == true ? "수동 토글 ON" : "기본 OFF", color: model.cryptoLiveTrading?.manualEnabled == true ? BeginnerPalette.green : BeginnerPalette.amber)
+                if model.cryptoLiveTrading?.policy.unknownLock != nil {
+                    BeginnerStatusBadge("결과 불명 잠금", color: BeginnerPalette.red)
+                }
+            }
+
+            Text("자동매매·시장가·Bithumb 실주문은 지원하지 않습니다. Upbit 수동 지정가만 읽기 전용 QA, 재입력 토글, 사전검증, 주문 요약 재입력을 모두 통과해야 제출됩니다.")
+                .font(.caption)
+                .foregroundStyle(BeginnerPalette.muted)
+                .fixedSize(horizontal: false, vertical: true)
+
+            if model.cryptoLiveTrading?.policy.qaApprovedAt == nil {
+                HStack(spacing: 8) {
+                    TextField("코인 실거래 QA 승인", text: $cryptoQaConfirmation)
+                        .textFieldStyle(.roundedBorder)
+                    Button("읽기 전용 QA 후 승인") {
+                        Task { await model.approveCryptoManualLiveTradingQA(confirmation: cryptoQaConfirmation) }
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(cryptoQaConfirmation != "코인 실거래 QA 승인")
+                }
+            }
+
+            HStack(spacing: 8) {
+                TextField("코인 실거래 수동 주문 해제", text: $cryptoManualConfirmation)
+                    .textFieldStyle(.roundedBorder)
+                    .disabled(model.cryptoLiveTrading?.manualEnabled == true)
+                Button("수동 실거래 켜기") {
+                    Task { await model.setCryptoManualLiveTrading(enabled: true, confirmation: cryptoManualConfirmation) }
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(BeginnerPalette.red)
+                .disabled(model.cryptoLiveTrading?.manualEnabled == true || cryptoManualConfirmation != "코인 실거래 수동 주문 해제")
+                Button("수동 실거래 끄기") {
+                    Task { await model.setCryptoManualLiveTrading(enabled: false) }
+                }
+                .buttonStyle(.bordered)
+                .disabled(model.cryptoLiveTrading?.manualEnabled != true)
+            }
+
+            HStack(spacing: 8) {
+                Button("실주문 사전검증") {
+                    Task {
+                        isRunningAdvancedCheck = true
+                        cryptoOrderConfirmation = ""
+                        await model.runCryptoManualLiveOrderPrecheck(
+                            market: cryptoMarket.uppercased(),
+                            side: cryptoSide,
+                            volume: Double(cryptoVolume) ?? 0,
+                            price: Double(cryptoPrice) ?? 0
+                        )
+                        isRunningAdvancedCheck = false
+                    }
+                }
+                .buttonStyle(.bordered)
+                .disabled(isRunningAdvancedCheck || (Double(cryptoVolume) ?? 0) <= 0 || (Double(cryptoPrice) ?? 0) <= 0)
+
+                if model.cryptoLiveTrading?.policy.unknownLock != nil {
+                    Button("결과 불명 주문 재조정") {
+                        Task { await model.reconcileCryptoManualLiveOrder() }
+                    }
+                    .buttonStyle(.bordered)
+                }
+            }
+
+            if let precheck = model.cryptoLiveOrderPrecheck,
+               precheck.market == cryptoMarket.uppercased() {
+                VStack(alignment: .leading, spacing: 7) {
+                    Text(precheck.submitReady ? "사전검증 통과 · 주문은 아직 제출되지 않았습니다." : "사전검증 차단 · \(precheck.blockers.first ?? "조건을 확인하세요.")")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(precheck.submitReady ? BeginnerPalette.green : BeginnerPalette.amber)
+                    Text("최종 확인 문구: \(precheck.confirmationText)")
+                        .font(.caption2.monospaced())
+                        .textSelection(.enabled)
+                        .foregroundStyle(BeginnerPalette.muted)
+                    TextField("표시된 주문 요약 입력", text: $cryptoOrderConfirmation)
+                        .textFieldStyle(.roundedBorder)
+                        .disabled(!precheck.submitReady)
+                    Button("최종 Upbit 실주문 제출") {
+                        guard let preview = precheck.preview else { return }
+                        Task { await model.submitCryptoManualLiveOrder(previewId: preview.id, confirmation: cryptoOrderConfirmation) }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(BeginnerPalette.red)
+                    .foregroundStyle(BeginnerPalette.backgroundDeep)
+                    .disabled(!precheck.submitReady || cryptoOrderConfirmation != precheck.confirmationText)
+                    .accessibilityIdentifier("beginner-upbit-live-order-submit")
+                }
+                .padding(10)
+                .background(BeginnerPalette.backgroundDeep.opacity(0.48), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+            }
+
+            Text(model.cryptoLiveTrading?.reason ?? model.cryptoExchangeMessage)
+                .font(.caption2)
+                .foregroundStyle(BeginnerPalette.muted)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 
     private func providerButton(_ provider: BeginnerAPIConnectionProvider) -> some View {
         Button {
             selectedProvider = provider
+            credentialSaveFailure = nil
         } label: {
             VStack(alignment: .leading, spacing: 3) {
                 Text(provider.shortTitle)
@@ -1403,6 +1536,8 @@ private struct BeginnerAPIConnectionWorkspace: View {
                     .lineLimit(2)
             }
             .frame(maxWidth: .infinity, minHeight: 54, alignment: .leading)
+            .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .background(Color.clear)
             .padding(.horizontal, 10)
             .background(selectedProvider == provider ? BeginnerPalette.blue.opacity(0.14) : Color.clear, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
             .overlay {
@@ -1411,7 +1546,6 @@ private struct BeginnerAPIConnectionWorkspace: View {
             }
         }
         .buttonStyle(.plain)
-        .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         .accessibilityIdentifier(provider.accessibilityIdentifier)
         .accessibilityValue(selectedProvider == provider ? "선택됨" : "선택 안 됨")
         .accessibilityAddTraits(selectedProvider == provider ? .isSelected : [])
@@ -1420,12 +1554,20 @@ private struct BeginnerAPIConnectionWorkspace: View {
     private func saveCredential() async {
         isSaving = true
         defer { isSaving = false }
+        credentialSaveFailure = nil
+        let saved: Bool
         if selectedProvider == .toss {
-            await model.registerBrokerCredential(clientId: identifier, clientSecret: secret)
+            saved = await model.registerBrokerCredential(clientId: identifier, clientSecret: secret)
         } else {
-            await model.registerCryptoCredential(exchange: selectedProvider.rawValue, accessKey: identifier, secretKey: secret)
+            saved = await model.registerCryptoCredential(exchange: selectedProvider.rawValue, accessKey: identifier, secretKey: secret)
         }
         secret = ""
+        guard saved else {
+            credentialSaveFailure = statusMessage
+            showingAdvanced = false
+            return
+        }
+        identifier = ""
         await refreshProviderState()
         showingAdvanced = isVerified
     }
@@ -1439,6 +1581,9 @@ private struct BeginnerAPIConnectionWorkspace: View {
             await model.refreshBrokerCredential()
         } else {
             await model.refreshCryptoExchanges()
+            if selectedProvider == .upbit {
+                await model.refreshCryptoLiveTrading()
+            }
         }
     }
 
@@ -1714,7 +1859,7 @@ struct BeginnerLiveTradingSettingsCard: View {
                     VStack(alignment: .leading, spacing: 4) {
                         Text("Toss 실거래 운영")
                             .font(.headline)
-                        Text("이 Mac 한 대와 선택 계좌만 대상으로 합니다. Upbit·Bithumb은 계속 paper-only입니다.")
+                        Text("이 Mac 한 대와 선택 계좌만 대상으로 합니다. Upbit 수동 지정가는 연결 관리의 별도 QA 경계를 따르며, Bithumb과 모든 코인 자동매매는 paper-only입니다.")
                             .font(.caption)
                             .foregroundStyle(BeginnerPalette.muted)
                     }

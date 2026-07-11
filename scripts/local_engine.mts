@@ -59,8 +59,27 @@ import {
   type LiveOrderSource,
 } from "../src/lib/automation/local-live-trading.ts";
 import {
+  LOCAL_CRYPTO_LIVE_TRADING_MAX_BUY_ORDER_KRW,
+  LOCAL_CRYPTO_LIVE_TRADING_MAX_DAILY_BUY_KRW,
+  approveLocalCryptoManualQa,
+  beginLocalCryptoOrderSubmission,
+  clearLocalCryptoManualLiveTradingBinding,
+  findLocalCryptoUnknownAttempt,
+  getLocalCryptoLiveTradingGate,
+  getLocalCryptoOrderPreview,
+  getLocalCryptoLiveTradingSnapshot,
+  markLocalCryptoOrderRejected,
+  markLocalCryptoOrderSubmitted,
+  markLocalCryptoOrderUnknown,
+  reconcileLocalCryptoOrder,
+  recordLocalCryptoOrderPreview,
+  setLocalCryptoManualLiveTrading,
+} from "../src/lib/automation/local-crypto-live-trading.ts";
+import {
+  CryptoExchangeApiError,
   cryptoExchangeContract,
   getCryptoAccounts,
+  getUpbitOrderByIdentifier,
   getCryptoOrderConstraints,
   getCryptoOrderChance,
   getCryptoTicker,
@@ -3964,6 +3983,9 @@ const registerCryptoCredential = async (exchange: CryptoExchange, request: Reque
       clientSecret: secretKey,
       status: "verified",
     });
+    if (exchange === "upbit") {
+      await clearLocalCryptoManualLiveTradingBinding();
+    }
     return jsonResponse({
       generatedAt: new Date().toISOString(),
       exchange,
@@ -3982,6 +4004,9 @@ const registerCryptoCredential = async (exchange: CryptoExchange, request: Reque
 
 const deleteCryptoCredential = async (exchange: CryptoExchange) => {
   await deleteBrokerCredentials(localUserId(), exchange);
+  if (exchange === "upbit") {
+    await clearLocalCryptoManualLiveTradingBinding();
+  }
   return jsonResponse({ ok: true, exchange });
 };
 
@@ -4185,6 +4210,336 @@ const cryptoOrderPrecheck = async (exchange: CryptoExchange, request: Request) =
       error: `${exchange} 주문 사전검증 실패: ${errorMessage(error)}`,
       orderSubmissionAttempted: false,
     }, { status: 502 });
+  }
+};
+
+const cryptoLiveOrderConfirmationText = ({
+  market,
+  side,
+  volume,
+  price,
+}: {
+  market: string;
+  side: "buy" | "sell";
+  volume: number;
+  price: number;
+}) => `Upbit ${market} ${side === "buy" ? "매수" : "매도"} ${volume} @ ${price} KRW`;
+
+const cryptoLiveGate = async (userId: string) => {
+  const [credential, killSwitch, workerControl] = await Promise.all([
+    getBrokerCredentialView(userId, "upbit"),
+    getAutomationKillSwitchState(),
+    getAutomationWorkerControlState(),
+  ]);
+  const gate = await getLocalCryptoLiveTradingGate({
+    userId,
+    credentialVerified: credential?.status === "verified",
+    encryptionConfigured: isCredentialEncryptionConfigured(),
+    killSwitchEngaged: killSwitch.engaged,
+    workerPaused: workerControl.paused,
+  });
+  return { credential, killSwitch, workerControl, gate };
+};
+
+const cryptoLiveTradingState = async () => {
+  const userId = localUserId();
+  const [{ credential, killSwitch, workerControl, gate }, snapshot] = await Promise.all([
+    cryptoLiveGate(userId),
+    getLocalCryptoLiveTradingSnapshot(),
+  ]);
+  return jsonResponse({
+    generatedAt: new Date().toISOString(),
+    exchange: "upbit",
+    credential,
+    liveTrading: {
+      exchange: "upbit",
+      manualOnly: true,
+      manualEnabled: snapshot.policy.manualEnabled,
+      effective: gate.effective,
+      reason: gate.reason,
+      remainingDailyBuyKrw: gate.remainingDailyBuyKrw,
+      limits: {
+        perBuyOrderKrw: LOCAL_CRYPTO_LIVE_TRADING_MAX_BUY_ORDER_KRW,
+        dailyBuyKrw: LOCAL_CRYPTO_LIVE_TRADING_MAX_DAILY_BUY_KRW,
+      },
+      policy: snapshot.policy,
+      attempts: snapshot.attempts,
+      killSwitchEngaged: killSwitch.engaged,
+      workerPaused: workerControl.paused,
+    },
+  });
+};
+
+const approveCryptoLiveTradingQa = async (request: Request) => {
+  const payload = await readJsonBody(request);
+  const confirmation = typeof payload.confirmation === "string" ? payload.confirmation : "";
+  const userId = localUserId();
+  const { credential } = await cryptoLiveGate(userId);
+  if (credential?.status !== "verified" || !isCredentialEncryptionConfigured()) {
+    return jsonResponse({ error: "검증 완료된 Upbit API 키와 암호화 credential 저장소가 필요합니다.", orderSubmissionAttempted: false }, { status: 412 });
+  }
+  const readinessResponse = await cryptoReadiness("upbit", "KRW-BTC");
+  const readiness = await readinessResponse.json() as { ready?: unknown; message?: unknown };
+  if (!readinessResponse.ok || readiness.ready !== true) {
+    const message = typeof readiness.message === "string" ? readiness.message : "Upbit 읽기 전용 준비 점검에 실패했습니다.";
+    return jsonResponse({ error: message, orderSubmissionAttempted: false }, { status: 412 });
+  }
+  try {
+    await approveLocalCryptoManualQa({ userId, confirmation });
+    return cryptoLiveTradingState();
+  } catch (error) {
+    return errorResponse(error, 422);
+  }
+};
+
+const updateCryptoLiveTrading = async (request: Request) => {
+  const payload = await readJsonBody(request);
+  if (typeof payload.enabled !== "boolean") {
+    return jsonResponse({ error: "enabled boolean 값이 필요합니다.", orderSubmissionAttempted: false }, { status: 400 });
+  }
+  const userId = localUserId();
+  const { credential } = await cryptoLiveGate(userId);
+  if (credential?.status !== "verified" || !isCredentialEncryptionConfigured()) {
+    return jsonResponse({ error: "검증 완료된 Upbit API 키와 암호화 credential 저장소가 필요합니다.", orderSubmissionAttempted: false }, { status: 412 });
+  }
+  try {
+    await setLocalCryptoManualLiveTrading({
+      userId,
+      enabled: payload.enabled,
+      confirmation: typeof payload.confirmation === "string" ? payload.confirmation : undefined,
+    });
+    return cryptoLiveTradingState();
+  } catch (error) {
+    return errorResponse(error, 422);
+  }
+};
+
+const runCryptoLivePrecheck = async ({
+  market,
+  side,
+  volume,
+  price,
+}: {
+  market: string;
+  side: "buy" | "sell";
+  volume: number;
+  price: number;
+}) => {
+  const response = await cryptoOrderPrecheck("upbit", new Request("http://127.0.0.1:38771/crypto-live-precheck", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ market, side, volume, price }),
+  }));
+  const payload = await response.json() as Record<string, unknown>;
+  return { response, payload };
+};
+
+const cryptoLiveOrderPrecheck = async (request: Request) => {
+  const payload = await readJsonBody(request);
+  const market = typeof payload.market === "string" ? payload.market.trim().toUpperCase() : "";
+  const side = payload.side === "buy" || payload.side === "sell" ? payload.side : null;
+  const volume = Number(payload.volume);
+  const price = Number(payload.price);
+  if (!/^KRW-[A-Z0-9]+$/.test(market) || !side || !Number.isFinite(volume) || volume <= 0 || !Number.isFinite(price) || price <= 0) {
+    return jsonResponse({ error: "market(KRW-BTC), side(buy/sell), volume, price 양수가 필요합니다.", orderSubmissionAttempted: false }, { status: 400 });
+  }
+  const userId = localUserId();
+  const { gate } = await cryptoLiveGate(userId);
+  const { response, payload: precheck } = await runCryptoLivePrecheck({ market, side, volume, price });
+  if (!response.ok) {
+    return jsonResponse({ ...precheck, orderSubmissionAttempted: false }, { status: response.status });
+  }
+  const intentResult = createOrderIntent({
+    userId,
+    symbol: market,
+    side,
+    type: "limit",
+    quantity: volume,
+    limitPrice: price,
+    currency: "KRW",
+    rationale: ["Upbit 수동 지정가 주문 사전검증"],
+    riskPolicy: {
+      allowLiveTrading: true,
+      maxOrderValue: LOCAL_CRYPTO_LIVE_TRADING_MAX_BUY_ORDER_KRW,
+      maxPositionValue: null,
+    },
+  });
+  const precheckBlockers = Array.isArray(precheck.blockers) ? precheck.blockers.filter((value): value is string => typeof value === "string") : [];
+  const blockers = [
+    ...precheckBlockers,
+    ...intentResult.riskCheck.blockers,
+    ...(gate.effective ? [] : [gate.reason ?? "Upbit 수동 실거래 게이트가 닫혀 있습니다."]),
+  ];
+  const confirmationText = cryptoLiveOrderConfirmationText({ market, side, volume, price });
+  const payloadHash = createHash("sha256")
+    .update(JSON.stringify({ exchange: "upbit", market, side, volume, price }), "utf8")
+    .digest("hex");
+  const preview = blockers.length === 0
+    ? await recordLocalCryptoOrderPreview({ userId, market, side, volume, price, confirmationText, payloadHash })
+    : null;
+  return jsonResponse({
+    ...precheck,
+    passed: blockers.length === 0,
+    blockers,
+    intent: intentResult.intent,
+    riskCheck: intentResult.riskCheck,
+    liveTradingGate: {
+      effective: gate.effective,
+      reason: gate.reason,
+      remainingDailyBuyKrw: gate.remainingDailyBuyKrw,
+    },
+    preview,
+    confirmationText,
+    submitReady: preview !== null,
+    message: preview
+      ? "Upbit 수동 주문 사전검증을 통과했습니다. 표시된 주문 요약을 직접 입력해야만 최종 제출할 수 있습니다."
+      : "사전검증 결과 Upbit 주문 제출 준비가 완료되지 않았습니다.",
+    orderSubmissionAttempted: false,
+  });
+};
+
+const isUnknownCryptoSubmissionError = (error: unknown) =>
+  !(error instanceof CryptoExchangeApiError) || error.status >= 500 || error.status === 429;
+
+const submitCryptoLiveOrder = async (request: Request) => {
+  const payload = await readJsonBody(request);
+  const previewId = typeof payload.previewId === "string" ? payload.previewId : "";
+  const confirmation = typeof payload.confirmation === "string" ? payload.confirmation.trim() : "";
+  if (!previewId || !confirmation) {
+    return jsonResponse({ error: "previewId와 최종 확인 문구가 필요합니다.", orderSubmissionAttempted: false }, { status: 400 });
+  }
+  const userId = localUserId();
+  const preview = await getLocalCryptoOrderPreview({ userId, previewId });
+  if (!preview) {
+    return jsonResponse({ error: "유효한 Upbit 주문 미리보기를 먼저 실행하세요.", orderSubmissionAttempted: false }, { status: 428 });
+  }
+  const { credential, gate } = await cryptoLiveGate(userId);
+  if (!gate.effective) {
+    return jsonResponse({ error: gate.reason ?? "Upbit 수동 실거래 게이트가 닫혀 있습니다.", orderSubmissionAttempted: false }, { status: 423 });
+  }
+  const { response, payload: precheck } = await runCryptoLivePrecheck({
+    market: preview.market,
+    side: preview.side,
+    volume: preview.volume,
+    price: preview.price,
+  });
+  if (!response.ok || precheck.passed !== true) {
+    const blockers = Array.isArray(precheck.blockers) ? precheck.blockers.filter((value): value is string => typeof value === "string") : [];
+    return jsonResponse({
+      error: blockers[0] ?? "제출 직전 Upbit 사전검증에 실패했습니다.",
+      blockers,
+      orderSubmissionAttempted: false,
+    }, { status: 422 });
+  }
+  const intentResult = createOrderIntent({
+    userId,
+    symbol: preview.market,
+    side: preview.side,
+    type: "limit",
+    quantity: preview.volume,
+    limitPrice: preview.price,
+    currency: "KRW",
+    rationale: ["Upbit 수동 지정가 주문 제출 직전 재검증"],
+    riskPolicy: {
+      allowLiveTrading: true,
+      maxOrderValue: LOCAL_CRYPTO_LIVE_TRADING_MAX_BUY_ORDER_KRW,
+      maxPositionValue: null,
+    },
+  });
+  if (!intentResult.riskCheck.passed) {
+    return jsonResponse({
+      error: intentResult.riskCheck.blockers[0] ?? "RiskCheck에 실패했습니다.",
+      blockers: intentResult.riskCheck.blockers,
+      orderSubmissionAttempted: false,
+    }, { status: 422 });
+  }
+  if (credential?.status !== "verified") {
+    return jsonResponse({ error: "검증 완료된 Upbit API 키가 필요합니다.", orderSubmissionAttempted: false }, { status: 412 });
+  }
+  const encrypted = await loadDecryptedCredentials(userId, "upbit");
+  if (!encrypted) {
+    return jsonResponse({ error: "Upbit API 키를 복호화하지 못했습니다.", orderSubmissionAttempted: false }, { status: 503 });
+  }
+  try {
+    const { attempt } = await beginLocalCryptoOrderSubmission({ userId, previewId, confirmation });
+    const broker = createCryptoBroker({
+      exchange: "upbit",
+      credentials: { accessKey: encrypted.clientId, secretKey: encrypted.clientSecret },
+      liveTradingEnabled: true,
+    });
+    try {
+      const submitted = await broker.submitOrder({
+        orderIntentId: intentResult.intent.id,
+        accountSeq: 0,
+        symbol: preview.market,
+        side: preview.side,
+        type: "limit",
+        quantity: preview.volume,
+        limitPrice: preview.price,
+        stopPrice: null,
+        clientOrderId: preview.clientOrderId,
+        timeInForce: "DAY",
+      });
+      const updatedAttempt = await markLocalCryptoOrderSubmitted(attempt.id, submitted.brokerOrderId);
+      return jsonResponse({
+        status: "submitted",
+        orderSubmissionAttempted: true,
+        result: submitted,
+        attempt: updatedAttempt,
+      }, { status: 201 });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (isUnknownCryptoSubmissionError(error)) {
+        const updatedAttempt = await markLocalCryptoOrderUnknown(attempt.id, message);
+        return jsonResponse({
+          status: "unknown",
+          error: "Upbit 주문 제출 결과가 불명확합니다. 자동 재시도를 금지하고 주문을 잠갔습니다. 주문 식별자로 상태를 다시 확인하세요.",
+          orderSubmissionAttempted: true,
+          attempt: updatedAttempt,
+        }, { status: 202 });
+      }
+      const updatedAttempt = await markLocalCryptoOrderRejected(attempt.id, message);
+      return jsonResponse({
+        status: "rejected",
+        error: message,
+        orderSubmissionAttempted: true,
+        attempt: updatedAttempt,
+      }, { status: 422 });
+    }
+  } catch (error) {
+    return errorResponse(error, 422);
+  }
+};
+
+const reconcileCryptoLiveOrder = async () => {
+  const userId = localUserId();
+  const attempt = await findLocalCryptoUnknownAttempt(userId);
+  if (!attempt) {
+    return jsonResponse({ status: "no-unknown-order", orderSubmissionAttempted: false });
+  }
+  const encrypted = await loadDecryptedCredentials(userId, "upbit");
+  if (!encrypted) {
+    return jsonResponse({ error: "Upbit API 키를 복호화하지 못했습니다.", orderSubmissionAttempted: false }, { status: 503 });
+  }
+  try {
+    const order = await getUpbitOrderByIdentifier(
+      { accessKey: encrypted.clientId, secretKey: encrypted.clientSecret },
+      attempt.clientOrderId,
+    );
+    const updatedAttempt = await reconcileLocalCryptoOrder({ attemptId: attempt.id, brokerOrderId: order.orderId });
+    return jsonResponse({
+      status: "reconciled",
+      orderSubmissionAttempted: false,
+      order: { orderId: order.orderId, state: order.state, clientOrderId: order.clientOrderId },
+      attempt: updatedAttempt,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return jsonResponse({
+      status: "unknown",
+      error: `Upbit 주문 조회로 결과를 확정하지 못했습니다. 수동으로 주문 내역을 확인한 뒤 다시 시도하세요. ${message}`,
+      orderSubmissionAttempted: false,
+    }, { status: error instanceof CryptoExchangeApiError ? error.status : 502 });
   }
 };
 
@@ -4793,6 +5148,22 @@ export const handleLocalEngineRequest = async (request: Request): Promise<Respon
     const cryptoReadinessMatch = url.pathname.match(/^\/api\/local\/crypto-exchanges\/(upbit|bithumb)\/readiness$/);
     if (request.method === "GET" && cryptoReadinessMatch && isCryptoExchange(cryptoReadinessMatch[1])) {
       return cryptoReadiness(cryptoReadinessMatch[1], url.searchParams.get("market")?.toUpperCase() || "KRW-BTC");
+    }
+    if (url.pathname === "/api/local/crypto-exchanges/upbit/live-trading") {
+      if (request.method === "GET") return cryptoLiveTradingState();
+      if (request.method === "PUT") return updateCryptoLiveTrading(request);
+    }
+    if (request.method === "POST" && url.pathname === "/api/local/crypto-exchanges/upbit/live-trading/qa") {
+      return approveCryptoLiveTradingQa(request);
+    }
+    if (request.method === "POST" && url.pathname === "/api/local/crypto-exchanges/upbit/live-trading/reconcile") {
+      return reconcileCryptoLiveOrder();
+    }
+    if (request.method === "POST" && url.pathname === "/api/local/crypto-exchanges/upbit/orders/live-precheck") {
+      return cryptoLiveOrderPrecheck(request);
+    }
+    if (request.method === "POST" && url.pathname === "/api/local/crypto-exchanges/upbit/orders/live-submit") {
+      return submitCryptoLiveOrder(request);
     }
     const cryptoPrecheckMatch = url.pathname.match(/^\/api\/local\/crypto-exchanges\/(upbit|bithumb)\/orders\/precheck$/);
     if (request.method === "POST" && cryptoPrecheckMatch && isCryptoExchange(cryptoPrecheckMatch[1])) {

@@ -95,7 +95,7 @@ curl http://127.0.0.1:38771/health
 - 전략은 초안 저장, 현재 config hash 시뮬레이션, 명시적 활성화 순서로 준비한다.
 - Beginner-first 전략 workspace는 주식 고정 수량(기본 1주), 코인 고정 주문금액(기본 50,000원), 현재가·기준가 분리, 차수별 예상 수량·노출을 표시한다. 기존 `orderSizing` 없는 전략은 금액 기준으로 호환한다.
 - `현재 틱`, `발동가 테스트`와 자동화 dry-run은 broker submit을 호출하지 않는다.
-- `자동화 1회 실행`은 Toss 자동화 live 토글이 별도로 열리기 전까지 주식·코인 모두 paper 계좌만 갱신한다. 코인 실주문은 지원하지 않는다.
+- `자동화 1회 실행`은 Toss 자동화 live 토글이 별도로 열리기 전까지 주식·코인 모두 paper 계좌만 갱신한다. 코인 자동매매는 지원하지 않는다.
 - 연속 scheduler는 기본 OFF이며 30초~15분 주기, 중복 cycle 방지, 마지막 결과와 다음 실행 시각을 저장한다.
 - `보유 조회`, `사전검증`, `주문 동기화`는 각각 조회와 준비 작업이며 그 자체로 주문을 만들지 않는다.
 - `전략 초안`은 현재 limit `OrderIntent`를 3차 `percent-grid` 초안으로 변환하며, 시뮬레이션과 활성화를 대신하지 않는다.
@@ -109,7 +109,9 @@ curl http://127.0.0.1:38771/health
 - 거래소별 credential을 검증하고 암호화 저장소와 Keychain에 보관한다.
 - 계좌, 주문 가능 정보, REST 현재가 응답 신선도, 최소·최대 주문금액과 수수료를 확인하고 limit 주문 입력을 preview한다. Upbit 호가 단위는 deprecated chance 필드가 아니라 공식 `/v1/orderbook/instruments`의 `tick_size`를 사용하고, Bithumb은 chance 응답의 `price_unit`을 사용한다.
 - 암호화폐 전략은 거래소를 명시하며 페이퍼 모드에서는 소수 수량을 지원한다.
-- 1.1.0에서도 코인 실제 주문을 지원하지 않는다. 체결·부분체결·미체결·취소 동기화와 재시작 멱등성 검증 전까지 sidecar가 paper 자동화만 실행한다.
+- Upbit `KRW-*` 수동 지정가는 읽기 전용 QA, 현재 설치·API 바인딩, `코인 실거래 수동 주문 해제`, `OrderIntent`·`RiskCheck`, 잔고·수수료·최소 주문금액·호가 단위·현재가 신선도 재검증과 주문 요약 재입력을 모두 통과한 경우에만 제출한다. 주문당 100,000 KRW, KST 일일 누적 300,000 KRW를 넘지 못하며 시장가·자동매매는 지원하지 않는다.
+- Upbit 429·5xx·timeout 또는 응답 불명은 자동 재시도하지 않고 수동 토글을 잠근다. Upbit의 client order identifier 조회가 주문을 확인할 때만 잠금을 해소한다.
+- Bithumb 실주문과 모든 코인 자동매매는 체결·부분체결·미체결·취소 동기화와 재시작 멱등성 검증 전까지 sidecar가 paper 자동화만 실행한다.
 - 주문 사전검증 결과의 차단 사유와 현재가·최소 주문금액을 앱에서 표시하며, 이 점검은 broker submit을 호출하지 않는다.
 
 거래소 연결 여부와 실시간 코인 차트는 현재 별도 기능이다. credential 검증이 성공해도 WebSocket 캔들 수집을 구현하기 전에는 실시간 차트로 표현하지 않는다.
@@ -192,7 +194,7 @@ Apple ID 방식을 사용할 때는 `APPLE_ID`, `APPLE_TEAM_ID`, `APPLE_APP_PASS
 
 ## 안전 경계
 
-Toss 실제 주문 제출은 다음 조건을 모두 통과해야 한다. 코인 실주문은 이 경계 전에 계속 차단한다.
+Toss 실제 주문과 Upbit 수동 지정가 제출은 각각 다음 조건을 모두 통과해야 한다. Bithumb 실주문과 코인 자동매매는 이 경계 전에 계속 차단한다.
 
 ```text
 OrderIntent
@@ -212,5 +214,6 @@ OrderIntent
 - Toss API는 1.1.0에서 QA 승인된 단일 Mac·선택 계좌에 한해 KR/US 지정가 submit 경로에 도달한다. `unknown` 주문은 자동 재시도·추측 매칭 없이 모든 live 제출을 잠근다.
 - 공식/RSS 뉴스 polling 실패는 분석·자동화를 중단시키지 않지만 실패 상태를 표시한다.
 - 커뮤니티 민심은 주문 입력에 직접 사용하지 않는다.
-- 코인 API는 1.1.0에서 조회·사전검증·paper 자동화 전용이며 broker submit 경로에 도달하지 않는다.
+- Upbit API는 1.1.0에서 QA 승인된 현재 Mac·검증 API의 KRW 수동 지정가만 broker submit 경로에 도달한다. `unknown`은 자동 재시도하지 않고 identifier 조회 전까지 실주문을 잠근다.
+- Bithumb API와 코인 자동화는 조회·사전검증·paper 자동화 전용이며 broker submit 경로에 도달하지 않는다.
 - 실제 계좌 조회가 가능한 상태에서는 자동 self-test가 사용자 의도 없이 계좌 endpoint를 호출하지 않는다.

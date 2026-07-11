@@ -14,6 +14,7 @@ import {
   getCryptoOrderConstraints,
   getCryptoOrderChance,
   getCryptoTicker,
+  getUpbitOrderByIdentifier,
   getUpbitCandles,
   getUpbitOrderbookInstrument,
   previewCryptoLimitOrder,
@@ -220,6 +221,21 @@ test("Upbit limit order signs the JSON body and uses official field names", asyn
   assert.equal(body.order_type, undefined);
   assert.match(String(new Headers(calls[0]?.init?.headers).get("Authorization")), /^Bearer /);
   assert.equal(result.orderId, "upbit-order-1");
+});
+
+test("Upbit resolves an unknown submission by client identifier without posting another order", async () => {
+  const calls: Array<{ url: string; init?: RequestInit }> = [];
+  const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    calls.push({ url: String(input), init });
+    return Response.json({ uuid: "upbit-reconciled-1", identifier: "client-order-unknown", state: "wait" });
+  }) as typeof fetch;
+  const result = await getUpbitOrderByIdentifier(credentials, "client-order-unknown", fetchImpl);
+  assert.equal(result.orderId, "upbit-reconciled-1");
+  assert.equal(result.clientOrderId, "client-order-unknown");
+  assert.equal(result.state, "wait");
+  assert.equal(calls[0]?.url, "https://api.upbit.com/v1/order?identifier=client-order-unknown");
+  assert.equal(calls[0]?.init?.method, "GET");
+  assert.match(String(new Headers(calls[0]?.init?.headers).get("Authorization")), /^Bearer /);
 });
 
 test("Bithumb orders use v2 order_type and client_order_id fields", async () => {

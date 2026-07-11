@@ -233,6 +233,50 @@ public struct EngineClient: Sendable {
         return try decoder.decode(CryptoOrderPrecheckResponse.self, from: data)
     }
 
+    public func cryptoManualLiveTrading() async throws -> CryptoManualLiveTradingResponse {
+        try await getJSON("/api/local/crypto-exchanges/upbit/live-trading")
+    }
+
+    public func approveCryptoManualLiveTradingQA(confirmation: String) async throws -> CryptoManualLiveTradingResponse {
+        let data = try await postJSON(
+            "/api/local/crypto-exchanges/upbit/live-trading/qa",
+            body: LocalLiveTradingConfirmationPayload(confirmation: confirmation)
+        )
+        return try decoder.decode(CryptoManualLiveTradingResponse.self, from: data)
+    }
+
+    public func updateCryptoManualLiveTrading(enabled: Bool, confirmation: String? = nil) async throws -> CryptoManualLiveTradingResponse {
+        let data = try await putJSON(
+            "/api/local/crypto-exchanges/upbit/live-trading",
+            body: LocalLiveTradingTogglePayload(enabled: enabled, confirmation: confirmation)
+        )
+        return try decoder.decode(CryptoManualLiveTradingResponse.self, from: data)
+    }
+
+    public func cryptoManualLiveOrderPrecheck(market: String, side: String, volume: Double, price: Double) async throws -> CryptoManualOrderPrecheckResponse {
+        let data = try await postJSON(
+            "/api/local/crypto-exchanges/upbit/orders/live-precheck",
+            body: CryptoOrderPrecheckPayload(market: market, side: side, volume: volume, price: price)
+        )
+        return try decoder.decode(CryptoManualOrderPrecheckResponse.self, from: data)
+    }
+
+    public func submitCryptoManualLiveOrder(previewId: String, confirmation: String) async throws -> CryptoManualOrderSubmissionResponse {
+        let data = try await postJSON(
+            "/api/local/crypto-exchanges/upbit/orders/live-submit",
+            body: LocalLiveOrderSubmitPayload(previewId: previewId, confirmation: confirmation)
+        )
+        return try decoder.decode(CryptoManualOrderSubmissionResponse.self, from: data)
+    }
+
+    public func reconcileCryptoManualLiveOrder() async throws -> CryptoManualOrderSubmissionResponse {
+        let data = try await postJSON(
+            "/api/local/crypto-exchanges/upbit/live-trading/reconcile",
+            body: [:] as [String: String]
+        )
+        return try decoder.decode(CryptoManualOrderSubmissionResponse.self, from: data)
+    }
+
     public func registerBrokerCredential(clientId: String, clientSecret: String) async throws -> BrokerCredentialResponse {
         let data = try await postJSON("/api/local/broker/credentials", body: [
             "clientId": clientId,

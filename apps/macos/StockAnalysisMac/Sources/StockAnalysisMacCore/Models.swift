@@ -1138,6 +1138,103 @@ public struct CryptoOrderPrecheckResponse: Codable, Equatable, Sendable {
     public let orderSubmissionAttempted: Bool
 }
 
+public struct CryptoManualLiveTradingLimits: Codable, Equatable, Sendable {
+    public let perBuyOrderKrw: Double
+    public let dailyBuyKrw: Double
+}
+
+public struct CryptoManualLiveTradingPolicy: Codable, Equatable, Sendable {
+    public let installationId: String
+    public let boundUserId: String?
+    public let boundExchange: String?
+    public let qaApprovedAt: String?
+    public let manualEnabled: Bool
+    public let dailyBuyKrwDate: String
+    public let dailyBuyKrwSubmitted: Double
+    public let unknownLock: LocalLiveUnknownLock?
+}
+
+public struct CryptoManualLiveOrderAttempt: Codable, Identifiable, Equatable, Sendable {
+    public let id: String
+    public let exchange: String
+    public let market: String
+    public let side: String
+    public let volume: Double
+    public let limitPrice: Double
+    public let krwEquivalent: Double
+    public let clientOrderId: String
+    public let status: String
+    public let brokerOrderId: String?
+    public let createdAt: String
+    public let completedAt: String?
+    public let error: String?
+}
+
+public struct CryptoManualLiveTradingState: Codable, Equatable, Sendable {
+    public let exchange: String
+    public let manualOnly: Bool
+    public let manualEnabled: Bool
+    public let effective: Bool
+    public let reason: String?
+    public let remainingDailyBuyKrw: Double
+    public let limits: CryptoManualLiveTradingLimits
+    public let policy: CryptoManualLiveTradingPolicy
+    public let attempts: [CryptoManualLiveOrderAttempt]
+    public let killSwitchEngaged: Bool
+    public let workerPaused: Bool
+}
+
+public struct CryptoManualLiveTradingResponse: Codable, Equatable, Sendable {
+    public let generatedAt: String
+    public let exchange: String
+    public let credential: BrokerCredentialView?
+    public let liveTrading: CryptoManualLiveTradingState
+}
+
+public struct CryptoManualOrderPreview: Codable, Equatable, Sendable {
+    public let id: String
+    public let market: String
+    public let side: String
+    public let volume: Double
+    public let price: Double
+    public let estimatedValue: Double
+    public let clientOrderId: String
+    public let confirmationText: String
+    public let expiresAt: String
+}
+
+public struct CryptoManualLiveGate: Codable, Equatable, Sendable {
+    public let effective: Bool
+    public let reason: String?
+    public let remainingDailyBuyKrw: Double
+}
+
+public struct CryptoManualOrderPrecheckResponse: Codable, Equatable, Sendable {
+    public let generatedAt: String
+    public let exchange: String
+    public let market: String
+    public let passed: Bool
+    public let blockers: [String]
+    public let estimatedValue: Double
+    public let estimatedBuyCost: Double?
+    public let orderChanceVerified: Bool
+    public let orderConstraints: CryptoOrderConstraintView?
+    public let ticker: CryptoTickerView?
+    public let liveTradingGate: CryptoManualLiveGate
+    public let preview: CryptoManualOrderPreview?
+    public let confirmationText: String
+    public let submitReady: Bool
+    public let message: String
+    public let orderSubmissionAttempted: Bool
+}
+
+public struct CryptoManualOrderSubmissionResponse: Codable, Equatable, Sendable {
+    public let status: String
+    public let error: String?
+    public let orderSubmissionAttempted: Bool
+    public let attempt: CryptoManualLiveOrderAttempt?
+}
+
 public struct LocalHoldingResponse: Codable, Equatable, Sendable {
     public let linked: Bool
     public let held: Bool

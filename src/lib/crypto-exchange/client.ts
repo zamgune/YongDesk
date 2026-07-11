@@ -103,6 +103,13 @@ export type CryptoOrderResult = {
   raw: Record<string, unknown>;
 };
 
+export type CryptoOrderStatus = {
+  orderId: string;
+  clientOrderId: string | null;
+  state: string | null;
+  raw: Record<string, unknown>;
+};
+
 export class CryptoExchangeApiError extends Error {
   readonly exchange: CryptoExchange;
   readonly status: number;
@@ -123,6 +130,7 @@ const CONTRACTS = {
     orderChancePath: "/v1/orders/chance",
     tickerPath: "/v1/ticker",
     createOrderPath: "/v1/orders",
+    orderLookupPath: "/v1/order",
     docsUrl: "https://docs.upbit.com/kr/reference/auth",
   },
   bithumb: {
@@ -132,6 +140,7 @@ const CONTRACTS = {
     orderChancePath: "/v1/orders/chance",
     tickerPath: "/v1/ticker",
     createOrderPath: "/v2/orders",
+    orderLookupPath: null,
     docsUrl: "https://apidocs.bithumb.com/docs/인증-토큰-생성하기",
   },
 };
@@ -588,6 +597,30 @@ export const createCryptoMarketSellOrder = async (
     fetchImpl,
   });
   return { orderId: orderId(exchange, raw), clientOrderId: orderClientId(exchange, raw), raw };
+};
+
+export const getUpbitOrderByIdentifier = async (
+  credentials: CryptoExchangeCredentials,
+  identifier: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<CryptoOrderStatus> => {
+  if (!identifier.trim()) {
+    throw new CryptoExchangeApiError("upbit", 400, "Upbit 주문 식별자가 필요합니다.");
+  }
+  const raw = await privateRequest<Record<string, unknown>>({
+    exchange: "upbit",
+    credentials,
+    path: CONTRACTS.upbit.orderLookupPath ?? "/v1/order",
+    parameters: { identifier },
+    fetchImpl,
+  });
+  const state = typeof raw.state === "string" ? raw.state : null;
+  return {
+    orderId: orderId("upbit", raw),
+    clientOrderId: orderClientId("upbit", raw),
+    state,
+    raw,
+  };
 };
 
 export const cancelCryptoOrder = async (

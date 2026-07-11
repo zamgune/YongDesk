@@ -497,6 +497,8 @@ private struct BeginnerSidebar: View {
             .foregroundStyle(destination == item ? BeginnerPalette.green : BeginnerPalette.muted)
             .padding(.horizontal, compact ? 10 : 12)
             .frame(maxWidth: .infinity, minHeight: 44, alignment: compact ? .center : .leading)
+            .contentShape(RoundedRectangle(cornerRadius: 10))
+            .background(Color.clear)
             .background(
                 destination == item
                     ? BeginnerPalette.green.opacity(0.12)
@@ -510,7 +512,6 @@ private struct BeginnerSidebar: View {
         }
         .buttonStyle(.plain)
         .frame(maxWidth: .infinity, alignment: compact ? .center : .leading)
-        .contentShape(RoundedRectangle(cornerRadius: 10))
         .onHover { isHovering in
             hoveredDestination = isHovering ? item : nil
         }

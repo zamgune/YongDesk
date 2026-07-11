@@ -635,7 +635,13 @@ const verifySidecar = async (expectedVersion: string) => {
     const symbolSearchState = await fetchJson(`${baseUrl}/api/local/symbol-search?q=${encodeURIComponent("삼성")}&markets=KOSPI,KOSDAQ`);
     const cryptoExchangeState = await fetchJson(`${baseUrl}/api/local/crypto-exchanges`);
     const cryptoReadinessState = await fetchJsonResponse(`${baseUrl}/api/local/crypto-exchanges/upbit/readiness?market=KRW-BTC`);
+    const cryptoLiveTradingState = await fetchJson(`${baseUrl}/api/local/crypto-exchanges/upbit/live-trading`);
     const cryptoPrecheckState = await fetchJsonResponse(`${baseUrl}/api/local/crypto-exchanges/bithumb/orders/precheck`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ market: "KRW-BTC", side: "buy", volume: 0.001, price: 100_000_000 }),
+    });
+    const cryptoLivePrecheckState = await fetchJsonResponse(`${baseUrl}/api/local/crypto-exchanges/upbit/orders/live-precheck`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ market: "KRW-BTC", side: "buy", volume: 0.001, price: 100_000_000 }),
@@ -710,8 +716,12 @@ const verifySidecar = async (expectedVersion: string) => {
       cryptoReadinessState.status !== 200 ||
       cryptoReadinessState.payload.ready !== false ||
       cryptoReadinessState.payload.orderSubmissionAttempted !== false ||
+      jsonObjectField(cryptoLiveTradingState, "liveTrading").effective !== false ||
+      jsonObjectField(cryptoLiveTradingState, "liveTrading").manualOnly !== true ||
       cryptoPrecheckState.status !== 412 ||
-      cryptoPrecheckState.payload.orderSubmissionAttempted !== false
+      cryptoPrecheckState.payload.orderSubmissionAttempted !== false ||
+      cryptoLivePrecheckState.status !== 412 ||
+      cryptoLivePrecheckState.payload.orderSubmissionAttempted !== false
     ) {
       throw new Error("Crypto exchange endpoints did not preserve no-credential and no-order safety");
     }

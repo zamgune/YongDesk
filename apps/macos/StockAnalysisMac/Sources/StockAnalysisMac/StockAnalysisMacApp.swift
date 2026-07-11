@@ -88,6 +88,9 @@ final class AppModel: ObservableObject {
     @Published var cryptoExchangeMessage = "Upbit·Bithumb API 키를 검증하면 잔고와 주문 가능 정보를 읽기 전용으로 확인합니다."
     @Published var cryptoReadiness: CryptoReadinessResponse?
     @Published var cryptoOrderPrecheck: CryptoOrderPrecheckResponse?
+    @Published var cryptoLiveTrading: CryptoManualLiveTradingState?
+    @Published var cryptoLiveOrderPrecheck: CryptoManualOrderPrecheckResponse?
+    @Published var cryptoLiveOrderSubmission: CryptoManualOrderSubmissionResponse?
     @Published var strategyConfigs: [StrategyConfigView] = []
     @Published var requestedStrategyConfigId: String?
     @Published var strategyMessage = "전략은 초안 저장 후 시뮬레이션을 통과해야 활성화할 수 있습니다."
@@ -1421,14 +1424,14 @@ final class AppModel: ObservableObject {
         settings.cryptoLiveTradingOperatorEnabled = false
         try? store.saveSettings(settings)
         cryptoExchangeMessage = enabled
-            ? "1.0.0에서는 체결 동기화 안전 경계가 없는 코인 실거래를 열지 않습니다. 조회·사전검증·paper 자동화는 사용할 수 있습니다."
-            : "코인 전략은 paper 자동화로 실행됩니다."
+            ? "Upbit 실거래는 설정의 읽기 전용 QA·수동 토글·사전검증·주문 요약 재입력 경로에서만 변경할 수 있습니다."
+            : "코인 자동매매는 계속 paper 전용이며, 수동 지정가 주문은 Upbit 연결 관리에서 별도로 제어합니다."
         if enabled {
-            statusLine = "crypto live trading remains disabled"
+            statusLine = "use Upbit local manual live trading controls"
         }
     }
 
-    func registerBrokerCredential(clientId: String, clientSecret: String) async {
+    func registerBrokerCredential(clientId: String, clientSecret: String) async -> Bool {
         do {
             let response = try await client.registerBrokerCredential(clientId: clientId, clientSecret: clientSecret)
             if response.credential?.status == "verified" {
@@ -1453,8 +1456,10 @@ final class AppModel: ObservableObject {
             await refreshBrokerDiagnostics()
             await runTossReadiness()
             await refreshLocalLiveTrading()
+            return true
         } catch {
             brokerCredentialMessage = "Toss 등록 실패: \(Self.errorMessage(error))"
+            return false
         }
     }
 
@@ -1913,7 +1918,7 @@ final class AppModel: ObservableObject {
         try keychain.read(broker: exchange)
     }
 
-    func registerCryptoCredential(exchange: String, accessKey: String, secretKey: String) async {
+    func registerCryptoCredential(exchange: String, accessKey: String, secretKey: String) async -> Bool {
         do {
             let response = try await client.registerCryptoCredential(
                 exchange: exchange,
@@ -1923,8 +1928,13 @@ final class AppModel: ObservableObject {
             try keychain.save(BrokerCredential(broker: exchange, clientId: accessKey, clientSecret: secretKey))
             cryptoExchangeMessage = "\(exchange) 검증 완료 · 자산 \(response.accountCount)개 · 주문 제출 없음 · Keychain 저장 완료"
             await refreshCryptoExchanges()
+            if exchange == "upbit" {
+                await refreshCryptoLiveTrading()
+            }
+            return true
         } catch {
             cryptoExchangeMessage = "\(exchange) 등록 실패: \(Self.errorMessage(error))"
+            return false
         }
     }
 
@@ -1934,6 +1944,9 @@ final class AppModel: ObservableObject {
             try keychain.delete(broker: exchange)
             cryptoReadiness = nil
             cryptoOrderPrecheck = nil
+            cryptoLiveTrading = nil
+            cryptoLiveOrderPrecheck = nil
+            cryptoLiveOrderSubmission = nil
             cryptoExchangeMessage = "\(exchange) API 키를 sidecar와 Keychain에서 삭제했습니다."
             await refreshCryptoExchanges()
         } catch {
@@ -1969,6 +1982,85 @@ final class AppModel: ObservableObject {
         } catch {
             cryptoOrderPrecheck = nil
             cryptoExchangeMessage = "\(exchange) 주문 사전검증 실패: \(Self.errorMessage(error))"
+        }
+    }
+
+    func refreshCryptoLiveTrading() async {
+        do {
+            let response = try await client.cryptoManualLiveTrading()
+            cryptoLiveTrading = response.liveTrading
+        } catch {
+            cryptoExchangeMessage = "Upbit 실거래 상태 조회 실패: \(Self.errorMessage(error))"
+        }
+    }
+
+    func approveCryptoManualLiveTradingQA(confirmation: String) async {
+        do {
+            let response = try await client.approveCryptoManualLiveTradingQA(confirmation: confirmation)
+            cryptoLiveTrading = response.liveTrading
+            cryptoExchangeMessage = "Upbit 읽기 전용 QA를 기록했습니다. 수동 주문은 별도의 재입력 토글이 필요합니다."
+        } catch {
+            cryptoExchangeMessage = "Upbit 읽기 전용 QA 승인 실패: \(Self.errorMessage(error))"
+        }
+    }
+
+    func setCryptoManualLiveTrading(enabled: Bool, confirmation: String? = nil) async {
+        do {
+            let response = try await client.updateCryptoManualLiveTrading(enabled: enabled, confirmation: confirmation)
+            cryptoLiveTrading = response.liveTrading
+            cryptoExchangeMessage = enabled
+                ? "Upbit 수동 지정가 주문이 이 Mac의 QA 완료 API에만 열렸습니다. 자동매매와 시장가는 계속 차단됩니다."
+                : "Upbit 수동 실거래를 껐습니다."
+        } catch {
+            cryptoExchangeMessage = "Upbit 수동 실거래 변경 실패: \(Self.errorMessage(error))"
+        }
+    }
+
+    func runCryptoManualLiveOrderPrecheck(market: String, side: String, volume: Double, price: Double) async {
+        cryptoLiveOrderPrecheck = nil
+        cryptoLiveOrderSubmission = nil
+        do {
+            let response = try await client.cryptoManualLiveOrderPrecheck(
+                market: market,
+                side: side,
+                volume: volume,
+                price: price
+            )
+            cryptoLiveOrderPrecheck = response
+            let blocker = response.blockers.first.map { " · \($0)" } ?? ""
+            cryptoExchangeMessage = response.submitReady
+                ? "Upbit 수동 주문 사전검증 통과 · 주문 요약 재입력 후에만 제출 가능"
+                : "Upbit 수동 주문 사전검증 차단\(blocker)"
+        } catch {
+            cryptoLiveOrderPrecheck = nil
+            cryptoExchangeMessage = "Upbit 수동 주문 사전검증 실패: \(Self.errorMessage(error))"
+        }
+    }
+
+    func submitCryptoManualLiveOrder(previewId: String, confirmation: String) async {
+        do {
+            let response = try await client.submitCryptoManualLiveOrder(previewId: previewId, confirmation: confirmation)
+            cryptoLiveOrderSubmission = response
+            cryptoExchangeMessage = response.status == "submitted"
+                ? "Upbit 주문이 제출되었습니다. 주문 ID와 거래소 주문 내역을 대조하세요."
+                : response.error ?? "Upbit 주문 제출 결과를 확인하세요."
+            await refreshCryptoLiveTrading()
+        } catch {
+            cryptoExchangeMessage = "Upbit 주문 제출 실패: \(Self.errorMessage(error))"
+            await refreshCryptoLiveTrading()
+        }
+    }
+
+    func reconcileCryptoManualLiveOrder() async {
+        do {
+            let response = try await client.reconcileCryptoManualLiveOrder()
+            cryptoLiveOrderSubmission = response
+            cryptoExchangeMessage = response.status == "reconciled"
+                ? "Upbit 주문 식별자 기반 재조정을 완료했습니다."
+                : response.error ?? "결과 불명 주문이 없습니다."
+            await refreshCryptoLiveTrading()
+        } catch {
+            cryptoExchangeMessage = "Upbit 주문 재조정 실패: \(Self.errorMessage(error))"
         }
     }
 
@@ -5398,7 +5490,7 @@ struct TossCredentialSheet: View {
                     Button(isSaving ? "검증 중" : "검증 후 저장") {
                         Task {
                             isSaving = true
-                            await model.registerBrokerCredential(clientId: clientId, clientSecret: clientSecret)
+                            _ = await model.registerBrokerCredential(clientId: clientId, clientSecret: clientSecret)
                             isSaving = false
                             clientSecret = ""
                         }
@@ -6591,7 +6683,7 @@ struct DistributionSheet: View {
                     Text("· DMG/ZIP 실파일은 앱 내부가 아니라 패키징 결과 폴더에 생성됩니다.")
                     Text("· Toss API 키는 새 Mac에서 다시 검증해 sidecar 저장소와 macOS Keychain에 저장하고, 자동거래 계좌를 다시 선택해야 합니다.")
                     Text("· 공인 IP가 바뀌면 Toss 개발자 콘솔 허용 IP와 앱의 연결 진단 결과가 일치해야 합니다.")
-                    Text("· 1.0.0 데스크톱은 Toss·Upbit·Bithumb 실제 주문을 열지 않으며 자동화 결과는 paper 계좌에만 기록됩니다.")
+                    Text("· 새 Mac의 Upbit 수동 지정가는 다시 읽기 전용 QA와 typed 수동 토글을 완료해야 열립니다. Bithumb과 코인 자동매매는 paper 전용입니다.")
                 }
                 .font(.caption)
                 .foregroundStyle(Color.terminalMuted)
@@ -7194,6 +7286,7 @@ struct CryptoExchangeSheet: View {
     @State private var volume = "0.001"
     @State private var price = "100000000"
     @State private var isWorking = false
+    @State private var credentialSaveFailure: String?
 
     private var currentState: CryptoExchangeStateView? {
         model.cryptoExchanges.first { $0.exchange == exchange }
@@ -7205,7 +7298,7 @@ struct CryptoExchangeSheet: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("코인 거래소 연결")
                         .font(.title2.weight(.bold))
-                    Text("Upbit·Bithumb을 읽기 전용으로 점검하고 주문 사전검증과 paper 자동화에 사용합니다.")
+                    Text("Upbit·Bithumb을 읽기 전용으로 점검합니다. Upbit 수동 지정가는 기본 설정의 연결 관리에서만 별도로 열 수 있으며, Bithumb과 코인 자동매매는 paper 전용입니다.")
                         .font(.caption)
                         .foregroundStyle(Color.terminalMuted)
                 }
@@ -7241,10 +7334,13 @@ struct CryptoExchangeSheet: View {
                     Button("검증 후 저장") {
                         Task {
                             isWorking = true
-                            await model.registerCryptoCredential(exchange: exchange, accessKey: accessKey, secretKey: secretKey)
-                            if currentState?.credential?.status == "verified" {
+                            credentialSaveFailure = nil
+                            let saved = await model.registerCryptoCredential(exchange: exchange, accessKey: accessKey, secretKey: secretKey)
+                            secretKey = ""
+                            if saved {
                                 accessKey = ""
-                                secretKey = ""
+                            } else {
+                                credentialSaveFailure = model.cryptoExchangeMessage
                             }
                             isWorking = false
                         }
@@ -7260,6 +7356,12 @@ struct CryptoExchangeSheet: View {
                         }
                     }
                     .disabled(currentState?.credential == nil || isWorking)
+                }
+                if let credentialSaveFailure {
+                    Label(credentialSaveFailure, systemImage: "xmark.octagon.fill")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(Color.terminalRed)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
                 if let credential = currentState?.credential {
                     Text("\(credential.maskedIdentifier) · \(credential.status) · \(currentState?.contract.baseUrl ?? "")")

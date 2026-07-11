@@ -467,6 +467,212 @@ test("Upbit readiness uses official tick size and response timestamp freshness",
   }
 });
 
+test("Upbit manual live orders require read-only QA, persist before submit, and reconcile unknown results", async () => {
+  const previousUserId = process.env.STOCK_ANALYSIS_LOCAL_USER_ID;
+  process.env.STOCK_ANALYSIS_LOCAL_USER_ID = `local-engine-upbit-live-${Date.now()}`;
+  const responseTimestamp = Date.now();
+  const accounts = [{ currency: "KRW", balance: "10000000", locked: "0" }];
+  const chance = {
+    bid_fee: "0.0005",
+    ask_fee: "0.0005",
+    market: {
+      id: "KRW-BTC",
+      bid: { min_total: "5000" },
+      ask: { min_total: "5000" },
+    },
+  };
+  const ticker = [{
+    market: "KRW-BTC",
+    trade_price: 100_000_000,
+    timestamp: responseTimestamp,
+    trade_timestamp: responseTimestamp,
+  }];
+  const instrument = [{
+    market: "KRW-BTC",
+    quote_currency: "KRW",
+    tick_size: "1000",
+    supported_levels: ["0", "10000"],
+  }];
+  const readonlyPrecheckResponses = () => [
+    Response.json(accounts),
+    Response.json(chance),
+    Response.json(ticker),
+    Response.json(instrument),
+  ];
+  const livePrecheckRequest = () => new Request(
+    "http://127.0.0.1:38771/api/local/crypto-exchanges/upbit/orders/live-precheck",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ market: "KRW-BTC", side: "buy", volume: 0.001, price: 100_000_000 }),
+    },
+  );
+  try {
+    await withMockFetch([Response.json(accounts)], async () => {
+      const response = await handleLocalEngineRequest(new Request(
+        "http://127.0.0.1:38771/api/local/crypto-exchanges/upbit/credentials",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ accessKey: "upbit-live-access", secretKey: "upbit-live-secret" }),
+        },
+      ));
+      assert.equal(response.status, 200);
+    });
+
+    await withMockFetch(readonlyPrecheckResponses(), async (calls) => {
+      const response = await handleLocalEngineRequest(new Request(
+        "http://127.0.0.1:38771/api/local/crypto-exchanges/upbit/live-trading/qa",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ confirmation: "코인 실거래 QA 승인" }),
+        },
+      ));
+      assert.equal(response.status, 200);
+      const payload = await response.json() as { liveTrading?: { policy?: { qaApprovedAt?: string | null; manualEnabled?: boolean } } };
+      assert.ok(payload.liveTrading?.policy?.qaApprovedAt);
+      assert.equal(payload.liveTrading?.policy?.manualEnabled, false);
+      assert.equal(calls.some((call) => call.init?.method === "POST"), false);
+    });
+
+    const enableResponse = await handleLocalEngineRequest(new Request(
+      "http://127.0.0.1:38771/api/local/crypto-exchanges/upbit/live-trading",
+      {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled: true, confirmation: "코인 실거래 수동 주문 해제" }),
+      },
+    ));
+    assert.equal(enableResponse.status, 200);
+
+    await withMockFetch([Response.json(accounts)], async () => {
+      const response = await handleLocalEngineRequest(new Request(
+        "http://127.0.0.1:38771/api/local/crypto-exchanges/upbit/credentials",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ accessKey: "upbit-live-access-replaced", secretKey: "upbit-live-secret-replaced" }),
+        },
+      ));
+      assert.equal(response.status, 200);
+    });
+    const reRegisteredStateResponse = await handleLocalEngineRequest(new Request(
+      "http://127.0.0.1:38771/api/local/crypto-exchanges/upbit/live-trading",
+    ));
+    const reRegisteredState = await reRegisteredStateResponse.json() as {
+      liveTrading?: { effective?: boolean; policy?: { qaApprovedAt?: string | null; manualEnabled?: boolean } };
+    };
+    assert.equal(reRegisteredStateResponse.status, 200);
+    assert.equal(reRegisteredState.liveTrading?.effective, false);
+    assert.equal(reRegisteredState.liveTrading?.policy?.qaApprovedAt, null);
+    assert.equal(reRegisteredState.liveTrading?.policy?.manualEnabled, false);
+
+    await withMockFetch(readonlyPrecheckResponses(), async () => {
+      const response = await handleLocalEngineRequest(new Request(
+        "http://127.0.0.1:38771/api/local/crypto-exchanges/upbit/live-trading/qa",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ confirmation: "코인 실거래 QA 승인" }),
+        },
+      ));
+      assert.equal(response.status, 200);
+    });
+    const reEnableResponse = await handleLocalEngineRequest(new Request(
+      "http://127.0.0.1:38771/api/local/crypto-exchanges/upbit/live-trading",
+      {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled: true, confirmation: "코인 실거래 수동 주문 해제" }),
+      },
+    ));
+    assert.equal(reEnableResponse.status, 200);
+
+    let preview: { id: string; confirmationText: string } | undefined;
+    await withMockFetch(readonlyPrecheckResponses(), async (calls) => {
+      const response = await handleLocalEngineRequest(livePrecheckRequest());
+      assert.equal(response.status, 200);
+      const payload = await response.json() as {
+        submitReady?: boolean;
+        preview?: { id?: string; confirmationText?: string };
+        orderSubmissionAttempted?: boolean;
+      };
+      assert.equal(payload.submitReady, true);
+      assert.equal(payload.orderSubmissionAttempted, false);
+      assert.ok(payload.preview?.id);
+      assert.ok(payload.preview?.confirmationText);
+      preview = payload.preview?.id && payload.preview.confirmationText
+        ? { id: payload.preview.id, confirmationText: payload.preview.confirmationText }
+        : undefined;
+      assert.equal(calls.some((call) => call.url.endsWith("/v1/orders") && call.init?.method === "POST"), false);
+    });
+    assert.ok(preview);
+
+    await withMockFetch([...readonlyPrecheckResponses(), Response.json({ uuid: "upbit-live-order-1", identifier: "ignored" }, { status: 201 })], async (calls) => {
+      const response = await handleLocalEngineRequest(new Request(
+        "http://127.0.0.1:38771/api/local/crypto-exchanges/upbit/orders/live-submit",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ previewId: preview?.id, confirmation: preview?.confirmationText }),
+        },
+      ));
+      assert.equal(response.status, 201);
+      const payload = await response.json() as { status?: string; orderSubmissionAttempted?: boolean; attempt?: { status?: string; brokerOrderId?: string } };
+      assert.equal(payload.status, "submitted");
+      assert.equal(payload.orderSubmissionAttempted, true);
+      assert.equal(payload.attempt?.status, "submitted");
+      assert.equal(payload.attempt?.brokerOrderId, "upbit-live-order-1");
+      assert.equal(calls.filter((call) => call.url.endsWith("/v1/orders") && call.init?.method === "POST").length, 1);
+    });
+
+    let unknownPreview: { id: string; confirmationText: string } | undefined;
+    await withMockFetch(readonlyPrecheckResponses(), async () => {
+      const response = await handleLocalEngineRequest(livePrecheckRequest());
+      assert.equal(response.status, 200);
+      const payload = await response.json() as { preview?: { id?: string; confirmationText?: string } };
+      unknownPreview = payload.preview?.id && payload.preview.confirmationText
+        ? { id: payload.preview.id, confirmationText: payload.preview.confirmationText }
+        : undefined;
+    });
+    assert.ok(unknownPreview);
+
+    await withMockFetch([...readonlyPrecheckResponses(), jsonResponse({ error: { name: "too_many_requests" } }, { status: 429 })], async (calls) => {
+      const response = await handleLocalEngineRequest(new Request(
+        "http://127.0.0.1:38771/api/local/crypto-exchanges/upbit/orders/live-submit",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ previewId: unknownPreview?.id, confirmation: unknownPreview?.confirmationText }),
+        },
+      ));
+      assert.equal(response.status, 202);
+      const payload = await response.json() as { status?: string; attempt?: { status?: string } };
+      assert.equal(payload.status, "unknown");
+      assert.equal(payload.attempt?.status, "unknown");
+      assert.equal(calls.filter((call) => call.url.endsWith("/v1/orders") && call.init?.method === "POST").length, 1);
+    });
+
+    await withMockFetch([Response.json({ uuid: "upbit-live-order-unknown", identifier: "reconciled" })], async (calls) => {
+      const response = await handleLocalEngineRequest(new Request(
+        "http://127.0.0.1:38771/api/local/crypto-exchanges/upbit/live-trading/reconcile",
+        { method: "POST" },
+      ));
+      assert.equal(response.status, 200);
+      const payload = await response.json() as { status?: string; attempt?: { status?: string; brokerOrderId?: string } };
+      assert.equal(payload.status, "reconciled");
+      assert.equal(payload.attempt?.status, "reconciled");
+      assert.equal(payload.attempt?.brokerOrderId, "upbit-live-order-unknown");
+      assert.match(calls[0]?.url ?? "", /\/v1\/order\?identifier=/);
+      assert.equal(calls[0]?.init?.method, "GET");
+    });
+  } finally {
+    if (previousUserId === undefined) delete process.env.STOCK_ANALYSIS_LOCAL_USER_ID;
+    else process.env.STOCK_ANALYSIS_LOCAL_USER_ID = previousUserId;
+  }
+});
+
 test("local engine server logs sanitized request status", async () => {
   const messages: string[] = [];
   const originalLog = console.log;
