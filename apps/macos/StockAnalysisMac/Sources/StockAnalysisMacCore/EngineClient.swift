@@ -120,9 +120,9 @@ public struct EngineClient: Sendable {
         return try decoder.decode(LocalLiveTradingResponse.self, from: data)
     }
 
-    public func approveLocalLiveTradingQA(confirmation: String) async throws -> LocalLiveTradingResponse {
+    public func consentLocalLiveTrading(confirmation: String) async throws -> LocalLiveTradingResponse {
         let data = try await postJSON(
-            "/api/local/live-trading/qa",
+            "/api/local/live-trading/consent",
             body: LocalLiveTradingConfirmationPayload(confirmation: confirmation)
         )
         return try decoder.decode(LocalLiveTradingResponse.self, from: data)
@@ -208,6 +208,10 @@ public struct EngineClient: Sendable {
         try await getJSON("/api/local/crypto-exchanges")
     }
 
+    public func realPortfolio(forceRefresh: Bool = false) async throws -> RealPortfolioResponseView {
+        try await getJSON("/api/local/portfolio/real\(forceRefresh ? "?refresh=1" : "")")
+    }
+
     public func registerCryptoCredential(exchange: String, accessKey: String, secretKey: String) async throws -> CryptoCredentialResponse {
         let data = try await postJSON(
             "/api/local/crypto-exchanges/\(exchange)/credentials",
@@ -233,48 +237,55 @@ public struct EngineClient: Sendable {
         return try decoder.decode(CryptoOrderPrecheckResponse.self, from: data)
     }
 
-    public func cryptoManualLiveTrading() async throws -> CryptoManualLiveTradingResponse {
-        try await getJSON("/api/local/crypto-exchanges/upbit/live-trading")
+    public func cryptoManualLiveTrading(exchange: String) async throws -> CryptoManualLiveTradingResponse {
+        try await getJSON("/api/local/crypto-exchanges/\(exchange)/live-trading")
     }
 
-    public func approveCryptoManualLiveTradingQA(confirmation: String) async throws -> CryptoManualLiveTradingResponse {
+    public func consentCryptoLiveTrading(exchange: String, confirmation: String) async throws -> CryptoManualLiveTradingResponse {
         let data = try await postJSON(
-            "/api/local/crypto-exchanges/upbit/live-trading/qa",
+            "/api/local/crypto-exchanges/\(exchange)/live-trading/consent",
             body: LocalLiveTradingConfirmationPayload(confirmation: confirmation)
         )
         return try decoder.decode(CryptoManualLiveTradingResponse.self, from: data)
     }
 
-    public func updateCryptoManualLiveTrading(enabled: Bool, confirmation: String? = nil) async throws -> CryptoManualLiveTradingResponse {
+    public func updateCryptoLiveTrading(exchange: String, mode: String = "manual", enabled: Bool, confirmation: String? = nil) async throws -> CryptoManualLiveTradingResponse {
         let data = try await putJSON(
-            "/api/local/crypto-exchanges/upbit/live-trading",
-            body: LocalLiveTradingTogglePayload(enabled: enabled, confirmation: confirmation)
+            "/api/local/crypto-exchanges/\(exchange)/live-trading",
+            body: CryptoLiveTradingTogglePayload(mode: mode, enabled: enabled, confirmation: confirmation)
         )
         return try decoder.decode(CryptoManualLiveTradingResponse.self, from: data)
     }
 
-    public func cryptoManualLiveOrderPrecheck(market: String, side: String, volume: Double, price: Double) async throws -> CryptoManualOrderPrecheckResponse {
+    public func cryptoManualLiveOrderPrecheck(exchange: String, market: String, side: String, volume: Double, price: Double) async throws -> CryptoManualOrderPrecheckResponse {
         let data = try await postJSON(
-            "/api/local/crypto-exchanges/upbit/orders/live-precheck",
+            "/api/local/crypto-exchanges/\(exchange)/orders/live-precheck",
             body: CryptoOrderPrecheckPayload(market: market, side: side, volume: volume, price: price)
         )
         return try decoder.decode(CryptoManualOrderPrecheckResponse.self, from: data)
     }
 
-    public func submitCryptoManualLiveOrder(previewId: String, confirmation: String) async throws -> CryptoManualOrderSubmissionResponse {
+    public func submitCryptoManualLiveOrder(exchange: String, previewId: String, confirmation: String) async throws -> CryptoManualOrderSubmissionResponse {
         let data = try await postJSON(
-            "/api/local/crypto-exchanges/upbit/orders/live-submit",
+            "/api/local/crypto-exchanges/\(exchange)/orders/live-submit",
             body: LocalLiveOrderSubmitPayload(previewId: previewId, confirmation: confirmation)
         )
         return try decoder.decode(CryptoManualOrderSubmissionResponse.self, from: data)
     }
 
-    public func reconcileCryptoManualLiveOrder() async throws -> CryptoManualOrderSubmissionResponse {
+    public func reconcileCryptoManualLiveOrder(exchange: String) async throws -> CryptoManualOrderSubmissionResponse {
         let data = try await postJSON(
-            "/api/local/crypto-exchanges/upbit/live-trading/reconcile",
+            "/api/local/crypto-exchanges/\(exchange)/live-trading/reconcile",
             body: [:] as [String: String]
         )
         return try decoder.decode(CryptoManualOrderSubmissionResponse.self, from: data)
+    }
+
+    public func cancelAllCryptoOpenOrders(exchange: String, confirmation: String) async throws -> Data {
+        try await postJSON(
+            "/api/local/crypto-exchanges/\(exchange)/open-orders/cancel-all",
+            body: LocalLiveTradingConfirmationPayload(confirmation: confirmation)
+        )
     }
 
     public func registerBrokerCredential(clientId: String, clientSecret: String) async throws -> BrokerCredentialResponse {
@@ -730,6 +741,12 @@ private struct LocalOrderPrecheckPayload: Encodable {
 }
 
 private struct LocalLiveTradingTogglePayload: Encodable {
+    let enabled: Bool
+    let confirmation: String?
+}
+
+private struct CryptoLiveTradingTogglePayload: Encodable {
+    let mode: String
     let enabled: Bool
     let confirmation: String?
 }

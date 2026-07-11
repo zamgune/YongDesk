@@ -2,6 +2,31 @@ import AppKit
 import SwiftUI
 import StockAnalysisMacCore
 
+private enum BeginnerAssetsMode: String, CaseIterable, Identifiable {
+    case real
+    case paper
+
+    var id: String { rawValue }
+    var title: String { self == .real ? "실자산" : "모의계좌" }
+}
+
+private enum BeginnerAssetsProviderFilter: String, CaseIterable, Identifiable {
+    case all
+    case toss
+    case upbit
+    case bithumb
+
+    var id: String { rawValue }
+    var title: String {
+        switch self {
+        case .all: return "전체"
+        case .toss: return "Toss"
+        case .upbit: return "Upbit"
+        case .bithumb: return "Bithumb"
+        }
+    }
+}
+
 struct BeginnerAssetsWorkspace: View {
     @EnvironmentObject private var model: AppModel
     let selectedSymbol: String
@@ -9,6 +34,11 @@ struct BeginnerAssetsWorkspace: View {
     let assetClass: BeginnerAssetClass
     let onOpenAPIConnection: (BeginnerAPIConnectionProvider) -> Void
     let onOpenOrder: () -> Void
+    let onSelectRealPosition: (RealPortfolioPositionView) -> Void
+
+    @State private var mode: BeginnerAssetsMode = .real
+    @State private var providerFilter: BeginnerAssetsProviderFilter = .all
+    @State private var didResolveInitialMode = false
 
     private var selectedAccount: PaperTradingAccountView? {
         model.paperTradingState?.accounts[selectedSession]
@@ -22,51 +52,276 @@ struct BeginnerAssetsWorkspace: View {
         } ?? []
     }
 
+    private var visibleRealProviders: [RealPortfolioProviderView] {
+        let providers = model.realPortfolio?.providers ?? []
+        return providerFilter == .all
+            ? providers
+            : providers.filter { $0.provider == providerFilter.rawValue }
+    }
+
+    private var visibleRealTotals: [RealPortfolioCurrencyTotalView] {
+        let totals = model.realPortfolio?.totalsByCurrency ?? []
+        return providerFilter == .all
+            ? totals
+            : totals.filter { $0.provider == providerFilter.rawValue }
+    }
+
+    private var hasConnectedProvider: Bool {
+        model.realPortfolio?.providers.contains { $0.connectionStatus == "connected" } == true
+    }
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
-                HStack(alignment: .top) {
+                HStack(alignment: .top, spacing: 12) {
                     VStack(alignment: .leading, spacing: 5) {
                         Text("내 자산")
                             .font(.system(size: 26, weight: .bold))
-                        Text("통화가 다른 계좌는 합산하지 않고 세션별로 보여줍니다.")
+                        Text("실계좌와 모의계좌를 분리하고 공급자·통화별로 보여줍니다.")
                             .font(.caption)
                             .foregroundStyle(BeginnerPalette.muted)
                     }
                     Spacer()
                     Button("상태 새로고침") {
-                        Task { await model.refreshPaperTradingState() }
+                        Task {
+                            if mode == .real {
+                                await model.refreshRealPortfolio(forceRefresh: true)
+                            } else {
+                                await model.refreshPaperTradingState()
+                            }
+                        }
                     }
                     .buttonStyle(.bordered)
                     .accessibilityIdentifier("beginner-assets-refresh")
                 }
 
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 230), spacing: 12)], spacing: 12) {
+                Picker("자산 계좌 유형", selection: $mode) {
+                    ForEach(BeginnerAssetsMode.allCases) { item in
+                        Text(item.title).tag(item)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .accessibilityIdentifier("beginner-assets-mode")
+
+                if mode == .real {
+                    realAssetsContent
+                } else {
+                    paperAssetsContent
+                }
+            }
+            .padding(20)
+        }
+        .background(BeginnerPalette.background)
+        .accessibilityIdentifier("beginner-assets-workspace")
+        .task {
+            await model.refreshRealPortfolio()
+            if !didResolveInitialMode {
+                mode = hasConnectedProvider ? .real : .paper
+                didResolveInitialMode = true
+            }
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(30))
+                guard !Task.isCancelled else { return }
+                if mode == .real {
+                    await model.refreshRealPortfolio()
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var realAssetsContent: some View {
+        Picker("실자산 공급자", selection: $providerFilter) {
+            ForEach(BeginnerAssetsProviderFilter.allCases) { item in
+                Text(item.title).tag(item)
+            }
+        }
+        .pickerStyle(.segmented)
+        .accessibilityIdentifier("beginner-assets-provider-filter")
+
+        HStack(spacing: 8) {
+            BeginnerStatusBadge("READ ONLY", color: BeginnerPalette.blue)
+            Text(model.realPortfolioMessage)
+                .font(.caption)
+                .foregroundStyle(BeginnerPalette.muted)
+            Spacer()
+            if let generatedAt = model.realPortfolio?.generatedAt {
+                Text("갱신 \(beginnerTimestamp(generatedAt))")
+                    .font(.caption2)
+                    .foregroundStyle(BeginnerPalette.muted)
+            }
+        }
+
+        if !visibleRealTotals.isEmpty {
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 220), spacing: 12)], spacing: 12) {
+                ForEach(visibleRealTotals) { total in
                     assetMetric(
-                        title: "\(selectedSession) 모의 현금",
-                        value: beginnerPrice(selectedAccount?.cash, currency: selectedAccount?.currency ?? defaultCurrency),
-                        detail: selectedAccount == nil
-                            ? "모의 주문 후 계좌 상태가 표시됩니다."
-                            : assetClass == .crypto
-                                ? "KR 주식·코인 paper 현금 공유 · 실현손익 \(beginnerPrice(selectedAccount?.realizedPnl, currency: selectedAccount?.currency ?? defaultCurrency))"
-                                : "실현손익 \(beginnerPrice(selectedAccount?.realizedPnl, currency: selectedAccount?.currency ?? defaultCurrency))"
-                    )
-                    assetMetric(
-                        title: "보유 포지션",
-                        value: "\(selectedPositions.count)개",
-                        detail: "현재 세션 기준"
-                    )
-                    assetMetric(
-                        title: "최근 주문",
-                        value: model.paperTradingState?.orders.first(where: {
-                            $0.session == selectedSession && (assetClass == .crypto ? $0.market == "CRYPTO" : $0.market != "CRYPTO")
-                        })?.status ?? "없음",
-                        detail: "PAPER ONLY"
+                        title: "\(providerTitle(total.provider)) · \(total.currency)",
+                        value: beginnerPrice(total.marketValue, currency: total.currency),
+                        detail: total.buyingPower.map { "주문 가능 \(beginnerPrice($0, currency: total.currency))" }
+                            ?? "주문 가능 금액 미제공"
                     )
                 }
+            }
+        }
 
-                BeginnerSurface {
-                    VStack(alignment: .leading, spacing: 12) {
+        ForEach(visibleRealProviders) { provider in
+            realProviderSection(provider)
+        }
+    }
+
+    @ViewBuilder
+    private func realProviderSection(_ provider: RealPortfolioProviderView) -> some View {
+        BeginnerSurface {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack {
+                    Text(providerTitle(provider.provider))
+                        .font(.headline)
+                    BeginnerStatusBadge(
+                        provider.connectionStatus == "connected" ? "연결됨" : provider.connectionStatus == "error" ? "오류" : "미연결",
+                        color: provider.connectionStatus == "connected" ? BeginnerPalette.green : provider.connectionStatus == "error" ? BeginnerPalette.red : BeginnerPalette.amber
+                    )
+                    if provider.stale { BeginnerStatusBadge("STALE", color: BeginnerPalette.amber) }
+                    if provider.partial { BeginnerStatusBadge("일부만 표시", color: BeginnerPalette.amber) }
+                    Spacer()
+                    Text("보유 \(provider.positions.count) · 미체결 \(provider.openOrders.count)")
+                        .font(.caption)
+                        .foregroundStyle(BeginnerPalette.muted)
+                }
+
+                if provider.connectionStatus == "disconnected" {
+                    Text("API를 연결하면 실제 잔고와 보유 종목을 읽기 전용으로 표시합니다.")
+                        .font(.caption)
+                        .foregroundStyle(BeginnerPalette.muted)
+                    Button("\(providerTitle(provider.provider)) API 연결") {
+                        if let connectionProvider = connectionProvider(provider.provider) {
+                            onOpenAPIConnection(connectionProvider)
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                } else {
+                    ForEach(provider.accounts) { account in
+                        VStack(alignment: .leading, spacing: 5) {
+                            Text(account.label)
+                                .font(.subheadline.weight(.semibold))
+                            ForEach(account.balances) { balance in
+                                HStack {
+                                    Text(balance.currency)
+                                    Spacer()
+                                    if let total = balance.total {
+                                        Text("잔고 \(beginnerPrice(total, currency: balance.currency))")
+                                    }
+                                    if let buyingPower = balance.buyingPower {
+                                        Text("주문 가능 \(beginnerPrice(buyingPower, currency: balance.currency))")
+                                            .foregroundStyle(BeginnerPalette.muted)
+                                    }
+                                }
+                                .font(.caption)
+                            }
+                        }
+                        .padding(.vertical, 4)
+                    }
+
+                    if provider.positions.isEmpty {
+                        Text("현재 보유 종목이 없습니다.")
+                            .font(.caption)
+                            .foregroundStyle(BeginnerPalette.muted)
+                    } else {
+                        ForEach(provider.positions) { position in
+                            Button {
+                                onSelectRealPosition(position)
+                            } label: {
+                                HStack(spacing: 12) {
+                                    VStack(alignment: .leading, spacing: 3) {
+                                        Text(position.name ?? position.symbol)
+                                            .font(.subheadline.weight(.semibold))
+                                        Text("\(position.symbol) · \(position.accountLabel)")
+                                            .font(.caption.monospaced())
+                                            .foregroundStyle(BeginnerPalette.muted)
+                                    }
+                                    Spacer()
+                                    VStack(alignment: .trailing, spacing: 3) {
+                                        Text("수량 \(quantityText(position.quantity))")
+                                        if position.lockedQuantity > 0 {
+                                            Text("잠금 \(quantityText(position.lockedQuantity))")
+                                                .foregroundStyle(BeginnerPalette.amber)
+                                        }
+                                    }
+                                    .font(.caption)
+                                    VStack(alignment: .trailing, spacing: 3) {
+                                        Text(position.valuationSupported
+                                             ? beginnerPrice(position.marketValue, currency: position.currency)
+                                             : "평가 미지원")
+                                            .font(.subheadline.weight(.semibold))
+                                        if let profitLoss = position.profitLoss {
+                                            Text("\(profitLoss >= 0 ? "+" : "")\(beginnerPrice(profitLoss, currency: position.currency))")
+                                                .font(.caption)
+                                                .foregroundStyle(profitLoss >= 0 ? BeginnerPalette.green : BeginnerPalette.red)
+                                        }
+                                    }
+                                    .frame(width: 145, alignment: .trailing)
+                                }
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityIdentifier("beginner-real-position-\(position.id)")
+                        }
+                    }
+
+                    if !provider.openOrders.isEmpty {
+                        Divider().overlay(BeginnerPalette.line)
+                        Text("미체결 주문")
+                            .font(.subheadline.weight(.semibold))
+                        ForEach(provider.openOrders) { order in
+                            HStack {
+                                Text(order.symbol)
+                                    .font(.caption.monospaced())
+                                Text(order.side == "buy" ? "매수" : "매도")
+                                Spacer()
+                                Text("\(quantityText(order.filledQuantity))/\(quantityText(order.quantity))")
+                                Text(order.status)
+                                    .foregroundStyle(BeginnerPalette.muted)
+                            }
+                            .font(.caption)
+                        }
+                    }
+                }
+
+                if let error = provider.error {
+                    Text(error)
+                        .font(.caption2)
+                        .foregroundStyle(BeginnerPalette.red)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var paperAssetsContent: some View {
+        LazyVGrid(columns: [GridItem(.adaptive(minimum: 230), spacing: 12)], spacing: 12) {
+            assetMetric(
+                title: "\(selectedSession) 모의 현금",
+                value: beginnerPrice(selectedAccount?.cash, currency: selectedAccount?.currency ?? defaultCurrency),
+                detail: selectedAccount == nil
+                    ? "모의 주문 후 계좌 상태가 표시됩니다."
+                    : assetClass == .crypto
+                        ? "KR 주식·코인 paper 현금 공유 · 실현손익 \(beginnerPrice(selectedAccount?.realizedPnl, currency: selectedAccount?.currency ?? defaultCurrency))"
+                        : "실현손익 \(beginnerPrice(selectedAccount?.realizedPnl, currency: selectedAccount?.currency ?? defaultCurrency))"
+            )
+            assetMetric(title: "보유 포지션", value: "\(selectedPositions.count)개", detail: "현재 세션 기준")
+            assetMetric(
+                title: "최근 주문",
+                value: model.paperTradingState?.orders.first(where: {
+                    $0.session == selectedSession && (assetClass == .crypto ? $0.market == "CRYPTO" : $0.market != "CRYPTO")
+                })?.status ?? "없음",
+                detail: "PAPER ONLY"
+            )
+        }
+
+        BeginnerSurface {
+            VStack(alignment: .leading, spacing: 12) {
                         HStack {
                             Text("보유 종목")
                                 .font(.headline)
@@ -139,13 +394,8 @@ struct BeginnerAssetsWorkspace: View {
                                 }
                             }
                         }
-                    }
-                }
             }
-            .padding(20)
         }
-        .background(BeginnerPalette.background)
-        .accessibilityIdentifier("beginner-assets-workspace")
     }
 
     private func assetMetric(title: String, value: String, detail: String) -> some View {
@@ -169,6 +419,24 @@ struct BeginnerAssetsWorkspace: View {
 
     private func quantityText(_ value: Double) -> String {
         value.rounded() == value ? Int(value).formatted() : value.formatted(.number.precision(.fractionLength(3)))
+    }
+
+    private func providerTitle(_ provider: String) -> String {
+        switch provider {
+        case "toss": return "Toss"
+        case "upbit": return "Upbit"
+        case "bithumb": return "Bithumb"
+        default: return provider
+        }
+    }
+
+    private func connectionProvider(_ provider: String) -> BeginnerAPIConnectionProvider? {
+        switch provider {
+        case "toss": return .toss
+        case "upbit": return .upbit
+        case "bithumb": return .bithumb
+        default: return nil
+        }
     }
 }
 
@@ -1035,8 +1303,10 @@ private struct BeginnerAPIConnectionWorkspace: View {
     @State private var cryptoVolume = "0.001"
     @State private var cryptoPrice = "100000000"
     @State private var credentialSaveFailure: String?
-    @State private var cryptoQaConfirmation = ""
+    @State private var cryptoConsentConfirmation = ""
     @State private var cryptoManualConfirmation = ""
+    @State private var cryptoAutomationConfirmation = ""
+    @State private var cryptoCancelConfirmation = ""
     @State private var cryptoOrderConfirmation = ""
 
     private var credential: BrokerCredentialView? {
@@ -1183,9 +1453,7 @@ private struct BeginnerAPIConnectionWorkspace: View {
                         .stroke(BeginnerPalette.line)
                 }
 
-                Text(selectedProvider == .upbit
-                     ? "Upbit는 읽기 전용 QA를 통과한 이 Mac에서만 수동 지정가 주문을 별도로 열 수 있습니다. 기본 OFF이며 자동매매·시장가·Bithumb 실주문은 계속 차단됩니다."
-                     : "API 연결은 선택 사항입니다. Toss는 별도 실거래 정책을 따르며, Bithumb은 연결·조회·사전검증과 paper 자동화만 제공합니다.")
+                Text("\(selectedProvider.shortTitle)는 API 등록 때 readiness를 자동 점검합니다. KRW 수동·자동 지정가는 각각 기본 OFF이며 시장가·출금은 지원하지 않습니다.")
                     .font(.caption)
                     .foregroundStyle(BeginnerPalette.amber)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -1407,42 +1675,42 @@ private struct BeginnerAPIConnectionWorkspace: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
 
-            if selectedProvider == .upbit {
-                Divider().overlay(BeginnerPalette.line)
-                upbitManualLiveTradingContent
-            }
+            Divider().overlay(BeginnerPalette.line)
+            cryptoLiveTradingContent
         }
         .task(id: selectedProvider) {
-            if selectedProvider == .upbit {
-                await model.refreshCryptoLiveTrading()
-            }
+            await model.refreshCryptoLiveTrading(exchange: selectedProvider.rawValue)
         }
     }
 
-    private var upbitManualLiveTradingContent: some View {
+    private var cryptoLiveTradingContent: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 8) {
-                BeginnerStatusBadge("Upbit 수동 지정가", color: BeginnerPalette.blue)
+                BeginnerStatusBadge("\(selectedProvider.shortTitle) KRW 지정가", color: BeginnerPalette.blue)
                 BeginnerStatusBadge(model.cryptoLiveTrading?.manualEnabled == true ? "수동 토글 ON" : "기본 OFF", color: model.cryptoLiveTrading?.manualEnabled == true ? BeginnerPalette.green : BeginnerPalette.amber)
                 if model.cryptoLiveTrading?.policy.unknownLock != nil {
                     BeginnerStatusBadge("결과 불명 잠금", color: BeginnerPalette.red)
                 }
             }
 
-            Text("자동매매·시장가·Bithumb 실주문은 지원하지 않습니다. Upbit 수동 지정가만 읽기 전용 QA, 재입력 토글, 사전검증, 주문 요약 재입력을 모두 통과해야 제출됩니다.")
+            Text("API 등록 때 읽기 전용 readiness를 자동 점검합니다. 시장가·출금은 지원하지 않으며, 실거래 이용 동의와 거래소별 토글, 주문별 요약 재입력이 모두 필요합니다.")
                 .font(.caption)
                 .foregroundStyle(BeginnerPalette.muted)
                 .fixedSize(horizontal: false, vertical: true)
 
-            if model.cryptoLiveTrading?.policy.qaApprovedAt == nil {
+            if model.cryptoLiveTrading?.policy.readinessVerifiedAt == nil {
+                Text("자동 읽기 전용 점검 미완료 · API를 다시 등록하거나 준비 점검을 실행하세요.")
+                    .font(.caption)
+                    .foregroundStyle(BeginnerPalette.amber)
+            } else if model.cryptoLiveTrading?.policy.userConsentAt == nil {
                 HStack(spacing: 8) {
-                    TextField("코인 실거래 QA 승인", text: $cryptoQaConfirmation)
+                    TextField("코인 실거래 위험을 확인했습니다", text: $cryptoConsentConfirmation)
                         .textFieldStyle(.roundedBorder)
-                    Button("읽기 전용 QA 후 승인") {
-                        Task { await model.approveCryptoManualLiveTradingQA(confirmation: cryptoQaConfirmation) }
+                    Button("실거래 이용 동의") {
+                        Task { await model.consentCryptoLiveTrading(exchange: selectedProvider.rawValue, confirmation: cryptoConsentConfirmation) }
                     }
                     .buttonStyle(.bordered)
-                    .disabled(cryptoQaConfirmation != "코인 실거래 QA 승인")
+                    .disabled(cryptoConsentConfirmation != "코인 실거래 위험을 확인했습니다")
                 }
             }
 
@@ -1451,16 +1719,47 @@ private struct BeginnerAPIConnectionWorkspace: View {
                     .textFieldStyle(.roundedBorder)
                     .disabled(model.cryptoLiveTrading?.manualEnabled == true)
                 Button("수동 실거래 켜기") {
-                    Task { await model.setCryptoManualLiveTrading(enabled: true, confirmation: cryptoManualConfirmation) }
+                    Task { await model.setCryptoLiveTrading(exchange: selectedProvider.rawValue, enabled: true, confirmation: cryptoManualConfirmation) }
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(BeginnerPalette.red)
                 .disabled(model.cryptoLiveTrading?.manualEnabled == true || cryptoManualConfirmation != "코인 실거래 수동 주문 해제")
                 Button("수동 실거래 끄기") {
-                    Task { await model.setCryptoManualLiveTrading(enabled: false) }
+                    Task { await model.setCryptoLiveTrading(exchange: selectedProvider.rawValue, enabled: false) }
                 }
                 .buttonStyle(.bordered)
                 .disabled(model.cryptoLiveTrading?.manualEnabled != true)
+            }
+
+            HStack(spacing: 8) {
+                TextField("코인 지정가 자동매매 해제", text: $cryptoAutomationConfirmation)
+                    .textFieldStyle(.roundedBorder)
+                    .disabled(model.cryptoLiveTrading?.policy.automationEnabled == true)
+                Button("자동매매 켜기") {
+                    Task { await model.setCryptoLiveTrading(exchange: selectedProvider.rawValue, mode: "automation", enabled: true, confirmation: cryptoAutomationConfirmation) }
+                }
+                .buttonStyle(.bordered)
+                .disabled(model.cryptoLiveTrading?.policy.automationEnabled == true || cryptoAutomationConfirmation != "코인 지정가 자동매매 해제")
+                Button("자동매매 끄기") {
+                    Task { await model.setCryptoLiveTrading(exchange: selectedProvider.rawValue, mode: "automation", enabled: false) }
+                }
+                .buttonStyle(.bordered)
+                .disabled(model.cryptoLiveTrading?.policy.automationEnabled != true)
+            }
+            Text("자동화 해제: 거래소 조회로 확인된 수동 주문 \(model.cryptoLiveTrading?.policy.manualConfirmedOrderCount ?? 0)/5 · 재시작 재조정·kill switch 검증 필요")
+                .font(.caption2)
+                .foregroundStyle(BeginnerPalette.muted)
+
+            if model.cryptoLiveTrading?.attempts.contains(where: { ["submitted", "open", "partially_filled"].contains($0.status) }) == true {
+                HStack(spacing: 8) {
+                    TextField("\(selectedProvider.rawValue) 미체결 일괄 취소", text: $cryptoCancelConfirmation)
+                        .textFieldStyle(.roundedBorder)
+                    Button("미체결 일괄 취소", role: .destructive) {
+                        Task { await model.cancelAllCryptoOpenOrders(exchange: selectedProvider.rawValue, confirmation: cryptoCancelConfirmation) }
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(cryptoCancelConfirmation != "\(selectedProvider.rawValue) 미체결 일괄 취소")
+                }
             }
 
             HStack(spacing: 8) {
@@ -1469,6 +1768,7 @@ private struct BeginnerAPIConnectionWorkspace: View {
                         isRunningAdvancedCheck = true
                         cryptoOrderConfirmation = ""
                         await model.runCryptoManualLiveOrderPrecheck(
+                            exchange: selectedProvider.rawValue,
                             market: cryptoMarket.uppercased(),
                             side: cryptoSide,
                             volume: Double(cryptoVolume) ?? 0,
@@ -1482,7 +1782,7 @@ private struct BeginnerAPIConnectionWorkspace: View {
 
                 if model.cryptoLiveTrading?.policy.unknownLock != nil {
                     Button("결과 불명 주문 재조정") {
-                        Task { await model.reconcileCryptoManualLiveOrder() }
+                        Task { await model.reconcileCryptoManualLiveOrder(exchange: selectedProvider.rawValue) }
                     }
                     .buttonStyle(.bordered)
                 }
@@ -1501,15 +1801,15 @@ private struct BeginnerAPIConnectionWorkspace: View {
                     TextField("표시된 주문 요약 입력", text: $cryptoOrderConfirmation)
                         .textFieldStyle(.roundedBorder)
                         .disabled(!precheck.submitReady)
-                    Button("최종 Upbit 실주문 제출") {
+                    Button("최종 \(selectedProvider.shortTitle) 실주문 제출") {
                         guard let preview = precheck.preview else { return }
-                        Task { await model.submitCryptoManualLiveOrder(previewId: preview.id, confirmation: cryptoOrderConfirmation) }
+                        Task { await model.submitCryptoManualLiveOrder(exchange: selectedProvider.rawValue, previewId: preview.id, confirmation: cryptoOrderConfirmation) }
                     }
                     .buttonStyle(.borderedProminent)
                     .tint(BeginnerPalette.red)
                     .foregroundStyle(BeginnerPalette.backgroundDeep)
                     .disabled(!precheck.submitReady || cryptoOrderConfirmation != precheck.confirmationText)
-                    .accessibilityIdentifier("beginner-upbit-live-order-submit")
+                    .accessibilityIdentifier("beginner-crypto-live-order-submit")
                 }
                 .padding(10)
                 .background(BeginnerPalette.backgroundDeep.opacity(0.48), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
@@ -1581,9 +1881,7 @@ private struct BeginnerAPIConnectionWorkspace: View {
             await model.refreshBrokerCredential()
         } else {
             await model.refreshCryptoExchanges()
-            if selectedProvider == .upbit {
-                await model.refreshCryptoLiveTrading()
-            }
+            await model.refreshCryptoLiveTrading(exchange: selectedProvider.rawValue)
         }
     }
 
@@ -1845,7 +2143,7 @@ struct BeginnerPaperOrderDrawer: View {
 
 struct BeginnerLiveTradingSettingsCard: View {
     @EnvironmentObject private var model: AppModel
-    @State private var qaConfirmation = ""
+    @State private var liveConsentConfirmation = ""
     @State private var manualConfirmation = ""
     @State private var automationConfirmation = ""
 
@@ -1859,7 +2157,7 @@ struct BeginnerLiveTradingSettingsCard: View {
                     VStack(alignment: .leading, spacing: 4) {
                         Text("Toss 실거래 운영")
                             .font(.headline)
-                        Text("이 Mac 한 대와 선택 계좌만 대상으로 합니다. Upbit 수동 지정가는 연결 관리의 별도 QA 경계를 따르며, Bithumb과 모든 코인 자동매매는 paper-only입니다.")
+                        Text("이 Mac 한 대와 선택 계좌만 대상으로 합니다. API 등록·계좌 변경 시 readiness와 실거래 토글은 자동으로 초기화됩니다.")
                             .font(.caption)
                             .foregroundStyle(BeginnerPalette.muted)
                     }
@@ -1874,18 +2172,22 @@ struct BeginnerLiveTradingSettingsCard: View {
                 }
 
                 VStack(alignment: .leading, spacing: 7) {
-                    Text("1. 읽기 전용 QA 승인")
+                    Text("1. 자동 읽기 전용 점검")
                         .font(.subheadline.weight(.semibold))
-                    Text("Toss 토큰·선택 계좌·005930 보유·AAPL 미체결 조회가 성공한 현재 설치/계좌에만 승인합니다. \"실거래 QA 승인\"을 입력하세요.")
+                    Text(policy?.readinessVerifiedAt == nil
+                         ? "API 등록 또는 거래 계좌 선택 뒤 계좌·전체 보유·KRW/USD 주문 가능 금액·미체결 주문을 자동 확인합니다."
+                         : "계좌·보유·주문 가능 금액·미체결 주문 읽기 전용 점검이 완료되었습니다.")
                         .font(.caption)
-                        .foregroundStyle(BeginnerPalette.muted)
-                    TextField("실거래 QA 승인", text: $qaConfirmation)
-                        .textFieldStyle(.roundedBorder)
-                    Button("QA 읽기전용 점검 후 승인") {
-                        Task { await model.approveLocalLiveTradingQA(confirmation: qaConfirmation) }
+                        .foregroundStyle(policy?.readinessVerifiedAt == nil ? BeginnerPalette.amber : BeginnerPalette.green)
+                    if policy?.readinessVerifiedAt != nil && policy?.userConsentAt == nil {
+                        TextField("주식 실거래 위험을 확인했습니다", text: $liveConsentConfirmation)
+                            .textFieldStyle(.roundedBorder)
+                        Button("실거래 이용 동의") {
+                            Task { await model.consentLocalLiveTrading(confirmation: liveConsentConfirmation) }
+                        }
+                        .buttonStyle(.bordered)
+                        .disabled(liveConsentConfirmation != "주식 실거래 위험을 확인했습니다")
                     }
-                    .buttonStyle(.bordered)
-                    .disabled(qaConfirmation != "실거래 QA 승인")
                 }
 
                 Divider().overlay(BeginnerPalette.line)
@@ -1895,9 +2197,9 @@ struct BeginnerLiveTradingSettingsCard: View {
                         Text("2. 수동 지정가 주문")
                             .font(.subheadline.weight(.semibold))
                         Spacer()
-                        Text(policy?.manualQaApprovedAt == nil ? "QA 미승인" : "QA 승인됨")
+                        Text(policy?.userConsentAt == nil ? "이용 동의 필요" : "이용 동의됨")
                             .font(.caption2.weight(.semibold))
-                            .foregroundStyle(policy?.manualQaApprovedAt == nil ? BeginnerPalette.amber : BeginnerPalette.green)
+                            .foregroundStyle(policy?.userConsentAt == nil ? BeginnerPalette.amber : BeginnerPalette.green)
                     }
                     Text("매수는 건당 10만원, KST 일일 제출 누적 30만원입니다. 취소·매도로 한도가 복구되지 않습니다.")
                         .font(.caption)

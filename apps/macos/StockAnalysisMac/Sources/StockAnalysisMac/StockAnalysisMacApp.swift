@@ -35,8 +35,22 @@ struct StockAnalysisMacApp: App {
                 Button("진단 로그 열기") {
                     NotificationCenter.default.post(name: .openBeginnerSupportLog, object: nil)
                 }
+                if Self.developerModeEnabled {
+                    Divider()
+                    Button("개발자 QA") {
+                        NotificationCenter.default.post(name: .openBeginnerSupportSelfTest, object: nil)
+                    }
+                }
             }
         }
+    }
+
+    private static var developerModeEnabled: Bool {
+#if DEBUG
+        true
+#else
+        ProcessInfo.processInfo.environment["STOCK_ANALYSIS_DEVELOPER_MODE"] == "1"
+#endif
     }
 }
 
@@ -56,6 +70,8 @@ final class AppModel: ObservableObject {
     @Published var redditCredentialMessage = "Reddit OAuth는 선택 사항입니다. 연결하면 미국 종목의 게시글·댓글 근거를 함께 수집합니다."
     @Published var paperTradingState: PaperTradingStateView?
     @Published var paperTradingMessage = "모의 주문을 실행하면 paper 계좌와 포지션이 여기에 표시됩니다."
+    @Published var realPortfolio: RealPortfolioResponseView?
+    @Published var realPortfolioMessage = "연결된 API의 실제 자산을 읽기 전용으로 불러옵니다."
     @Published var terminalDashboard: TerminalDashboardSnapshot?
     @Published var latestMarketAnalysis: MarketAnalysisSnapshot?
     @Published var latestChartAnalysis: MarketAnalysisSnapshot?
@@ -77,7 +93,7 @@ final class AppModel: ObservableObject {
     @Published var tossReadiness: TossReadinessResponse?
     @Published var tossReadinessMessage = "운영 준비 점검은 저장된 Toss credential로 토큰/계좌/보유/미체결 조회를 주문 없이 확인합니다."
     @Published var localLiveTrading: LocalLiveTradingState?
-    @Published var localLiveTradingMessage = "Toss 실거래는 기본 OFF입니다. 현재 Mac·선택 계좌의 QA와 별도 수동/자동화 토글을 모두 통과해야 합니다."
+    @Published var localLiveTradingMessage = "Toss 실거래는 기본 OFF입니다. 자동 readiness·이용 동의·별도 수동/자동화 토글을 모두 통과해야 합니다."
     @Published var killSwitchState: LocalKillSwitchState?
     @Published var killSwitchMessage = "긴급 중지는 모의 주문과 자동화 큐를 sidecar에서 차단합니다."
     @Published var workerControlState: LocalWorkerControlState?
@@ -212,6 +228,7 @@ final class AppModel: ObservableObject {
             await refreshWorkerControl()
             await refreshAutomationScheduler()
             await refreshCryptoExchanges()
+            await refreshRealPortfolio()
             await refreshPaperTradingState()
             await refreshStrategyConfigs()
             await refreshWatchlist()
@@ -1063,6 +1080,20 @@ final class AppModel: ObservableObject {
         }
     }
 
+    func refreshRealPortfolio(forceRefresh: Bool = false) async {
+        do {
+            let response = try await client.realPortfolio(forceRefresh: forceRefresh)
+            realPortfolio = response
+            let connected = response.providers.filter { $0.connectionStatus == "connected" }.count
+            let warnings = response.providers.filter { $0.partial || $0.stale || $0.error != nil }.count
+            realPortfolioMessage = warnings > 0
+                ? "실자산 갱신 · 연결 \(connected)곳 · 확인 필요 \(warnings)곳"
+                : "실자산 갱신 · 연결 \(connected)곳 · 주문 제출 없음"
+        } catch {
+            realPortfolioMessage = "실자산 조회 실패: \(Self.errorMessage(error))"
+        }
+    }
+
     func resetPaperTradingState(symbol: String, session: String) async -> String {
         do {
             let response = try await client.resetPaperTradingState()
@@ -1360,15 +1391,15 @@ final class AppModel: ObservableObject {
         return "연속 자동 실행 ON · \(state.intervalSeconds)초 주기 · 다음 \(nextRun) · \(last)"
     }
 
-    func approveLocalLiveTradingQA(confirmation: String) async {
+    func consentLocalLiveTrading(confirmation: String) async {
         do {
-            let response = try await client.approveLocalLiveTradingQA(confirmation: confirmation)
+            let response = try await client.consentLocalLiveTrading(confirmation: confirmation)
             localLiveTrading = response.liveTrading
             brokerCredential = response.credential ?? brokerCredential
-            localLiveTradingMessage = "Toss 읽기 전용 QA가 현재 설치·선택 계좌에 기록되었습니다. 수동 주문은 계속 OFF입니다."
+            localLiveTradingMessage = "Toss 실거래 위험 이용 동의를 기록했습니다. 수동 주문은 계속 OFF입니다."
             await refreshBrokerDiagnostics()
         } catch {
-            localLiveTradingMessage = "실거래 QA 승인 실패: \(Self.errorMessage(error))"
+            localLiveTradingMessage = "실거래 이용 동의 실패: \(Self.errorMessage(error))"
         }
     }
 
@@ -1413,7 +1444,7 @@ final class AppModel: ObservableObject {
         settings.liveTradingOperatorEnabled = false
         try? store.saveSettings(settings)
         localLiveTradingMessage = enabled
-            ? "실거래 정책은 Beginner-first 설정의 QA·계좌 바인딩·typed confirmation으로만 변경할 수 있습니다."
+            ? "실거래 정책은 자동 readiness·계좌 바인딩·이용 동의·typed confirmation으로만 변경할 수 있습니다."
             : "Toss 자동화는 별도 자동화 실거래 토글을 켜기 전 paper 전용입니다."
         if enabled {
             statusLine = "use local live trading policy controls"
@@ -1424,8 +1455,8 @@ final class AppModel: ObservableObject {
         settings.cryptoLiveTradingOperatorEnabled = false
         try? store.saveSettings(settings)
         cryptoExchangeMessage = enabled
-            ? "Upbit 실거래는 설정의 읽기 전용 QA·수동 토글·사전검증·주문 요약 재입력 경로에서만 변경할 수 있습니다."
-            : "코인 자동매매는 계속 paper 전용이며, 수동 지정가 주문은 Upbit 연결 관리에서 별도로 제어합니다."
+            ? "코인 실거래는 거래소별 자동 readiness·이용 동의·수동/자동 토글·주문 요약 재입력 경로에서만 변경할 수 있습니다."
+            : "Upbit·Bithumb 지정가 실거래 토글은 기본 OFF입니다."
         if enabled {
             statusLine = "use Upbit local manual live trading controls"
         }
@@ -1928,9 +1959,7 @@ final class AppModel: ObservableObject {
             try keychain.save(BrokerCredential(broker: exchange, clientId: accessKey, clientSecret: secretKey))
             cryptoExchangeMessage = "\(exchange) 검증 완료 · 자산 \(response.accountCount)개 · 주문 제출 없음 · Keychain 저장 완료"
             await refreshCryptoExchanges()
-            if exchange == "upbit" {
-                await refreshCryptoLiveTrading()
-            }
+            await refreshCryptoLiveTrading(exchange: exchange)
             return true
         } catch {
             cryptoExchangeMessage = "\(exchange) 등록 실패: \(Self.errorMessage(error))"
@@ -1985,42 +2014,43 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func refreshCryptoLiveTrading() async {
+    func refreshCryptoLiveTrading(exchange: String = "upbit") async {
         do {
-            let response = try await client.cryptoManualLiveTrading()
+            let response = try await client.cryptoManualLiveTrading(exchange: exchange)
             cryptoLiveTrading = response.liveTrading
         } catch {
-            cryptoExchangeMessage = "Upbit 실거래 상태 조회 실패: \(Self.errorMessage(error))"
+            cryptoExchangeMessage = "\(exchange) 실거래 상태 조회 실패: \(Self.errorMessage(error))"
         }
     }
 
-    func approveCryptoManualLiveTradingQA(confirmation: String) async {
+    func consentCryptoLiveTrading(exchange: String, confirmation: String) async {
         do {
-            let response = try await client.approveCryptoManualLiveTradingQA(confirmation: confirmation)
+            let response = try await client.consentCryptoLiveTrading(exchange: exchange, confirmation: confirmation)
             cryptoLiveTrading = response.liveTrading
-            cryptoExchangeMessage = "Upbit 읽기 전용 QA를 기록했습니다. 수동 주문은 별도의 재입력 토글이 필요합니다."
+            cryptoExchangeMessage = "\(exchange) 실거래 위험 이용 동의를 기록했습니다. 주문 토글은 아직 OFF입니다."
         } catch {
-            cryptoExchangeMessage = "Upbit 읽기 전용 QA 승인 실패: \(Self.errorMessage(error))"
+            cryptoExchangeMessage = "\(exchange) 실거래 이용 동의 실패: \(Self.errorMessage(error))"
         }
     }
 
-    func setCryptoManualLiveTrading(enabled: Bool, confirmation: String? = nil) async {
+    func setCryptoLiveTrading(exchange: String, mode: String = "manual", enabled: Bool, confirmation: String? = nil) async {
         do {
-            let response = try await client.updateCryptoManualLiveTrading(enabled: enabled, confirmation: confirmation)
+            let response = try await client.updateCryptoLiveTrading(exchange: exchange, mode: mode, enabled: enabled, confirmation: confirmation)
             cryptoLiveTrading = response.liveTrading
             cryptoExchangeMessage = enabled
-                ? "Upbit 수동 지정가 주문이 이 Mac의 QA 완료 API에만 열렸습니다. 자동매매와 시장가는 계속 차단됩니다."
-                : "Upbit 수동 실거래를 껐습니다."
+                ? "\(exchange) \(mode == "automation" ? "지정가 자동매매" : "수동 지정가 주문")를 열었습니다."
+                : "\(exchange) \(mode == "automation" ? "자동" : "수동") 실거래를 껐습니다."
         } catch {
-            cryptoExchangeMessage = "Upbit 수동 실거래 변경 실패: \(Self.errorMessage(error))"
+            cryptoExchangeMessage = "\(exchange) 실거래 변경 실패: \(Self.errorMessage(error))"
         }
     }
 
-    func runCryptoManualLiveOrderPrecheck(market: String, side: String, volume: Double, price: Double) async {
+    func runCryptoManualLiveOrderPrecheck(exchange: String, market: String, side: String, volume: Double, price: Double) async {
         cryptoLiveOrderPrecheck = nil
         cryptoLiveOrderSubmission = nil
         do {
             let response = try await client.cryptoManualLiveOrderPrecheck(
+                exchange: exchange,
                 market: market,
                 side: side,
                 volume: volume,
@@ -2029,38 +2059,49 @@ final class AppModel: ObservableObject {
             cryptoLiveOrderPrecheck = response
             let blocker = response.blockers.first.map { " · \($0)" } ?? ""
             cryptoExchangeMessage = response.submitReady
-                ? "Upbit 수동 주문 사전검증 통과 · 주문 요약 재입력 후에만 제출 가능"
-                : "Upbit 수동 주문 사전검증 차단\(blocker)"
+                ? "\(exchange) 수동 주문 사전검증 통과 · 주문 요약 재입력 후에만 제출 가능"
+                : "\(exchange) 수동 주문 사전검증 차단\(blocker)"
         } catch {
             cryptoLiveOrderPrecheck = nil
-            cryptoExchangeMessage = "Upbit 수동 주문 사전검증 실패: \(Self.errorMessage(error))"
+            cryptoExchangeMessage = "\(exchange) 수동 주문 사전검증 실패: \(Self.errorMessage(error))"
         }
     }
 
-    func submitCryptoManualLiveOrder(previewId: String, confirmation: String) async {
+    func submitCryptoManualLiveOrder(exchange: String, previewId: String, confirmation: String) async {
         do {
-            let response = try await client.submitCryptoManualLiveOrder(previewId: previewId, confirmation: confirmation)
+            let response = try await client.submitCryptoManualLiveOrder(exchange: exchange, previewId: previewId, confirmation: confirmation)
             cryptoLiveOrderSubmission = response
             cryptoExchangeMessage = response.status == "submitted"
-                ? "Upbit 주문이 제출되었습니다. 주문 ID와 거래소 주문 내역을 대조하세요."
-                : response.error ?? "Upbit 주문 제출 결과를 확인하세요."
-            await refreshCryptoLiveTrading()
+                ? "\(exchange) 주문이 제출되었습니다. 주문 ID와 거래소 주문 내역을 대조하세요."
+                : response.error ?? "\(exchange) 주문 제출 결과를 확인하세요."
+            await refreshCryptoLiveTrading(exchange: exchange)
         } catch {
-            cryptoExchangeMessage = "Upbit 주문 제출 실패: \(Self.errorMessage(error))"
-            await refreshCryptoLiveTrading()
+            cryptoExchangeMessage = "\(exchange) 주문 제출 실패: \(Self.errorMessage(error))"
+            await refreshCryptoLiveTrading(exchange: exchange)
         }
     }
 
-    func reconcileCryptoManualLiveOrder() async {
+    func reconcileCryptoManualLiveOrder(exchange: String) async {
         do {
-            let response = try await client.reconcileCryptoManualLiveOrder()
+            let response = try await client.reconcileCryptoManualLiveOrder(exchange: exchange)
             cryptoLiveOrderSubmission = response
             cryptoExchangeMessage = response.status == "reconciled"
-                ? "Upbit 주문 식별자 기반 재조정을 완료했습니다."
+                ? "\(exchange) 주문 식별자 기반 재조정을 완료했습니다."
                 : response.error ?? "결과 불명 주문이 없습니다."
-            await refreshCryptoLiveTrading()
+            await refreshCryptoLiveTrading(exchange: exchange)
         } catch {
-            cryptoExchangeMessage = "Upbit 주문 재조정 실패: \(Self.errorMessage(error))"
+            cryptoExchangeMessage = "\(exchange) 주문 재조정 실패: \(Self.errorMessage(error))"
+        }
+    }
+
+    func cancelAllCryptoOpenOrders(exchange: String, confirmation: String) async {
+        do {
+            _ = try await client.cancelAllCryptoOpenOrders(exchange: exchange, confirmation: confirmation)
+            cryptoExchangeMessage = "\(exchange) 미체결 주문 일괄 취소 요청 결과를 동기화했습니다."
+            await refreshCryptoLiveTrading(exchange: exchange)
+            await refreshRealPortfolio(forceRefresh: true)
+        } catch {
+            cryptoExchangeMessage = "\(exchange) 미체결 일괄 취소 실패: \(Self.errorMessage(error))"
         }
     }
 
@@ -3074,7 +3115,7 @@ final class AppModel: ObservableObject {
     private func liveTradingMessage(_ state: LocalLiveTradingState) -> String {
         state.reason ?? (state.effective
             ? "수동 Toss 지정가 실거래가 이 Mac과 선택 계좌에서만 열려 있습니다."
-            : "Toss 실거래는 기본 OFF입니다. QA·계좌 바인딩·수동 토글을 확인하세요.")
+            : "Toss 실거래는 기본 OFF입니다. readiness·이용 동의·계좌 바인딩·수동 토글을 확인하세요.")
     }
 
     private static func errorMessage(_ error: Error) -> String {

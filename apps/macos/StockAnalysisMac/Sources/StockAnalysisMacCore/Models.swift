@@ -652,6 +652,89 @@ public struct PaperTradingAccountView: Codable, Equatable, Sendable {
     public let updatedAt: String
 }
 
+public struct RealPortfolioResponseView: Codable, Equatable, Sendable {
+    public let generatedAt: String
+    public let providers: [RealPortfolioProviderView]
+    public let totalsByCurrency: [RealPortfolioCurrencyTotalView]
+    public let orderSubmissionAttempted: Bool
+}
+
+public struct RealPortfolioProviderView: Codable, Identifiable, Equatable, Sendable {
+    public var id: String { provider }
+    public let provider: String
+    public let connectionStatus: String
+    public let accounts: [RealPortfolioAccountView]
+    public let positions: [RealPortfolioPositionView]
+    public let openOrders: [RealPortfolioOpenOrderView]
+    public let totalsByCurrency: [RealPortfolioCurrencyTotalView]
+    public let stale: Bool
+    public let partial: Bool
+    public let lastSuccessfulAt: String?
+    public let error: String?
+}
+
+public struct RealPortfolioBalanceView: Codable, Identifiable, Equatable, Sendable {
+    public var id: String { currency }
+    public let currency: String
+    public let available: Double?
+    public let locked: Double?
+    public let total: Double?
+    public let buyingPower: Double?
+}
+
+public struct RealPortfolioAccountView: Codable, Identifiable, Equatable, Sendable {
+    public let id: String
+    public let provider: String
+    public let label: String
+    public let maskedAccount: String?
+    public let accountType: String
+    public let balances: [RealPortfolioBalanceView]
+}
+
+public struct RealPortfolioPositionView: Codable, Identifiable, Equatable, Sendable {
+    public let id: String
+    public let provider: String
+    public let accountId: String
+    public let accountLabel: String
+    public let symbol: String
+    public let name: String?
+    public let currency: String
+    public let availableQuantity: Double
+    public let lockedQuantity: Double
+    public let quantity: Double
+    public let averagePrice: Double?
+    public let currentPrice: Double?
+    public let purchaseAmount: Double?
+    public let marketValue: Double?
+    public let profitLoss: Double?
+    public let profitLossRate: Double?
+    public let valuationSupported: Bool
+}
+
+public struct RealPortfolioOpenOrderView: Codable, Identifiable, Equatable, Sendable {
+    public let id: String
+    public let provider: String
+    public let accountId: String
+    public let symbol: String
+    public let side: String
+    public let status: String
+    public let price: Double?
+    public let quantity: Double
+    public let filledQuantity: Double
+    public let clientOrderId: String?
+}
+
+public struct RealPortfolioCurrencyTotalView: Codable, Identifiable, Equatable, Sendable {
+    public var id: String { "\(provider):\(currency)" }
+    public let provider: String
+    public let currency: String
+    public let cash: Double?
+    public let buyingPower: Double?
+    public let purchaseAmount: Double?
+    public let marketValue: Double?
+    public let profitLoss: Double?
+}
+
 public struct PaperTradingPositionView: Codable, Identifiable, Equatable, Sendable {
     public let id: String
     public let session: String
@@ -883,7 +966,9 @@ public struct LocalLiveTradingPolicy: Codable, Equatable, Sendable {
     public let installationId: String
     public let boundUserId: String?
     public let boundAccountSeq: Int?
-    public let manualQaApprovedAt: String?
+    public let readinessVerifiedAt: String?
+    public let bindingHash: String?
+    public let userConsentAt: String?
     public let manualEnabled: Bool
     public let automationEnabled: Bool
     public let dailyBuyKrwDate: String
@@ -1145,10 +1230,16 @@ public struct CryptoManualLiveTradingLimits: Codable, Equatable, Sendable {
 
 public struct CryptoManualLiveTradingPolicy: Codable, Equatable, Sendable {
     public let installationId: String
+    public let exchange: String
     public let boundUserId: String?
-    public let boundExchange: String?
-    public let qaApprovedAt: String?
+    public let readinessVerifiedAt: String?
+    public let bindingHash: String?
+    public let userConsentAt: String?
     public let manualEnabled: Bool
+    public let automationEnabled: Bool
+    public let manualConfirmedOrderCount: Int
+    public let restartReconciledAt: String?
+    public let killSwitchVerifiedAt: String?
     public let dailyBuyKrwDate: String
     public let dailyBuyKrwSubmitted: Double
     public let unknownLock: LocalLiveUnknownLock?
@@ -1160,6 +1251,7 @@ public struct CryptoManualLiveOrderAttempt: Codable, Identifiable, Equatable, Se
     public let market: String
     public let side: String
     public let volume: Double
+    public let executedVolume: Double
     public let limitPrice: Double
     public let krwEquivalent: Double
     public let clientOrderId: String

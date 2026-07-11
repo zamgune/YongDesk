@@ -219,7 +219,10 @@ struct BeginnerFirstRootView: View {
                 onOpenAPIConnection: { provider in
                     openConnectionManagement(provider: provider)
                 },
-                onOpenOrder: { showingOrderDrawer = true }
+                onOpenOrder: { showingOrderDrawer = true },
+                onSelectRealPosition: { position in
+                    selectRealPosition(position)
+                }
             )
         case .strategy:
             BeginnerStrategyWorkspace(
@@ -409,6 +412,19 @@ struct BeginnerFirstRootView: View {
         }
         selectedSymbol = item.symbol
         selectedSymbolName = item.name
+        destination = .chart
+        Task { await runAnalysis() }
+    }
+
+    private func selectRealPosition(_ position: RealPortfolioPositionView) {
+        if position.provider == "toss" {
+            assetClass = .stock
+            stockMarket = position.currency == "USD" ? .unitedStates : .korea
+        } else {
+            assetClass = .crypto
+        }
+        selectedSymbol = position.symbol
+        selectedSymbolName = position.name
         destination = .chart
         Task { await runAnalysis() }
     }

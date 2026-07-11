@@ -717,7 +717,7 @@ const verifySidecar = async (expectedVersion: string) => {
       cryptoReadinessState.payload.ready !== false ||
       cryptoReadinessState.payload.orderSubmissionAttempted !== false ||
       jsonObjectField(cryptoLiveTradingState, "liveTrading").effective !== false ||
-      jsonObjectField(cryptoLiveTradingState, "liveTrading").manualOnly !== true ||
+      jsonObjectField(cryptoLiveTradingState, "liveTrading").manualOnly !== false ||
       cryptoPrecheckState.status !== 412 ||
       cryptoPrecheckState.payload.orderSubmissionAttempted !== false ||
       cryptoLivePrecheckState.status !== 412 ||

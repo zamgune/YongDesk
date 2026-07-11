@@ -45,7 +45,7 @@ import { isCredentialEncryptionConfigured } from "../src/lib/security/crypto.ts"
 import {
   LOCAL_LIVE_TRADING_MAX_BUY_ORDER_KRW,
   LOCAL_LIVE_TRADING_MAX_DAILY_BUY_KRW,
-  approveLocalManualQa,
+  consentLocalLiveTrading,
   getLocalLiveTradingGate,
   getLocalLiveTradingSnapshot,
   markLocalLiveOrderRejected,
@@ -56,30 +56,38 @@ import {
   recordLocalLiveSafetyProof,
   setLocalAutomationLiveTrading,
   setLocalManualLiveTrading,
+  verifyLocalManualReadiness,
   type LiveOrderSource,
 } from "../src/lib/automation/local-live-trading.ts";
 import {
   LOCAL_CRYPTO_LIVE_TRADING_MAX_BUY_ORDER_KRW,
   LOCAL_CRYPTO_LIVE_TRADING_MAX_DAILY_BUY_KRW,
-  approveLocalCryptoManualQa,
   beginLocalCryptoOrderSubmission,
-  clearLocalCryptoManualLiveTradingBinding,
+  clearLocalCryptoLiveTradingBinding,
   findLocalCryptoUnknownAttempt,
   getLocalCryptoLiveTradingGate,
   getLocalCryptoOrderPreview,
   getLocalCryptoLiveTradingSnapshot,
+  listLocalCryptoPendingAttempts,
   markLocalCryptoOrderRejected,
   markLocalCryptoOrderSubmitted,
   markLocalCryptoOrderUnknown,
+  recordLocalCryptoRecoveryProof,
   reconcileLocalCryptoOrder,
   recordLocalCryptoOrderPreview,
+  setLocalCryptoAutomationLiveTrading,
+  setLocalCryptoLiveTradingConsent,
   setLocalCryptoManualLiveTrading,
+  verifyLocalCryptoReadiness,
 } from "../src/lib/automation/local-crypto-live-trading.ts";
 import {
   CryptoExchangeApiError,
+  cancelCryptoOrder,
   cryptoExchangeContract,
   getCryptoAccounts,
-  getUpbitOrderByIdentifier,
+  getCryptoOpenOrders,
+  getCryptoTickers,
+  getCryptoOrderByClientOrderId,
   getCryptoOrderConstraints,
   getCryptoOrderChance,
   getCryptoTicker,
@@ -87,6 +95,15 @@ import {
   previewCryptoLimitOrder,
   type CryptoExchange,
 } from "../src/lib/crypto-exchange/client.ts";
+import {
+  disconnectedRealPortfolioProvider,
+  normalizeCryptoRealPortfolio,
+  normalizeTossRealPortfolio,
+  realPortfolioResponse,
+  type RealPortfolioProvider,
+  type RealPortfolioProviderView,
+  type RealPortfolioResponse,
+} from "../src/lib/local-engine/real-portfolio.ts";
 import { loadSymbolMaster } from "../src/lib/market/symbol-master.ts";
 import { resolveInstrumentDisplay } from "../src/lib/market/instrument-display.ts";
 import {
@@ -182,6 +199,7 @@ import {
   runAutomationWorkerTick,
   type AutomationWorkerTickResult,
 } from "../src/use-cases/trading/run-automation-worker.ts";
+import { getWorkerState, recordExecutedStep, saveWorkerState } from "../src/lib/automation/worker-state.ts";
 import { checkTossLiveReadiness } from "./check_toss_live_readiness.mts";
 import { createTossClient, formatTossApiError, TossApiError } from "../src/lib/toss/client.ts";
 import { TOSS_OPENAPI_CONTRACT } from "../src/lib/toss/contract.ts";
@@ -225,7 +243,7 @@ const ENGINE_VERSION = (() => {
   }
 })();
 const DEFAULT_PORT = 38771;
-const CRYPTO_LIVE_AUTOMATION_SUPPORTED = false;
+const CRYPTO_LIVE_AUTOMATION_SUPPORTED = true;
 const CRYPTO_TICKER_MAX_AGE_MS = 60_000;
 const DEFAULT_SYMBOL_MARKETS: SymbolSearchMarket[] = ["US", "KOSPI", "KOSDAQ", "CRYPTO"];
 const COMMUNITY_SOURCE_IDS = new Set<CommunitySourceId>([
@@ -241,6 +259,7 @@ const COMMUNITY_TRANSIENT_FAILURE_CACHE_TTL_SECONDS = 60;
 const localCommunityCache = new Map<string, { expiresAt: number; payload: CommunityPainResponse }>();
 const localCommunityInFlight = new Map<string, Promise<CommunityPainResponse>>();
 const localUserId = () => process.env.STOCK_ANALYSIS_LOCAL_USER_ID?.trim() || "local-macos-user";
+const developerModeEnabled = () => process.env.STOCK_ANALYSIS_DEVELOPER_MODE === "1" || process.env.NODE_ENV === "test";
 let localAutomationScheduler: LocalAutomationScheduler | null = null;
 
 const getLiveTradingGate = async (
@@ -1514,6 +1533,9 @@ const getCryptoLiveTradingGate = async (
   if (!CRYPTO_LIVE_AUTOMATION_SUPPORTED) {
     return closed("1.0.0에서는 코인 API 조회·사전검증·모의 자동화만 지원합니다. 체결 동기화가 포함된 후 실거래를 엽니다.", 501);
   }
+  if (!masterEnabled) {
+    return closed("전체 실거래 게이트가 꺼져 있습니다.");
+  }
   if (!cryptoMasterEnabled) {
     return closed("코인 실거래 게이트가 꺼져 있습니다.");
   }
@@ -1530,6 +1552,20 @@ const getCryptoLiveTradingGate = async (
   if (!decrypted) {
     return closed(`${exchange} API 키를 복호화하지 못했습니다.`, 503);
   }
+  const [killSwitch, workerControl] = await Promise.all([
+    getAutomationKillSwitchState(),
+    getAutomationWorkerControlState(),
+  ]);
+  const policyGate = await getLocalCryptoLiveTradingGate({
+    userId,
+    exchange,
+    source: "automation",
+    credentialVerified,
+    encryptionConfigured: isCredentialEncryptionConfigured(),
+    killSwitchEngaged: killSwitch.engaged,
+    workerPaused: workerControl.paused,
+  });
+  if (!policyGate.effective) return closed(policyGate.reason ?? `${exchange} 자동 지정가 실거래 정책이 닫혀 있습니다.`);
   return {
     exchange,
     masterEnabled,
@@ -1541,6 +1577,64 @@ const getCryptoLiveTradingGate = async (
   };
 };
 
+const createLocalCryptoAutomationBroker = ({
+  userId,
+  exchange,
+  strategyId,
+  credentials,
+}: {
+  userId: string;
+  exchange: CryptoExchange;
+  strategyId: string;
+  credentials: { accessKey: string; secretKey: string };
+}): BrokerPort => {
+  const broker = createCryptoBroker({ exchange, credentials, liveTradingEnabled: true });
+  return {
+    async submitOrder(request) {
+      if (request.type !== "limit" || !request.limitPrice || request.limitPrice <= 0) {
+        throw new Error(`${exchange} 자동매매는 KRW 지정가 주문만 허용됩니다.`);
+      }
+      if (!/^KRW-[A-Z0-9]+$/.test(request.symbol)) {
+        throw new Error(`${exchange} 자동매매는 KRW 마켓만 허용됩니다.`);
+      }
+      const gate = await getCryptoLiveTradingGate(userId, exchange);
+      if (!gate.effective) throw new Error(gate.reason ?? `${exchange} 자동매매 게이트가 닫혀 있습니다.`);
+      const confirmationText = cryptoLiveOrderConfirmationText({
+        exchange,
+        market: request.symbol,
+        side: request.side,
+        volume: request.quantity,
+        price: request.limitPrice,
+      });
+      const payloadHash = createHash("sha256").update(JSON.stringify({
+        exchange, strategyId, symbol: request.symbol, side: request.side,
+        quantity: request.quantity, limitPrice: request.limitPrice,
+      }), "utf8").digest("hex");
+      const preview = await recordLocalCryptoOrderPreview({
+        userId, exchange, source: "automation", strategyKey: request.orderIntentId,
+        market: request.symbol, side: request.side, volume: request.quantity, price: request.limitPrice,
+        confirmationText, payloadHash,
+      });
+      const { attempt } = await beginLocalCryptoOrderSubmission({
+        userId, exchange, previewId: preview.id, confirmation: confirmationText,
+      });
+      try {
+        const result = await broker.submitOrder({ ...request, clientOrderId: preview.clientOrderId });
+        await markLocalCryptoOrderSubmitted(attempt.id, result.brokerOrderId, exchange);
+        return result;
+      } catch (error) {
+        const message = errorMessage(error);
+        if (isUnknownCryptoSubmissionError(error)) await markLocalCryptoOrderUnknown(attempt.id, message, exchange);
+        else await markLocalCryptoOrderRejected(attempt.id, message, exchange);
+        throw error;
+      }
+    },
+    async cancelOrder(request) {
+      throw new Error(`자동 취소 차단: ${request.brokerOrderId} 취소는 사용자의 확인형 미체결 일괄 취소에서만 실행할 수 있습니다.`);
+    },
+  };
+};
+
 const runCryptoLiveAutomationCycle = async (userId: string) => {
   const configs = (await listStrategyConfigs(userId)).filter(
     (config) => config.status === "enabled" && config.market === "CRYPTO",
@@ -1549,7 +1643,7 @@ const runCryptoLiveAutomationCycle = async (userId: string) => {
     userId,
     status: "skipped",
     reason: "no-enabled-crypto-strategies",
-    liveTradingEnabled: true,
+    liveTradingEnabled: false,
     accountSeq: null,
     strategies: configs.length,
     triggers: 0,
@@ -1614,7 +1708,7 @@ const runCryptoLiveAutomationCycle = async (userId: string) => {
       continue;
     }
     const credentials = { accessKey: encrypted.clientId, secretKey: encrypted.clientSecret };
-    const broker = createCryptoBroker({ exchange, credentials, liveTradingEnabled: true });
+    const broker = createLocalCryptoAutomationBroker({ userId, exchange, strategyId: config.id, credentials });
     const precheck = async ({ side, symbol, quantity, price }: { side: "buy" | "sell"; symbol: string; quantity: number; price: number }) => {
       const [accounts, chance] = await Promise.all([
         getCryptoAccounts(exchange, credentials),
@@ -1657,6 +1751,7 @@ const runCryptoLiveAutomationCycle = async (userId: string) => {
           const value = Number(accounts.find((account) => account.currency === baseCurrency)?.avg_buy_price ?? 0);
           return Number.isFinite(value) && value > 0 ? value : null;
         },
+        deferExecutionUntilFill: true,
       });
       const submittedCount = tick.orders.filter((order) => order.status === "submitted").length;
       const rejectedCount = tick.orders.filter((order) => order.status === "rejected").length;
@@ -1699,6 +1794,7 @@ const runCryptoLiveAutomationCycle = async (userId: string) => {
 
   return {
     ...base,
+    liveTradingEnabled: submitted > 0,
     status: errors > 0 ? "ran-with-errors" : "ran",
     reason: "crypto-live-automation",
     triggers,
@@ -2756,6 +2852,10 @@ const localTossReadiness = async (request: Request) => {
   const report = await checkTossLiveReadiness(env);
   const automationAccountSelected = !!accountPreference;
   const automationReady = report.ok && automationAccountSelected;
+  if (automationReady && accountPreference && credentials) {
+    const bindingHash = createHash("sha256").update(`toss:${credentials.clientId}:${accountPreference.accountSeq}`, "utf8").digest("hex");
+    await verifyLocalManualReadiness({ userId, accountSeq: accountPreference.accountSeq, bindingHash });
+  }
   return jsonResponse({
     generatedAt: new Date().toISOString(),
     ...report,
@@ -2814,41 +2914,20 @@ const localLiveTradingState = async () => {
   });
 };
 
-const approveLocalLiveTradingQa = async (request: Request) => {
+const updateLocalLiveTradingConsent = async (request: Request) => {
   await ensureLocalAutomationAccess();
   const payload = await readJsonBody(request);
   const confirmation = typeof payload.confirmation === "string" ? payload.confirmation : "";
   const userId = localUserId();
-  const [credentials, accountPreference] = await Promise.all([
-    loadDecryptedCredentials(userId, "toss"),
-    getBrokerAccountPreference(userId, "toss"),
-  ]);
-  if (!credentials || !accountPreference) {
-    return jsonResponse({ error: "QA 승인 전에 검증된 Toss API 키와 선택 계좌가 필요합니다." }, { status: 412 });
+  const accountPreference = await getBrokerAccountPreference(userId, "toss");
+  if (!accountPreference) {
+    return jsonResponse({ error: "실거래 이용 동의 전에 자동 읽기 전용 점검이 완료된 Toss 계좌가 필요합니다." }, { status: 412 });
   }
   try {
-    // QA 승인은 실제 API의 토큰/계좌/계좌 헤더 조회가 모두 성공할 때만 기록한다.
-    const client = createTossClient(credentials);
-    const accounts = await client.listAccounts();
-    const selected = accounts.find((account) => account.accountSeq === accountPreference.accountSeq);
-    if (!selected || selected.accountType !== "BROKERAGE") {
-      return jsonResponse({ error: "선택한 Toss BROKERAGE 계좌를 다시 확인하세요." }, { status: 412 });
-    }
-    await Promise.all([
-      client.getHoldings(selected.accountSeq, "005930"),
-      client.getOpenOrders(selected.accountSeq, "AAPL"),
-    ]);
-    await approveLocalManualQa({
-      userId,
-      accountSeq: selected.accountSeq,
-      confirmation,
-    });
+    await consentLocalLiveTrading({ userId, accountSeq: accountPreference.accountSeq, confirmation });
     return localLiveTradingState();
   } catch (error) {
-    if (error instanceof TossApiError) {
-      return jsonResponse(formatTossApiError(error, "실거래 QA 읽기 전용 점검 실패"), { status: 502 });
-    }
-    return errorResponse(error, 502);
+    return errorResponse(error, 422);
   }
 };
 
@@ -3935,10 +4014,32 @@ const registerBrokerCredentials = async (request: Request) => {
     await saveBrokerCredentials({ userId, clientId, clientSecret, status: "verified" });
     await grantAutomationFeature(userId, "broker_credentials");
     const accountPreference = await reconcileAccountPreference(userId, accounts);
+    let readiness: { ready: boolean; message: string } = { ready: false, message: "실거래용 BROKERAGE 계좌를 선택하면 자동 읽기 전용 점검을 실행합니다." };
+    if (accountPreference && process.env.STOCK_ANALYSIS_SKIP_AUTO_READINESS !== "1") {
+      const selected = accounts.find((account) => account.accountSeq === accountPreference.accountSeq);
+      if (selected?.accountType === "BROKERAGE") {
+        const readinessChecks = await Promise.allSettled([
+          client.getHoldings(selected.accountSeq),
+          client.getBuyingPower(selected.accountSeq, "KRW"),
+          client.getBuyingPower(selected.accountSeq, "USD"),
+          client.getOpenOrders(selected.accountSeq),
+        ]);
+        const failed = readinessChecks.find((check): check is PromiseRejectedResult => check.status === "rejected");
+        if (failed) {
+          readiness = { ready: false, message: `자동 읽기 전용 점검 실패: ${errorMessage(failed.reason)}` };
+        } else {
+          const bindingHash = createHash("sha256").update(`toss:${clientId}:${selected.accountSeq}`, "utf8").digest("hex");
+          await verifyLocalManualReadiness({ userId, accountSeq: selected.accountSeq, bindingHash });
+          readiness = { ready: true, message: "계좌·보유·KRW/USD 주문 가능 금액·미체결 주문을 주문 제출 없이 확인했습니다." };
+        }
+      }
+    }
+    invalidateRealPortfolioCache("toss");
     return jsonResponse({
       credential: await getBrokerCredentialView(userId, "toss"),
       accounts: accounts.map(toAccountView),
       accountPreference,
+      readiness,
       accountsError: null,
     });
   } catch (error) {
@@ -3949,6 +4050,145 @@ const registerBrokerCredentials = async (request: Request) => {
     }
     return jsonResponse({ error: "토스 자격증명 검증 중 오류가 발생했습니다." }, { status: 502 });
   }
+};
+
+const REAL_PORTFOLIO_CACHE_TTL_MS = 15_000;
+const REAL_PORTFOLIO_MANUAL_REFRESH_THROTTLE_MS = 5_000;
+let realPortfolioCache: { userId: string; expiresAt: number; response: RealPortfolioResponse } | null = null;
+const realPortfolioManualRefreshAt = new Map<string, number>();
+const realPortfolioProviderCache = new Map<string, RealPortfolioProviderView>();
+const realPortfolioProviderCacheKey = (userId: string, provider: RealPortfolioProvider) => `${userId}:${provider}`;
+
+const invalidateRealPortfolioCache = (provider?: RealPortfolioProvider) => {
+  realPortfolioCache = null;
+  realPortfolioManualRefreshAt.delete(localUserId());
+  if (provider) realPortfolioProviderCache.delete(realPortfolioProviderCacheKey(localUserId(), provider));
+  else realPortfolioProviderCache.clear();
+};
+
+const realPortfolioProviderError = (
+  userId: string,
+  provider: RealPortfolioProvider,
+  error: unknown,
+): RealPortfolioProviderView => {
+  const message = errorMessage(error);
+  const cached = realPortfolioProviderCache.get(realPortfolioProviderCacheKey(userId, provider));
+  if (cached) {
+    return {
+      ...cached,
+      stale: true,
+      partial: true,
+      error: message,
+    };
+  }
+  return {
+    ...disconnectedRealPortfolioProvider(provider),
+    connectionStatus: "error",
+    partial: true,
+    error: message,
+  };
+};
+
+const tossRealPortfolio = async (): Promise<RealPortfolioProviderView> => {
+  const userId = localUserId();
+  const credential = await getBrokerCredentialView(userId, "toss");
+  if (credential?.status !== "verified") {
+    realPortfolioProviderCache.delete(realPortfolioProviderCacheKey(userId, "toss"));
+    return disconnectedRealPortfolioProvider("toss");
+  }
+  const encrypted = await loadDecryptedCredentials(userId, "toss");
+  if (!encrypted) return realPortfolioProviderError(userId, "toss", "저장된 Toss API 키를 복호화하지 못했습니다.");
+  try {
+    const client = createTossClient(encrypted);
+    const accounts = (await client.listAccounts()).filter((account) => account.accountType === "BROKERAGE");
+    const generatedAt = new Date().toISOString();
+    const inputs = await Promise.all(accounts.map(async (account) => {
+      const [holdings, buyingPowerKrw, buyingPowerUsd, openOrders] = await Promise.allSettled([
+        client.getHoldings(account.accountSeq),
+        client.getBuyingPower(account.accountSeq, "KRW"),
+        client.getBuyingPower(account.accountSeq, "USD"),
+        client.getOpenOrders(account.accountSeq),
+      ]);
+      const errors = [holdings, buyingPowerKrw, buyingPowerUsd, openOrders]
+        .filter((result): result is PromiseRejectedResult => result.status === "rejected")
+        .map((result) => errorMessage(result.reason));
+      return {
+        account,
+        maskedAccount: maskAccountNo(account.accountNo),
+        holdings: holdings.status === "fulfilled" ? holdings.value : null,
+        buyingPower: {
+          KRW: buyingPowerKrw.status === "fulfilled" ? buyingPowerKrw.value : null,
+          USD: buyingPowerUsd.status === "fulfilled" ? buyingPowerUsd.value : null,
+        },
+        openOrders: openOrders.status === "fulfilled" ? openOrders.value.orders : [],
+        errors,
+      };
+    }));
+    const provider = normalizeTossRealPortfolio(inputs, generatedAt);
+    realPortfolioProviderCache.set(realPortfolioProviderCacheKey(userId, "toss"), provider);
+    return provider;
+  } catch (error) {
+    return realPortfolioProviderError(userId, "toss", error);
+  }
+};
+
+const cryptoRealPortfolio = async (exchange: CryptoExchange): Promise<RealPortfolioProviderView> => {
+  const userId = localUserId();
+  const credential = await getBrokerCredentialView(userId, exchange);
+  if (credential?.status !== "verified") {
+    realPortfolioProviderCache.delete(realPortfolioProviderCacheKey(userId, exchange));
+    return disconnectedRealPortfolioProvider(exchange);
+  }
+  const encrypted = await loadDecryptedCredentials(userId, exchange);
+  if (!encrypted) return realPortfolioProviderError(userId, exchange, `저장된 ${exchange} API 키를 복호화하지 못했습니다.`);
+  const credentials = { accessKey: encrypted.clientId, secretKey: encrypted.clientSecret };
+  try {
+    const accounts = await getCryptoAccounts(exchange, credentials);
+    const markets = accounts
+      .map((account) => account.currency.trim().toUpperCase())
+      .filter((currency) => currency && currency !== "KRW")
+      .map((currency) => `KRW-${currency}`);
+    const [tickers, openOrders] = await Promise.allSettled([
+      getCryptoTickers(exchange, markets),
+      getCryptoOpenOrders(exchange, credentials),
+    ]);
+    const errors = [tickers, openOrders]
+      .filter((result): result is PromiseRejectedResult => result.status === "rejected")
+      .map((result) => errorMessage(result.reason));
+    const provider = normalizeCryptoRealPortfolio({
+      exchange,
+      accounts,
+      tickers: tickers.status === "fulfilled" ? tickers.value : [],
+      openOrders: openOrders.status === "fulfilled" ? openOrders.value : [],
+      generatedAt: new Date().toISOString(),
+      errors,
+    });
+    realPortfolioProviderCache.set(realPortfolioProviderCacheKey(userId, exchange), provider);
+    return provider;
+  } catch (error) {
+    return realPortfolioProviderError(userId, exchange, error);
+  }
+};
+
+const realPortfolioState = async (url: URL) => {
+  const now = Date.now();
+  const userId = localUserId();
+  const forceRefresh = url.searchParams.get("refresh") === "1";
+  if (realPortfolioCache?.userId === userId && (
+    (!forceRefresh && realPortfolioCache.expiresAt > now) ||
+    (forceRefresh && now - (realPortfolioManualRefreshAt.get(userId) ?? 0) < REAL_PORTFOLIO_MANUAL_REFRESH_THROTTLE_MS)
+  )) {
+    return jsonResponse(realPortfolioCache.response);
+  }
+  if (forceRefresh) realPortfolioManualRefreshAt.set(userId, now);
+  const providers = await Promise.all([
+    tossRealPortfolio(),
+    cryptoRealPortfolio("upbit"),
+    cryptoRealPortfolio("bithumb"),
+  ]);
+  const response = realPortfolioResponse(providers);
+  realPortfolioCache = { userId, expiresAt: now + REAL_PORTFOLIO_CACHE_TTL_MS, response };
+  return jsonResponse(response);
 };
 
 const cryptoCredentialState = async () => {
@@ -3983,8 +4223,16 @@ const registerCryptoCredential = async (exchange: CryptoExchange, request: Reque
       clientSecret: secretKey,
       status: "verified",
     });
-    if (exchange === "upbit") {
-      await clearLocalCryptoManualLiveTradingBinding();
+    await clearLocalCryptoLiveTradingBinding(exchange);
+    invalidateRealPortfolioCache(exchange);
+    let readiness: Record<string, unknown> = { ready: false, message: "자동 readiness 점검을 생략했습니다." };
+    if (process.env.STOCK_ANALYSIS_SKIP_AUTO_READINESS !== "1") {
+      const readinessResponse = await cryptoReadiness(exchange, "KRW-BTC");
+      readiness = await readinessResponse.json() as Record<string, unknown>;
+      if (readiness.ready === true) {
+        const bindingHash = createHash("sha256").update(`${exchange}:${accessKey}`, "utf8").digest("hex");
+        await verifyLocalCryptoReadiness({ userId: localUserId(), exchange, bindingHash });
+      }
     }
     return jsonResponse({
       generatedAt: new Date().toISOString(),
@@ -3992,6 +4240,7 @@ const registerCryptoCredential = async (exchange: CryptoExchange, request: Reque
       credential: await getBrokerCredentialView(localUserId(), exchange),
       accountCount: accounts.length,
       currencies: accounts.map((account) => account.currency).slice(0, 20),
+      readiness,
       orderSubmissionAttempted: false,
     });
   } catch (error) {
@@ -4004,9 +4253,8 @@ const registerCryptoCredential = async (exchange: CryptoExchange, request: Reque
 
 const deleteCryptoCredential = async (exchange: CryptoExchange) => {
   await deleteBrokerCredentials(localUserId(), exchange);
-  if (exchange === "upbit") {
-    await clearLocalCryptoManualLiveTradingBinding();
-  }
+  await clearLocalCryptoLiveTradingBinding(exchange);
+  invalidateRealPortfolioCache(exchange);
   return jsonResponse({ ok: true, exchange });
 };
 
@@ -4062,6 +4310,10 @@ const cryptoReadiness = async (exchange: CryptoExchange, market: string) => {
       bidConstraints.feeRate !== null &&
       askConstraints.feeRate !== null;
     const ready = chanceAvailable && constraintsAvailable && quote.fresh;
+    if (ready) {
+      const bindingHash = createHash("sha256").update(`${exchange}:${encrypted.clientId}`, "utf8").digest("hex");
+      await verifyLocalCryptoReadiness({ userId: localUserId(), exchange, bindingHash });
+    }
     return jsonResponse({
       generatedAt: new Date().toISOString(),
       exchange,
@@ -4214,25 +4466,29 @@ const cryptoOrderPrecheck = async (exchange: CryptoExchange, request: Request) =
 };
 
 const cryptoLiveOrderConfirmationText = ({
+  exchange,
   market,
   side,
   volume,
   price,
 }: {
+  exchange: CryptoExchange;
   market: string;
   side: "buy" | "sell";
   volume: number;
   price: number;
-}) => `Upbit ${market} ${side === "buy" ? "매수" : "매도"} ${volume} @ ${price} KRW`;
+}) => `${exchange === "upbit" ? "Upbit" : "Bithumb"} ${market} ${side === "buy" ? "매수" : "매도"} ${volume} @ ${price} KRW`;
 
-const cryptoLiveGate = async (userId: string) => {
+const cryptoLiveGate = async (userId: string, exchange: CryptoExchange, source: "manual" | "automation" = "manual") => {
   const [credential, killSwitch, workerControl] = await Promise.all([
-    getBrokerCredentialView(userId, "upbit"),
+    getBrokerCredentialView(userId, exchange),
     getAutomationKillSwitchState(),
     getAutomationWorkerControlState(),
   ]);
   const gate = await getLocalCryptoLiveTradingGate({
     userId,
+    exchange,
+    source,
     credentialVerified: credential?.status === "verified",
     encryptionConfigured: isCredentialEncryptionConfigured(),
     killSwitchEngaged: killSwitch.engaged,
@@ -4241,19 +4497,20 @@ const cryptoLiveGate = async (userId: string) => {
   return { credential, killSwitch, workerControl, gate };
 };
 
-const cryptoLiveTradingState = async () => {
+const cryptoLiveTradingState = async (exchange: CryptoExchange) => {
   const userId = localUserId();
+  const sync = await syncCryptoLiveOrders(exchange).catch((error) => ({ synced: 0, throttled: false, error: errorMessage(error) }));
   const [{ credential, killSwitch, workerControl, gate }, snapshot] = await Promise.all([
-    cryptoLiveGate(userId),
-    getLocalCryptoLiveTradingSnapshot(),
+    cryptoLiveGate(userId, exchange),
+    getLocalCryptoLiveTradingSnapshot(exchange),
   ]);
   return jsonResponse({
     generatedAt: new Date().toISOString(),
-    exchange: "upbit",
+    exchange,
     credential,
     liveTrading: {
-      exchange: "upbit",
-      manualOnly: true,
+      exchange,
+      manualOnly: false,
       manualEnabled: snapshot.policy.manualEnabled,
       effective: gate.effective,
       reason: gate.reason,
@@ -4266,66 +4523,61 @@ const cryptoLiveTradingState = async () => {
       attempts: snapshot.attempts,
       killSwitchEngaged: killSwitch.engaged,
       workerPaused: workerControl.paused,
+      sync,
     },
   });
 };
 
-const approveCryptoLiveTradingQa = async (request: Request) => {
+const updateCryptoLiveTradingConsent = async (exchange: CryptoExchange, request: Request) => {
   const payload = await readJsonBody(request);
   const confirmation = typeof payload.confirmation === "string" ? payload.confirmation : "";
   const userId = localUserId();
-  const { credential } = await cryptoLiveGate(userId);
+  const { credential } = await cryptoLiveGate(userId, exchange);
   if (credential?.status !== "verified" || !isCredentialEncryptionConfigured()) {
-    return jsonResponse({ error: "검증 완료된 Upbit API 키와 암호화 credential 저장소가 필요합니다.", orderSubmissionAttempted: false }, { status: 412 });
-  }
-  const readinessResponse = await cryptoReadiness("upbit", "KRW-BTC");
-  const readiness = await readinessResponse.json() as { ready?: unknown; message?: unknown };
-  if (!readinessResponse.ok || readiness.ready !== true) {
-    const message = typeof readiness.message === "string" ? readiness.message : "Upbit 읽기 전용 준비 점검에 실패했습니다.";
-    return jsonResponse({ error: message, orderSubmissionAttempted: false }, { status: 412 });
+    return jsonResponse({ error: `검증 완료된 ${exchange} API 키와 암호화 credential 저장소가 필요합니다.`, orderSubmissionAttempted: false }, { status: 412 });
   }
   try {
-    await approveLocalCryptoManualQa({ userId, confirmation });
-    return cryptoLiveTradingState();
+    await setLocalCryptoLiveTradingConsent({ userId, exchange, confirmation });
+    return cryptoLiveTradingState(exchange);
   } catch (error) {
     return errorResponse(error, 422);
   }
 };
 
-const updateCryptoLiveTrading = async (request: Request) => {
+const updateCryptoLiveTrading = async (exchange: CryptoExchange, request: Request) => {
   const payload = await readJsonBody(request);
   if (typeof payload.enabled !== "boolean") {
     return jsonResponse({ error: "enabled boolean 값이 필요합니다.", orderSubmissionAttempted: false }, { status: 400 });
   }
   const userId = localUserId();
-  const { credential } = await cryptoLiveGate(userId);
+  const { credential } = await cryptoLiveGate(userId, exchange);
   if (credential?.status !== "verified" || !isCredentialEncryptionConfigured()) {
-    return jsonResponse({ error: "검증 완료된 Upbit API 키와 암호화 credential 저장소가 필요합니다.", orderSubmissionAttempted: false }, { status: 412 });
+    return jsonResponse({ error: `검증 완료된 ${exchange} API 키와 암호화 credential 저장소가 필요합니다.`, orderSubmissionAttempted: false }, { status: 412 });
   }
   try {
-    await setLocalCryptoManualLiveTrading({
-      userId,
-      enabled: payload.enabled,
-      confirmation: typeof payload.confirmation === "string" ? payload.confirmation : undefined,
-    });
-    return cryptoLiveTradingState();
+    const input = { userId, exchange, enabled: payload.enabled, confirmation: typeof payload.confirmation === "string" ? payload.confirmation : undefined };
+    if (payload.mode === "automation") await setLocalCryptoAutomationLiveTrading(input);
+    else await setLocalCryptoManualLiveTrading(input);
+    return cryptoLiveTradingState(exchange);
   } catch (error) {
     return errorResponse(error, 422);
   }
 };
 
 const runCryptoLivePrecheck = async ({
+  exchange,
   market,
   side,
   volume,
   price,
 }: {
+  exchange: CryptoExchange;
   market: string;
   side: "buy" | "sell";
   volume: number;
   price: number;
 }) => {
-  const response = await cryptoOrderPrecheck("upbit", new Request("http://127.0.0.1:38771/crypto-live-precheck", {
+  const response = await cryptoOrderPrecheck(exchange, new Request("http://127.0.0.1:38771/crypto-live-precheck", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ market, side, volume, price }),
@@ -4334,7 +4586,7 @@ const runCryptoLivePrecheck = async ({
   return { response, payload };
 };
 
-const cryptoLiveOrderPrecheck = async (request: Request) => {
+const cryptoLiveOrderPrecheck = async (exchange: CryptoExchange, request: Request) => {
   const payload = await readJsonBody(request);
   const market = typeof payload.market === "string" ? payload.market.trim().toUpperCase() : "";
   const side = payload.side === "buy" || payload.side === "sell" ? payload.side : null;
@@ -4344,8 +4596,8 @@ const cryptoLiveOrderPrecheck = async (request: Request) => {
     return jsonResponse({ error: "market(KRW-BTC), side(buy/sell), volume, price 양수가 필요합니다.", orderSubmissionAttempted: false }, { status: 400 });
   }
   const userId = localUserId();
-  const { gate } = await cryptoLiveGate(userId);
-  const { response, payload: precheck } = await runCryptoLivePrecheck({ market, side, volume, price });
+  const { gate } = await cryptoLiveGate(userId, exchange);
+  const { response, payload: precheck } = await runCryptoLivePrecheck({ exchange, market, side, volume, price });
   if (!response.ok) {
     return jsonResponse({ ...precheck, orderSubmissionAttempted: false }, { status: response.status });
   }
@@ -4357,7 +4609,7 @@ const cryptoLiveOrderPrecheck = async (request: Request) => {
     quantity: volume,
     limitPrice: price,
     currency: "KRW",
-    rationale: ["Upbit 수동 지정가 주문 사전검증"],
+    rationale: [`${exchange} 수동 지정가 주문 사전검증`],
     riskPolicy: {
       allowLiveTrading: true,
       maxOrderValue: LOCAL_CRYPTO_LIVE_TRADING_MAX_BUY_ORDER_KRW,
@@ -4368,14 +4620,14 @@ const cryptoLiveOrderPrecheck = async (request: Request) => {
   const blockers = [
     ...precheckBlockers,
     ...intentResult.riskCheck.blockers,
-    ...(gate.effective ? [] : [gate.reason ?? "Upbit 수동 실거래 게이트가 닫혀 있습니다."]),
+    ...(gate.effective ? [] : [gate.reason ?? `${exchange} 수동 실거래 게이트가 닫혀 있습니다.`]),
   ];
-  const confirmationText = cryptoLiveOrderConfirmationText({ market, side, volume, price });
+  const confirmationText = cryptoLiveOrderConfirmationText({ exchange, market, side, volume, price });
   const payloadHash = createHash("sha256")
-    .update(JSON.stringify({ exchange: "upbit", market, side, volume, price }), "utf8")
+    .update(JSON.stringify({ exchange, market, side, volume, price }), "utf8")
     .digest("hex");
   const preview = blockers.length === 0
-    ? await recordLocalCryptoOrderPreview({ userId, market, side, volume, price, confirmationText, payloadHash })
+    ? await recordLocalCryptoOrderPreview({ userId, exchange, market, side, volume, price, confirmationText, payloadHash })
     : null;
   return jsonResponse({
     ...precheck,
@@ -4392,8 +4644,8 @@ const cryptoLiveOrderPrecheck = async (request: Request) => {
     confirmationText,
     submitReady: preview !== null,
     message: preview
-      ? "Upbit 수동 주문 사전검증을 통과했습니다. 표시된 주문 요약을 직접 입력해야만 최종 제출할 수 있습니다."
-      : "사전검증 결과 Upbit 주문 제출 준비가 완료되지 않았습니다.",
+      ? `${exchange} 수동 주문 사전검증을 통과했습니다. 표시된 주문 요약을 직접 입력해야만 최종 제출할 수 있습니다.`
+      : `사전검증 결과 ${exchange} 주문 제출 준비가 완료되지 않았습니다.`,
     orderSubmissionAttempted: false,
   });
 };
@@ -4401,7 +4653,7 @@ const cryptoLiveOrderPrecheck = async (request: Request) => {
 const isUnknownCryptoSubmissionError = (error: unknown) =>
   !(error instanceof CryptoExchangeApiError) || error.status >= 500 || error.status === 429;
 
-const submitCryptoLiveOrder = async (request: Request) => {
+const submitCryptoLiveOrder = async (exchange: CryptoExchange, request: Request) => {
   const payload = await readJsonBody(request);
   const previewId = typeof payload.previewId === "string" ? payload.previewId : "";
   const confirmation = typeof payload.confirmation === "string" ? payload.confirmation.trim() : "";
@@ -4409,15 +4661,15 @@ const submitCryptoLiveOrder = async (request: Request) => {
     return jsonResponse({ error: "previewId와 최종 확인 문구가 필요합니다.", orderSubmissionAttempted: false }, { status: 400 });
   }
   const userId = localUserId();
-  const preview = await getLocalCryptoOrderPreview({ userId, previewId });
+  const preview = await getLocalCryptoOrderPreview({ userId, exchange, previewId });
   if (!preview) {
-    return jsonResponse({ error: "유효한 Upbit 주문 미리보기를 먼저 실행하세요.", orderSubmissionAttempted: false }, { status: 428 });
+    return jsonResponse({ error: `유효한 ${exchange} 주문 미리보기를 먼저 실행하세요.`, orderSubmissionAttempted: false }, { status: 428 });
   }
-  const { credential, gate } = await cryptoLiveGate(userId);
+  const { credential, gate } = await cryptoLiveGate(userId, exchange);
   if (!gate.effective) {
-    return jsonResponse({ error: gate.reason ?? "Upbit 수동 실거래 게이트가 닫혀 있습니다.", orderSubmissionAttempted: false }, { status: 423 });
+    return jsonResponse({ error: gate.reason ?? `${exchange} 수동 실거래 게이트가 닫혀 있습니다.`, orderSubmissionAttempted: false }, { status: 423 });
   }
-  const { response, payload: precheck } = await runCryptoLivePrecheck({
+  const { response, payload: precheck } = await runCryptoLivePrecheck({ exchange,
     market: preview.market,
     side: preview.side,
     volume: preview.volume,
@@ -4426,7 +4678,7 @@ const submitCryptoLiveOrder = async (request: Request) => {
   if (!response.ok || precheck.passed !== true) {
     const blockers = Array.isArray(precheck.blockers) ? precheck.blockers.filter((value): value is string => typeof value === "string") : [];
     return jsonResponse({
-      error: blockers[0] ?? "제출 직전 Upbit 사전검증에 실패했습니다.",
+      error: blockers[0] ?? `제출 직전 ${exchange} 사전검증에 실패했습니다.`,
       blockers,
       orderSubmissionAttempted: false,
     }, { status: 422 });
@@ -4439,7 +4691,7 @@ const submitCryptoLiveOrder = async (request: Request) => {
     quantity: preview.volume,
     limitPrice: preview.price,
     currency: "KRW",
-    rationale: ["Upbit 수동 지정가 주문 제출 직전 재검증"],
+    rationale: [`${exchange} 수동 지정가 주문 제출 직전 재검증`],
     riskPolicy: {
       allowLiveTrading: true,
       maxOrderValue: LOCAL_CRYPTO_LIVE_TRADING_MAX_BUY_ORDER_KRW,
@@ -4454,16 +4706,16 @@ const submitCryptoLiveOrder = async (request: Request) => {
     }, { status: 422 });
   }
   if (credential?.status !== "verified") {
-    return jsonResponse({ error: "검증 완료된 Upbit API 키가 필요합니다.", orderSubmissionAttempted: false }, { status: 412 });
+    return jsonResponse({ error: `검증 완료된 ${exchange} API 키가 필요합니다.`, orderSubmissionAttempted: false }, { status: 412 });
   }
-  const encrypted = await loadDecryptedCredentials(userId, "upbit");
+  const encrypted = await loadDecryptedCredentials(userId, exchange);
   if (!encrypted) {
-    return jsonResponse({ error: "Upbit API 키를 복호화하지 못했습니다.", orderSubmissionAttempted: false }, { status: 503 });
+    return jsonResponse({ error: `${exchange} API 키를 복호화하지 못했습니다.`, orderSubmissionAttempted: false }, { status: 503 });
   }
   try {
-    const { attempt } = await beginLocalCryptoOrderSubmission({ userId, previewId, confirmation });
+    const { attempt } = await beginLocalCryptoOrderSubmission({ userId, exchange, previewId, confirmation });
     const broker = createCryptoBroker({
-      exchange: "upbit",
+      exchange,
       credentials: { accessKey: encrypted.clientId, secretKey: encrypted.clientSecret },
       liveTradingEnabled: true,
     });
@@ -4480,7 +4732,7 @@ const submitCryptoLiveOrder = async (request: Request) => {
         clientOrderId: preview.clientOrderId,
         timeInForce: "DAY",
       });
-      const updatedAttempt = await markLocalCryptoOrderSubmitted(attempt.id, submitted.brokerOrderId);
+      const updatedAttempt = await markLocalCryptoOrderSubmitted(attempt.id, submitted.brokerOrderId, exchange);
       return jsonResponse({
         status: "submitted",
         orderSubmissionAttempted: true,
@@ -4490,15 +4742,15 @@ const submitCryptoLiveOrder = async (request: Request) => {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       if (isUnknownCryptoSubmissionError(error)) {
-        const updatedAttempt = await markLocalCryptoOrderUnknown(attempt.id, message);
+        const updatedAttempt = await markLocalCryptoOrderUnknown(attempt.id, message, exchange);
         return jsonResponse({
           status: "unknown",
-          error: "Upbit 주문 제출 결과가 불명확합니다. 자동 재시도를 금지하고 주문을 잠갔습니다. 주문 식별자로 상태를 다시 확인하세요.",
+          error: `${exchange} 주문 제출 결과가 불명확합니다. 자동 재시도를 금지하고 주문을 잠갔습니다. 주문 식별자로 상태를 다시 확인하세요.`,
           orderSubmissionAttempted: true,
           attempt: updatedAttempt,
         }, { status: 202 });
       }
-      const updatedAttempt = await markLocalCryptoOrderRejected(attempt.id, message);
+      const updatedAttempt = await markLocalCryptoOrderRejected(attempt.id, message, exchange);
       return jsonResponse({
         status: "rejected",
         error: message,
@@ -4511,22 +4763,84 @@ const submitCryptoLiveOrder = async (request: Request) => {
   }
 };
 
-const reconcileCryptoLiveOrder = async () => {
+const cryptoAttemptStatus = (state: string | null, executedVolume: number, volume: number) => {
+  if (state === "done" || state === "filled") return "filled" as const;
+  if (state === "cancel" || state === "cancelled") return "cancelled" as const;
+  if (executedVolume > 0 && executedVolume < volume) return "partially_filled" as const;
+  return "open" as const;
+};
+
+const cryptoOrderSyncAt = new Map<CryptoExchange, number>();
+const syncCryptoLiveOrders = async (exchange: CryptoExchange, force = false) => {
+  const now = Date.now();
+  if (!force && now - (cryptoOrderSyncAt.get(exchange) ?? 0) < 30_000) return { synced: 0, throttled: true };
+  cryptoOrderSyncAt.set(exchange, now);
   const userId = localUserId();
-  const attempt = await findLocalCryptoUnknownAttempt(userId);
+  const attempts = await listLocalCryptoPendingAttempts(userId, exchange);
+  if (attempts.length === 0) {
+    await recordLocalCryptoRecoveryProof({ exchange, kind: "restart" });
+    return { synced: 0, throttled: false };
+  }
+  const encrypted = await loadDecryptedCredentials(userId, exchange);
+  if (!encrypted) throw new Error(`${exchange} API 키를 복호화하지 못했습니다.`);
+  let synced = 0;
+  for (const attempt of attempts) {
+    try {
+      const order = await getCryptoOrderByClientOrderId(
+        exchange,
+        { accessKey: encrypted.clientId, secretKey: encrypted.clientSecret },
+        attempt.clientOrderId,
+      );
+      const rawExecuted = Number(order.raw.executed_volume ?? order.raw.executed_quantity ?? 0);
+      const executedVolume = Number.isFinite(rawExecuted) ? rawExecuted : 0;
+      const updatedAttempt = await reconcileLocalCryptoOrder({
+        exchange, attemptId: attempt.id, brokerOrderId: order.orderId,
+        state: cryptoAttemptStatus(order.state, executedVolume, attempt.volume), executedVolume,
+      });
+      if (updatedAttempt.status === "filled" && updatedAttempt.source === "automation" && updatedAttempt.strategyKey) {
+        const strategyId = updatedAttempt.strategyKey.split(":")[0];
+        const day = updatedAttempt.createdAt.slice(0, 10);
+        const workerState = await getWorkerState(userId, strategyId, day);
+        if (!workerState.executedStepKeys.includes(updatedAttempt.strategyKey)) {
+          await saveWorkerState(recordExecutedStep(workerState, updatedAttempt.strategyKey, updatedAttempt.side));
+        }
+      }
+      synced += 1;
+    } catch (error) {
+      if (attempt.status === "submission_pending") {
+        await markLocalCryptoOrderUnknown(attempt.id, errorMessage(error), exchange);
+      }
+    }
+  }
+  const remaining = await listLocalCryptoPendingAttempts(userId, exchange);
+  if (!remaining.some((attempt) => attempt.status === "unknown" || attempt.status === "submission_pending")) {
+    await recordLocalCryptoRecoveryProof({ exchange, kind: "restart" });
+  }
+  return { synced, throttled: false };
+};
+
+const reconcileCryptoLiveOrder = async (exchange: CryptoExchange) => {
+  const userId = localUserId();
+  const attempt = await findLocalCryptoUnknownAttempt(userId, exchange);
   if (!attempt) {
     return jsonResponse({ status: "no-unknown-order", orderSubmissionAttempted: false });
   }
-  const encrypted = await loadDecryptedCredentials(userId, "upbit");
+  const encrypted = await loadDecryptedCredentials(userId, exchange);
   if (!encrypted) {
-    return jsonResponse({ error: "Upbit API 키를 복호화하지 못했습니다.", orderSubmissionAttempted: false }, { status: 503 });
+    return jsonResponse({ error: `${exchange} API 키를 복호화하지 못했습니다.`, orderSubmissionAttempted: false }, { status: 503 });
   }
   try {
-    const order = await getUpbitOrderByIdentifier(
+    const order = await getCryptoOrderByClientOrderId(
+      exchange,
       { accessKey: encrypted.clientId, secretKey: encrypted.clientSecret },
       attempt.clientOrderId,
     );
-    const updatedAttempt = await reconcileLocalCryptoOrder({ attemptId: attempt.id, brokerOrderId: order.orderId });
+    const rawExecuted = Number(order.raw.executed_volume ?? order.raw.executed_quantity ?? 0);
+    const executedVolume = Number.isFinite(rawExecuted) ? rawExecuted : 0;
+    const updatedAttempt = await reconcileLocalCryptoOrder({
+      exchange, attemptId: attempt.id, brokerOrderId: order.orderId,
+      state: cryptoAttemptStatus(order.state, executedVolume, attempt.volume), executedVolume,
+    });
     return jsonResponse({
       status: "reconciled",
       orderSubmissionAttempted: false,
@@ -4537,10 +4851,33 @@ const reconcileCryptoLiveOrder = async () => {
     const message = error instanceof Error ? error.message : String(error);
     return jsonResponse({
       status: "unknown",
-      error: `Upbit 주문 조회로 결과를 확정하지 못했습니다. 수동으로 주문 내역을 확인한 뒤 다시 시도하세요. ${message}`,
+      error: `${exchange} 주문 조회로 결과를 확정하지 못했습니다. 수동으로 주문 내역을 확인한 뒤 다시 시도하세요. ${message}`,
       orderSubmissionAttempted: false,
     }, { status: error instanceof CryptoExchangeApiError ? error.status : 502 });
   }
+};
+
+const cancelAllCryptoOpenOrders = async (exchange: CryptoExchange, request: Request) => {
+  const payload = await readJsonBody(request);
+  const confirmation = typeof payload.confirmation === "string" ? payload.confirmation.trim() : "";
+  const expected = `${exchange} 미체결 일괄 취소`;
+  if (confirmation !== expected) return jsonResponse({ error: `확인 문구 \"${expected}\"를 정확히 입력해야 합니다.`, orderSubmissionAttempted: false }, { status: 422 });
+  const userId = localUserId();
+  const encrypted = await loadDecryptedCredentials(userId, exchange);
+  if (!encrypted) return jsonResponse({ error: `${exchange} API 키를 복호화하지 못했습니다.`, orderSubmissionAttempted: false }, { status: 503 });
+  const credentials = { accessKey: encrypted.clientId, secretKey: encrypted.clientSecret };
+  const openOrders = await getCryptoOpenOrders(exchange, credentials);
+  const results = [];
+  for (const order of openOrders) {
+    try {
+      const cancelled = await cancelCryptoOrder(exchange, credentials, order.orderId);
+      results.push({ orderId: order.orderId, status: "cancelled", brokerOrderId: cancelled.orderId });
+    } catch (error) {
+      results.push({ orderId: order.orderId, status: "error", error: errorMessage(error) });
+    }
+  }
+  await syncCryptoLiveOrders(exchange, true).catch(() => undefined);
+  return jsonResponse({ exchange, requested: openOrders.length, results, orderSubmissionAttempted: false, cancellationAttempted: openOrders.length > 0 });
 };
 
 const deleteBrokerCredential = async () => {
@@ -4551,6 +4888,7 @@ const deleteBrokerCredential = async () => {
     revokeAutomationFeature(userId, "broker_credentials"),
     revokeAutomationFeature(userId, "live_trading"),
   ]);
+  invalidateRealPortfolioCache("toss");
   return jsonResponse({ ok: true });
 };
 
@@ -4571,7 +4909,8 @@ const updateBrokerAccountPreference = async (request: Request) => {
     return jsonResponse({ error: "저장된 Toss API 키를 복호화하지 못했습니다." }, { status: 412 });
   }
 
-  const accounts = await createTossClient(credentials).listAccounts();
+  const client = createTossClient(credentials);
+  const accounts = await client.listAccounts();
   const selected = accounts.find((account) => account.accountSeq === accountSeq);
   if (!selected) {
     return jsonResponse({ error: "현재 Toss 계좌 목록에서 선택한 accountSeq를 찾지 못했습니다." }, { status: 404 });
@@ -4586,10 +4925,26 @@ const updateBrokerAccountPreference = async (request: Request) => {
     accountNo: maskAccountNo(selected.accountNo),
     accountType: selected.accountType,
   });
+  const checks = process.env.STOCK_ANALYSIS_SKIP_AUTO_READINESS === "1" ? [] : await Promise.allSettled([
+    client.getHoldings(selected.accountSeq),
+    client.getBuyingPower(selected.accountSeq, "KRW"),
+    client.getBuyingPower(selected.accountSeq, "USD"),
+    client.getOpenOrders(selected.accountSeq),
+  ]);
+  const failed = checks.find((check): check is PromiseRejectedResult => check.status === "rejected");
+  if (!failed && checks.length > 0) {
+    const bindingHash = createHash("sha256").update(`toss:${credentials.clientId}:${selected.accountSeq}`, "utf8").digest("hex");
+    await verifyLocalManualReadiness({ userId, accountSeq: selected.accountSeq, bindingHash });
+  }
   return jsonResponse({
     credential,
     accounts: accounts.map(toAccountView),
     accountPreference,
+    readiness: checks.length === 0
+      ? { ready: false, message: "자동 readiness 점검을 생략했습니다." }
+      : failed
+      ? { ready: false, message: `자동 읽기 전용 점검 실패: ${errorMessage(failed.reason)}` }
+      : { ready: true, message: "계좌·보유·주문 가능 금액·미체결 주문 조회를 통과했습니다." },
     accountsError: null,
   });
 };
@@ -5129,6 +5484,9 @@ export const handleLocalEngineRequest = async (request: Request): Promise<Respon
     if (request.method === "GET" && url.pathname === "/api/local/watchlist/summary") {
       return jsonResponse(await getWatchlistSummary());
     }
+    if (request.method === "GET" && url.pathname === "/api/local/portfolio/real") {
+      return realPortfolioState(url);
+    }
     const watchlistItemMatch = url.pathname.match(/^\/api\/local\/watchlist\/([^/]+)$/);
     if (request.method === "DELETE" && watchlistItemMatch?.[1]) {
       return jsonResponse(await removeWatchlistItem(decodeURIComponent(watchlistItemMatch[1])));
@@ -5149,21 +5507,47 @@ export const handleLocalEngineRequest = async (request: Request): Promise<Respon
     if (request.method === "GET" && cryptoReadinessMatch && isCryptoExchange(cryptoReadinessMatch[1])) {
       return cryptoReadiness(cryptoReadinessMatch[1], url.searchParams.get("market")?.toUpperCase() || "KRW-BTC");
     }
-    if (url.pathname === "/api/local/crypto-exchanges/upbit/live-trading") {
-      if (request.method === "GET") return cryptoLiveTradingState();
-      if (request.method === "PUT") return updateCryptoLiveTrading(request);
+    const cryptoLiveMatch = url.pathname.match(/^\/api\/local\/crypto-exchanges\/(upbit|bithumb)\/live-trading$/);
+    if (cryptoLiveMatch && isCryptoExchange(cryptoLiveMatch[1])) {
+      if (request.method === "GET") return cryptoLiveTradingState(cryptoLiveMatch[1]);
+      if (request.method === "PUT") return updateCryptoLiveTrading(cryptoLiveMatch[1], request);
     }
-    if (request.method === "POST" && url.pathname === "/api/local/crypto-exchanges/upbit/live-trading/qa") {
-      return approveCryptoLiveTradingQa(request);
+    const cryptoConsentMatch = url.pathname.match(/^\/api\/local\/crypto-exchanges\/(upbit|bithumb)\/live-trading\/consent$/);
+    if (request.method === "POST" && cryptoConsentMatch && isCryptoExchange(cryptoConsentMatch[1])) {
+      return updateCryptoLiveTradingConsent(cryptoConsentMatch[1], request);
     }
-    if (request.method === "POST" && url.pathname === "/api/local/crypto-exchanges/upbit/live-trading/reconcile") {
-      return reconcileCryptoLiveOrder();
+    const cryptoQaMatch = url.pathname.match(/^\/api\/local\/crypto-exchanges\/(upbit|bithumb)\/live-trading\/qa$/);
+    if (request.method === "POST" && cryptoQaMatch) {
+      return developerModeEnabled()
+        ? jsonResponse({ error: "QA 승인 입력은 폐기되었습니다. 자동 readiness와 개발자 읽기 전용 리포트를 사용하세요." }, { status: 410 })
+        : jsonResponse({ error: "Not found" }, { status: 404 });
     }
-    if (request.method === "POST" && url.pathname === "/api/local/crypto-exchanges/upbit/orders/live-precheck") {
-      return cryptoLiveOrderPrecheck(request);
+    const cryptoReconcileMatch = url.pathname.match(/^\/api\/local\/crypto-exchanges\/(upbit|bithumb)\/live-trading\/reconcile$/);
+    if (request.method === "POST" && cryptoReconcileMatch && isCryptoExchange(cryptoReconcileMatch[1])) {
+      return reconcileCryptoLiveOrder(cryptoReconcileMatch[1]);
     }
-    if (request.method === "POST" && url.pathname === "/api/local/crypto-exchanges/upbit/orders/live-submit") {
-      return submitCryptoLiveOrder(request);
+    const cryptoSyncMatch = url.pathname.match(/^\/api\/local\/crypto-exchanges\/(upbit|bithumb)\/live-trading\/sync$/);
+    if (request.method === "POST" && cryptoSyncMatch && isCryptoExchange(cryptoSyncMatch[1])) {
+      return jsonResponse({ ...(await syncCryptoLiveOrders(cryptoSyncMatch[1], true)), orderSubmissionAttempted: false });
+    }
+    const cryptoRecoveryMatch = url.pathname.match(/^\/api\/local\/crypto-exchanges\/(upbit|bithumb)\/live-trading\/recovery-proof$/);
+    if (request.method === "POST" && cryptoRecoveryMatch && isCryptoExchange(cryptoRecoveryMatch[1])) {
+      if (!developerModeEnabled()) return jsonResponse({ error: "Not found" }, { status: 404 });
+      const payload = await readJsonBody(request);
+      if (payload.kind !== "restart" && payload.kind !== "kill-switch") return jsonResponse({ error: "kind 값이 필요합니다." }, { status: 400 });
+      return jsonResponse(await recordLocalCryptoRecoveryProof({ exchange: cryptoRecoveryMatch[1], kind: payload.kind }));
+    }
+    const cryptoLivePrecheckMatch = url.pathname.match(/^\/api\/local\/crypto-exchanges\/(upbit|bithumb)\/orders\/live-precheck$/);
+    if (request.method === "POST" && cryptoLivePrecheckMatch && isCryptoExchange(cryptoLivePrecheckMatch[1])) {
+      return cryptoLiveOrderPrecheck(cryptoLivePrecheckMatch[1], request);
+    }
+    const cryptoLiveSubmitMatch = url.pathname.match(/^\/api\/local\/crypto-exchanges\/(upbit|bithumb)\/orders\/live-submit$/);
+    if (request.method === "POST" && cryptoLiveSubmitMatch && isCryptoExchange(cryptoLiveSubmitMatch[1])) {
+      return submitCryptoLiveOrder(cryptoLiveSubmitMatch[1], request);
+    }
+    const cryptoCancelAllMatch = url.pathname.match(/^\/api\/local\/crypto-exchanges\/(upbit|bithumb)\/open-orders\/cancel-all$/);
+    if (request.method === "POST" && cryptoCancelAllMatch && isCryptoExchange(cryptoCancelAllMatch[1])) {
+      return cancelAllCryptoOpenOrders(cryptoCancelAllMatch[1], request);
     }
     const cryptoPrecheckMatch = url.pathname.match(/^\/api\/local\/crypto-exchanges\/(upbit|bithumb)\/orders\/precheck$/);
     if (request.method === "POST" && cryptoPrecheckMatch && isCryptoExchange(cryptoPrecheckMatch[1])) {
@@ -5200,7 +5584,12 @@ export const handleLocalEngineRequest = async (request: Request): Promise<Respon
       return updateLocalLiveTrading(request);
     }
     if (request.method === "POST" && url.pathname === "/api/local/live-trading/qa") {
-      return approveLocalLiveTradingQa(request);
+      return developerModeEnabled()
+        ? jsonResponse({ error: "QA 승인 입력은 폐기되었습니다. 자동 readiness와 개발자 읽기 전용 리포트를 사용하세요." }, { status: 410 })
+        : jsonResponse({ error: "Not found" }, { status: 404 });
+    }
+    if (request.method === "POST" && url.pathname === "/api/local/live-trading/consent") {
+      return updateLocalLiveTradingConsent(request);
     }
     if (request.method === "PUT" && url.pathname === "/api/local/live-trading/automation") {
       return updateLocalAutomationLiveTrading(request);

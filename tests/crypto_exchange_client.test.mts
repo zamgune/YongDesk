@@ -13,6 +13,7 @@ import {
   getCryptoAccounts,
   getCryptoOrderConstraints,
   getCryptoOrderChance,
+  getCryptoOrderByClientOrderId,
   getCryptoTicker,
   getUpbitOrderByIdentifier,
   getUpbitCandles,
@@ -262,6 +263,19 @@ test("Bithumb orders use v2 order_type and client_order_id fields", async () => 
   assert.equal(bodies[0]?.ord_type, undefined);
   assert.equal(bodies[1]?.order_type, "market");
   assert.equal(bodies[1]?.price, undefined);
+});
+
+test("Bithumb unknown orders reconcile by client_order_id", async () => {
+  const calls: Array<{ url: string; init?: RequestInit }> = [];
+  const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    calls.push({ url: String(input), init });
+    return Response.json({ order_id: "bithumb-order-unknown", client_order_id: "bithumb-client-1", state: "wait" });
+  }) as typeof fetch;
+  const result = await getCryptoOrderByClientOrderId("bithumb", credentials, "bithumb-client-1", fetchImpl);
+  assert.equal(result.orderId, "bithumb-order-unknown");
+  assert.equal(result.clientOrderId, "bithumb-client-1");
+  assert.equal(calls[0]?.url, "https://api.bithumb.com/v1/order?client_order_id=bithumb-client-1");
+  assert.equal(calls[0]?.init?.method, "GET");
 });
 
 test("cancel requests use exchange-specific authenticated endpoints", async () => {
