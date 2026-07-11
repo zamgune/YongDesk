@@ -19,7 +19,14 @@ struct BeginnerChartWorkspace: View {
     let onOpenOrder: () -> Void
     let onRefreshNews: () -> Void
 
-    @State private var chartControls = ChartControlState()
+    @AppStorage("interactive-chart.show-ma5") private var showMA5 = true
+    @AppStorage("interactive-chart.show-ma20") private var showMA20 = true
+    @AppStorage("interactive-chart.show-ma60") private var showMA60 = true
+    @AppStorage("interactive-chart.show-rsi") private var showRSI = true
+    @State private var chartResetToken = 0
+    @State private var chartReloadToken = 0
+    @State private var chartError: String?
+    @State private var selectedChartSignal: String?
 
     private var workspaceAnalysis: WorkspaceAnalysis? {
         guard let latest = model.latestWorkspaceAnalysis,
@@ -51,11 +58,8 @@ struct BeginnerChartWorkspace: View {
         }
         .background(BeginnerPalette.background)
         .accessibilityIdentifier("beginner-chart-workspace")
-        .task {
-            chartControls.timeframe = selectedChartTimeframe.rawValue
-        }
         .onChange(of: selectedChartTimeframe) { _, timeframe in
-            chartControls.timeframe = timeframe.rawValue
+            chartResetToken += 1
             onChartTimeframeChanged(timeframe)
         }
     }
@@ -176,19 +180,72 @@ struct BeginnerChartWorkspace: View {
                     .pickerStyle(.menu)
                     .frame(width: 104)
                     .accessibilityIdentifier("beginner-chart-timeframe")
+                    Menu("지표") {
+                        Toggle("MA 5", isOn: $showMA5)
+                        Toggle("MA 20", isOn: $showMA20)
+                        Toggle("MA 60", isOn: $showMA60)
+                        Divider()
+                        Toggle("RSI 14", isOn: $showRSI)
+                    }
+                    .menuStyle(.borderedButton)
+                    .accessibilityIdentifier("beginner-chart-indicators")
+                    Button("차트 초기화") {
+                        chartResetToken += 1
+                    }
+                    .buttonStyle(.bordered)
+                    .accessibilityIdentifier("beginner-chart-reset")
                 }
 
-                HStack(spacing: 0) {
-                    PriceChart(selectedSymbol: selectedSymbol, analysis: chartAnalysis, controls: chartControls)
-                    PriceAxis(analysis: chartAnalysis)
-                        .frame(width: 70)
+                ZStack {
+                    InteractiveChartView(
+                        analysis: chartAnalysis,
+                        options: InteractiveChartOptions(
+                            showMA5: showMA5,
+                            showMA20: showMA20,
+                            showMA60: showMA60,
+                            showRSI: showRSI,
+                            resetToken: chartResetToken,
+                            reloadToken: chartReloadToken
+                        ),
+                        selectedSignalText: $selectedChartSignal,
+                        chartError: $chartError
+                    )
+                    if let chartError {
+                        VStack(spacing: 8) {
+                            Label("인터랙티브 차트를 불러오지 못했습니다.", systemImage: "exclamationmark.triangle.fill")
+                                .font(.caption.weight(.semibold))
+                            Text(chartError)
+                                .font(.caption2)
+                                .foregroundStyle(BeginnerPalette.muted)
+                                .multilineTextAlignment(.center)
+                            Button("차트 다시 시도") {
+                                chartReloadToken += 1
+                            }
+                            .buttonStyle(.bordered)
+                            .accessibilityIdentifier("beginner-chart-retry")
+                        }
+                        .padding(16)
+                        .background(BeginnerPalette.surfaceRaised, in: RoundedRectangle(cornerRadius: 10))
+                    }
                 }
-                .frame(height: 360)
+                .frame(height: showRSI ? 430 : 360)
                 .clipShape(RoundedRectangle(cornerRadius: 10))
                 .overlay {
                     RoundedRectangle(cornerRadius: 10).stroke(BeginnerPalette.line)
                 }
                 .accessibilityIdentifier("beginner-price-chart")
+
+                if let selectedChartSignal, !selectedChartSignal.isEmpty {
+                    Text(selectedChartSignal)
+                        .font(.caption)
+                        .foregroundStyle(BeginnerPalette.muted)
+                        .lineLimit(2)
+                        .accessibilityIdentifier("beginner-chart-signal-detail")
+                } else {
+                    Text("차트 위 신호에 커서를 올리면 근거와 가격을 확인할 수 있습니다.")
+                        .font(.caption)
+                        .foregroundStyle(BeginnerPalette.muted)
+                }
             }
         }
     }

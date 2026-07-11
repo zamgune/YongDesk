@@ -2710,7 +2710,13 @@ export async function analyzeSymbol(
   }
 
   const visibleCandles = candles.slice(visibleStartIndex);
-  const visibleSignals = signals.filter((signal) => signal.time >= requestedStartUnix);
+  const candleByTime = new Map(candles.map((candle) => [candle.time, candle]));
+  const visibleSignals = signals
+    .filter((signal) => signal.time >= requestedStartUnix)
+    .map((signal) => ({
+      ...signal,
+      price: candleByTime.get(signal.time)?.close ?? null,
+    }));
   const trendFollowingSignals = calculateTrendFollowingSignals({
     candles,
     sma5: sma5Aligned,
@@ -2812,6 +2818,11 @@ export async function analyzeSymbol(
     breakoutRule,
     tradeSetup,
   });
+  const chartBreakoutSignal = breakoutSignal && latestCandle ? {
+    ...breakoutSignal,
+    time: latestCandle.time,
+    price: breakoutSignal.breakoutLevel ?? latestCandle.close,
+  } : breakoutSignal;
   const signalReliability = calculateSignalReliability({
     candles,
     sma5: sma5Aligned,
@@ -2819,7 +2830,7 @@ export async function analyzeSymbol(
     sma50: sma50Aligned,
     volumeMa20: volMa20Aligned,
     patternSignals,
-    breakoutSignal,
+    breakoutSignal: chartBreakoutSignal,
   });
   const visibleEmittedBuyMask = emittedBuyMask.slice(visibleStartIndex);
   const visibleDailySetupDetected = dailySetupDetected.slice(visibleStartIndex);
@@ -2879,7 +2890,7 @@ export async function analyzeSymbol(
     tradeSetup,
     chartQuality,
     patternSignals,
-    breakoutSignal,
+    breakoutSignal: chartBreakoutSignal,
     signalReliability,
     analysisBasis: {
       atr14: latestAtr14,

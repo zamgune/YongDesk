@@ -74,6 +74,31 @@ func verifyBeginnerNavigationAndConnectionWorkspaceSource() throws {
 
 try verifyBeginnerNavigationAndConnectionWorkspaceSource()
 
+func verifyInteractiveChartWorkbenchSource() throws {
+    let packageURL = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+    let chartView = try String(
+        contentsOf: packageURL.appending(path: "Sources/StockAnalysisMac/BeginnerFirst/InteractiveChartView.swift"),
+        encoding: .utf8
+    )
+    let workspace = try String(
+        contentsOf: packageURL.appending(path: "Sources/StockAnalysisMac/BeginnerFirst/BeginnerChartWorkspace.swift"),
+        encoding: .utf8
+    )
+
+    assert(chartView.contains("WKWebView"), "chart workbench should use the bundled WebKit chart surface")
+    assert(chartView.contains("lightweight-charts.standalone.production.js"), "chart workbench should load the bundled lightweight chart library")
+    assert(chartView.contains("createSeriesMarkers"), "chart workbench should pin analysis markers to candle timestamps")
+    assert(chartView.contains("handleScroll:true") && chartView.contains("handleScale:true"), "chart should support drag and zoom interactions")
+    assert(workspace.contains("interactive-chart.show-ma5"), "chart indicator selections should persist on this Mac")
+    assert(workspace.contains("beginner-chart-indicators"), "chart indicator controls need a stable accessibility identifier")
+    assert(workspace.contains("beginner-chart-reset"), "chart reset needs a stable accessibility identifier")
+}
+
+try verifyInteractiveChartWorkbenchSource()
+
 struct MockHTTPResponse {
     let statusCode: Int
     let body: String

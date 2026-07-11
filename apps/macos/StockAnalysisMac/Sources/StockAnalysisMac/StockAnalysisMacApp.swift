@@ -2667,14 +2667,33 @@ final class AppModel: ObservableObject {
         let quality = json["chartQuality"] as? [String: Any]
         let reliability = json["signalReliability"] as? [String: Any]
         let breakout = json["breakoutSignal"] as? [String: Any]
+        let rawIndicators = json["indicators"] as? [String: Any]
+        let rawSma = rawIndicators?["sma"] as? [String: Any]
+        func indicatorPoints(_ raw: Any?) -> [AnalysisIndicatorPoint] {
+            (raw as? [[String: Any]] ?? []).compactMap { item in
+                guard let time = number(item["time"]), let value = number(item["value"]) else {
+                    return nil
+                }
+                return AnalysisIndicatorPoint(time: Int(time), value: value)
+            }
+        }
+        let indicators = AnalysisChartIndicators(
+            sma5: indicatorPoints(rawSma?["5"]),
+            sma20: indicatorPoints(rawSma?["20"]),
+            sma60: indicatorPoints(rawSma?["60"]),
+            rsi: indicatorPoints(rawIndicators?["rsi"])
+        )
         let rawSignals = json["signals"] as? [[String: Any]] ?? []
-        let recentSignals = rawSignals.suffix(5).enumerated().map { index, signal in
+        let recentSignals = rawSignals.suffix(80).enumerated().map { index, signal in
             let label = string(signal["label"]) ?? string(signal["type"]) ?? "signal"
-            let time = wholeNumberText(signal["time"]) ?? "\(index)"
+            let time = Int(number(signal["time"]) ?? Double(index))
             return AnalysisSignal(
                 id: "\(time)-\(label)-\(index)",
+                time: time,
+                type: string(signal["type"]) ?? "signal",
                 label: label,
-                reason: string(signal["reason"]) ?? "-"
+                reason: string(signal["reason"]) ?? "-",
+                price: number(signal["price"])
             )
         }
 
@@ -2700,6 +2719,9 @@ final class AppModel: ObservableObject {
             reliabilityRiskReward: reliability.flatMap { number($0["riskReward"]) },
             breakoutStatus: breakout.flatMap { string($0["status"]) },
             breakoutPattern: breakout.flatMap { string($0["pattern"]) },
+            indicators: indicators,
+            breakoutTime: breakout.flatMap { number($0["time"]) }.map(Int.init),
+            breakoutPrice: breakout.flatMap { number($0["price"]) },
             recentSignals: Array(recentSignals)
         )
     }
@@ -4411,6 +4433,9 @@ struct MarketAnalysisSnapshot: Equatable {
     let reliabilityRiskReward: Double?
     let breakoutStatus: String?
     let breakoutPattern: String?
+    let indicators: AnalysisChartIndicators
+    let breakoutTime: Int?
+    let breakoutPrice: Double?
     let recentSignals: [AnalysisSignal]
 
     var changeRatio: Double? {
@@ -4433,8 +4458,25 @@ struct AnalysisCandle: Identifiable, Equatable {
 
 struct AnalysisSignal: Identifiable, Equatable {
     let id: String
+    let time: Int
+    let type: String
     let label: String
     let reason: String
+    let price: Double?
+}
+
+struct AnalysisIndicatorPoint: Equatable {
+    let time: Int
+    let value: Double
+}
+
+struct AnalysisChartIndicators: Equatable {
+    let sma5: [AnalysisIndicatorPoint]
+    let sma20: [AnalysisIndicatorPoint]
+    let sma60: [AnalysisIndicatorPoint]
+    let rsi: [AnalysisIndicatorPoint]
+
+    static let empty = AnalysisChartIndicators(sma5: [], sma20: [], sma60: [], rsi: [])
 }
 
 struct StrategyPriceSuggestion {

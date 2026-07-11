@@ -41,6 +41,10 @@ export type BreakoutSignal = {
   entryPlan: string;
   invalidation: string;
   reasons: string[];
+  /** 차트 주기의 실제 발생 봉. 차트 주석을 위한 선택 필드다. */
+  time?: number;
+  /** 발생 봉의 돌파 기준 가격. */
+  price?: number;
 };
 
 export type PatternCandle = {

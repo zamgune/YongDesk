@@ -219,19 +219,41 @@ test("local chart returns each requested candle timeframe without external data 
       "http://127.0.0.1:38771/api/local/chart?symbol=005930.KS&assetClass=stock&tf=15m",
     ));
     assert.equal(stockResponse.status, 200);
-    const stock = await stockResponse.json() as { timeframe?: string; currency?: string; candles?: unknown[] };
+    const stock = await stockResponse.json() as {
+      timeframe?: string;
+      currency?: string;
+      candles?: unknown[];
+      indicators?: { sma?: Record<string, unknown[]>; rsi?: unknown[] };
+      signals?: Array<{ time?: number; price?: number | null }>;
+    };
     assert.equal(stock.timeframe, "15m");
     assert.equal(stock.currency, "KRW");
     assert.equal(stock.candles?.length, 180);
+    assert.equal(stock.indicators?.sma?.["5"]?.length, 176);
+    assert.equal(stock.indicators?.sma?.["20"]?.length, 161);
+    assert.equal(stock.indicators?.sma?.["60"]?.length, 121);
+    assert.equal(stock.indicators?.rsi?.length, 166);
+    assert.ok(stock.signals?.every((signal) => typeof signal.time === "number" && "price" in signal));
 
     const cryptoResponse = await handleLocalEngineRequest(new Request(
       "http://127.0.0.1:38771/api/local/chart?symbol=KRW-BTC&assetClass=crypto&tf=5m",
     ));
     assert.equal(cryptoResponse.status, 200);
-    const crypto = await cryptoResponse.json() as { timeframe?: string; currency?: string; dataSource?: string };
+    const crypto = await cryptoResponse.json() as {
+      timeframe?: string;
+      currency?: string;
+      dataSource?: string;
+      indicators?: { sma?: Record<string, unknown[]>; rsi?: unknown[] };
+      signals?: unknown[];
+      breakoutSignal?: unknown;
+    };
     assert.equal(crypto.timeframe, "5m");
     assert.equal(crypto.currency, "KRW");
     assert.equal(crypto.dataSource, "fixture");
+    assert.equal(crypto.indicators?.sma?.["60"]?.length, 121);
+    assert.equal(crypto.indicators?.rsi?.length, 166);
+    assert.deepEqual(crypto.signals, []);
+    assert.equal(crypto.breakoutSignal, null);
   } finally {
     if (previousFixtureMode === undefined) delete process.env.STOCK_ANALYSIS_MARKET_FIXTURE_MODE;
     else process.env.STOCK_ANALYSIS_MARKET_FIXTURE_MODE = previousFixtureMode;

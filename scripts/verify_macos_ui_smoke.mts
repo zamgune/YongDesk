@@ -566,6 +566,9 @@ const verifyWorkspaceLayout = (size: WindowSize) => {
   waitForAX("beginner-symbol-search");
   waitForAX("beginner-analyze-button");
   waitForAX("beginner-chart-timeframe");
+  waitForAX("beginner-chart-indicators");
+  waitForAX("beginner-chart-reset");
+  waitForAX("beginner-chart-timeframe");
   assertInsideWindow("beginner-symbol-search", actual);
   assertInsideWindow("beginner-analyze-button", actual);
 
@@ -619,6 +622,7 @@ const verifyCoreFlow = () => {
   waitForText("FIXTURE", 60_000);
   waitForText("KRW", 60_000);
   waitForText("2026", 60_000);
+  clickAX("beginner-chart-reset");
 
   waitForAX("beginner-analysis-tab-analysis");
   clickAX("beginner-analysis-tab-analysis");
@@ -773,6 +777,8 @@ const main = () => {
       "beginner-symbol-search",
       "beginner-analyze-button",
       "beginner-chart-timeframe",
+      "beginner-chart-indicators",
+      "beginner-chart-reset",
       "beginner-chart-workspace",
       "beginner-add-watchlist",
       "beginner-watchlist-workspace",
