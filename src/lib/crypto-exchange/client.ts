@@ -110,6 +110,17 @@ export type CryptoOrderStatus = {
   raw: Record<string, unknown>;
 };
 
+export type CryptoOpenOrder = {
+  orderId: string;
+  clientOrderId: string | null;
+  market: string;
+  side: "bid" | "ask";
+  state: string;
+  price: number | null;
+  volume: number;
+  executedVolume: number;
+};
+
 export class CryptoExchangeApiError extends Error {
   readonly exchange: CryptoExchange;
   readonly status: number;
@@ -599,28 +610,70 @@ export const createCryptoMarketSellOrder = async (
   return { orderId: orderId(exchange, raw), clientOrderId: orderClientId(exchange, raw), raw };
 };
 
-export const getUpbitOrderByIdentifier = async (
+export const getCryptoOrderByClientOrderId = async (
+  exchange: CryptoExchange,
   credentials: CryptoExchangeCredentials,
   identifier: string,
   fetchImpl: typeof fetch = fetch,
 ): Promise<CryptoOrderStatus> => {
   if (!identifier.trim()) {
-    throw new CryptoExchangeApiError("upbit", 400, "Upbit 주문 식별자가 필요합니다.");
+    throw new CryptoExchangeApiError(exchange, 400, `${exchange} 주문 식별자가 필요합니다.`);
   }
   const raw = await privateRequest<Record<string, unknown>>({
-    exchange: "upbit",
+    exchange,
     credentials,
-    path: CONTRACTS.upbit.orderLookupPath ?? "/v1/order",
-    parameters: { identifier },
+    path: CONTRACTS[exchange].orderLookupPath ?? "/v1/order",
+    parameters: exchange === "upbit" ? { identifier } : { client_order_id: identifier },
     fetchImpl,
   });
   const state = typeof raw.state === "string" ? raw.state : null;
   return {
-    orderId: orderId("upbit", raw),
-    clientOrderId: orderClientId("upbit", raw),
+    orderId: orderId(exchange, raw),
+    clientOrderId: orderClientId(exchange, raw),
     state,
     raw,
   };
+};
+
+export const getUpbitOrderByIdentifier = (
+  credentials: CryptoExchangeCredentials,
+  identifier: string,
+  fetchImpl: typeof fetch = fetch,
+) => getCryptoOrderByClientOrderId("upbit", credentials, identifier, fetchImpl);
+
+export const getCryptoOpenOrders = async (
+  exchange: CryptoExchange,
+  credentials: CryptoExchangeCredentials,
+  fetchImpl: typeof fetch = fetch,
+): Promise<CryptoOpenOrder[]> => {
+  const raw = await privateRequest<Array<Record<string, unknown>>>({
+    exchange,
+    credentials,
+    path: "/v1/orders",
+    parameters: { state: "wait" },
+    fetchImpl,
+  });
+  return raw.flatMap((item): CryptoOpenOrder[] => {
+    const market = typeof item.market === "string" ? item.market.toUpperCase() : "";
+    const side = item.side === "ask" ? "ask" : item.side === "bid" ? "bid" : null;
+    const volume = numericValue(item.volume ?? item.quantity);
+    const executedVolume = numericValue(item.executed_volume ?? item.executed_quantity) ?? 0;
+    if (!market || !side || volume === null || volume < 0) return [];
+    try {
+      return [{
+        orderId: orderId(exchange, item),
+        clientOrderId: orderClientId(exchange, item),
+        market,
+        side,
+        state: typeof item.state === "string" ? item.state : "wait",
+        price: numericValue(item.price ?? item.order_price),
+        volume,
+        executedVolume,
+      }];
+    } catch {
+      return [];
+    }
+  });
 };
 
 export const cancelCryptoOrder = async (

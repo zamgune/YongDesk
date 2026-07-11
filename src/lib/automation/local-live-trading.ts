@@ -11,7 +11,7 @@ import { stockAnalysisStoragePath } from "@/lib/local-storage";
  * 기록하고, 결과가 불명확하면 어떤 재시도도 하지 않은 채 전체 실거래를 잠근다.
  */
 
-export const LOCAL_LIVE_TRADING_QA_CONFIRMATION = "실거래 QA 승인";
+export const LOCAL_LIVE_TRADING_CONSENT_CONFIRMATION = "주식 실거래 위험을 확인했습니다";
 export const LOCAL_LIVE_TRADING_MANUAL_CONFIRMATION = "실거래 수동 주문 해제";
 export const LOCAL_LIVE_TRADING_AUTOMATION_CONFIRMATION = "자동화 실거래 해제";
 export const LOCAL_LIVE_TRADING_MAX_BUY_ORDER_KRW = 100_000;
@@ -31,7 +31,9 @@ export type LiveTradingPolicy = {
   installationId: string;
   boundUserId: string | null;
   boundAccountSeq: number | null;
-  manualQaApprovedAt: string | null;
+  readinessVerifiedAt: string | null;
+  bindingHash: string | null;
+  userConsentAt: string | null;
   manualEnabled: boolean;
   automationEnabled: boolean;
   dailyBuyKrwDate: string;
@@ -91,7 +93,7 @@ export type LocalLiveTradingSnapshot = {
 };
 
 type LiveTradingStore = {
-  version: 1;
+  version: 2;
   policy: LiveTradingPolicy;
   attempts: LiveOrderAttempt[];
 };
@@ -113,7 +115,9 @@ const defaultPolicy = (): LiveTradingPolicy => ({
   installationId: randomUUID(),
   boundUserId: null,
   boundAccountSeq: null,
-  manualQaApprovedAt: null,
+  readinessVerifiedAt: null,
+  bindingHash: null,
+  userConsentAt: null,
   manualEnabled: false,
   automationEnabled: false,
   dailyBuyKrwDate: kstDate(),
@@ -134,9 +138,11 @@ const normalizePolicy = (raw: Partial<LiveTradingPolicy> | null | undefined): Li
     boundAccountSeq: Number.isInteger(raw?.boundAccountSeq) && Number(raw?.boundAccountSeq) > 0
       ? Number(raw?.boundAccountSeq)
       : null,
-    manualQaApprovedAt: typeof raw?.manualQaApprovedAt === "string" ? raw.manualQaApprovedAt : null,
-    manualEnabled: raw?.manualEnabled === true,
-    automationEnabled: raw?.automationEnabled === true,
+    readinessVerifiedAt: typeof raw?.readinessVerifiedAt === "string" ? raw.readinessVerifiedAt : null,
+    bindingHash: typeof raw?.bindingHash === "string" ? raw.bindingHash : null,
+    userConsentAt: typeof raw?.userConsentAt === "string" ? raw.userConsentAt : null,
+    manualEnabled: raw?.manualEnabled === true && typeof raw?.readinessVerifiedAt === "string",
+    automationEnabled: raw?.automationEnabled === true && typeof raw?.readinessVerifiedAt === "string",
     dailyBuyKrwDate: typeof raw?.dailyBuyKrwDate === "string" ? raw.dailyBuyKrwDate : fallback.dailyBuyKrwDate,
     dailyBuyKrwSubmitted: Number.isFinite(dailyBuyKrwSubmitted) && dailyBuyKrwSubmitted >= 0 ? dailyBuyKrwSubmitted : 0,
     lastReconciliationAt: typeof raw?.lastReconciliationAt === "string" ? raw.lastReconciliationAt : null,
@@ -195,14 +201,14 @@ const readStore = async (): Promise<LiveTradingStore> => {
   try {
     const parsed = JSON.parse(await readFile(STORE_PATH, "utf8")) as Partial<LiveTradingStore>;
     return {
-      version: 1,
-      policy: normalizePolicy(parsed.policy),
+      version: 2,
+      policy: parsed.version === 2 ? normalizePolicy(parsed.policy) : defaultPolicy(),
       attempts: Array.isArray(parsed.attempts)
         ? parsed.attempts.map((attempt) => normalizeAttempt(attempt as Partial<LiveOrderAttempt>)).filter((attempt): attempt is LiveOrderAttempt => attempt !== null)
         : [],
     };
   } catch {
-    return { version: 1, policy: defaultPolicy(), attempts: [] };
+    return { version: 2, policy: defaultPolicy(), attempts: [] };
   }
 };
 
@@ -288,7 +294,9 @@ export const getLocalLiveTradingSnapshot = async (): Promise<LocalLiveTradingSna
 const resetBinding = (policy: LiveTradingPolicy, userId: string, accountSeq: number) => {
   policy.boundUserId = userId;
   policy.boundAccountSeq = accountSeq;
-  policy.manualQaApprovedAt = null;
+  policy.readinessVerifiedAt = null;
+  policy.bindingHash = null;
+  policy.userConsentAt = null;
   policy.manualEnabled = false;
   policy.automationEnabled = false;
   policy.lastReconciliationAt = null;
@@ -296,7 +304,28 @@ const resetBinding = (policy: LiveTradingPolicy, userId: string, accountSeq: num
   policy.unknownLock = null;
 };
 
-export const approveLocalManualQa = async ({
+export const verifyLocalManualReadiness = async ({
+  userId,
+  accountSeq,
+  bindingHash,
+}: {
+  userId: string;
+  accountSeq: number;
+  bindingHash: string;
+}): Promise<LocalLiveTradingSnapshot> => withStore(async (store) => {
+  resetDailyLimitIfNeeded(store.policy);
+  if (!isBoundTo(store.policy, userId, accountSeq) || store.policy.bindingHash !== bindingHash) {
+    if (store.policy.unknownLock) {
+      throw new Error("결과 불명 주문이 있어 다른 계좌로 readiness 바인딩을 변경할 수 없습니다. Toss 주문 이력을 먼저 확인하세요.");
+    }
+    resetBinding(store.policy, userId, accountSeq);
+  }
+  store.policy.bindingHash = bindingHash;
+  store.policy.readinessVerifiedAt = nowIso();
+  return snapshot(store);
+});
+
+export const consentLocalLiveTrading = async ({
   userId,
   accountSeq,
   confirmation,
@@ -305,17 +334,13 @@ export const approveLocalManualQa = async ({
   accountSeq: number;
   confirmation: string;
 }): Promise<LocalLiveTradingSnapshot> => withStore(async (store) => {
-  resetDailyLimitIfNeeded(store.policy);
-  if (confirmation.trim() !== LOCAL_LIVE_TRADING_QA_CONFIRMATION) {
-    throw new Error(`QA 승인 문구 \"${LOCAL_LIVE_TRADING_QA_CONFIRMATION}\"를 정확히 입력해야 합니다.`);
+  if (!isBoundTo(store.policy, userId, accountSeq) || !store.policy.readinessVerifiedAt) {
+    throw new Error("자동 읽기 전용 점검을 먼저 완료하세요.");
   }
-  if (!isBoundTo(store.policy, userId, accountSeq)) {
-    if (store.policy.unknownLock) {
-      throw new Error("결과 불명 주문이 있어 다른 계좌로 QA 바인딩을 변경할 수 없습니다. Toss 주문 이력을 운영자 확인으로 먼저 해소하세요.");
-    }
-    resetBinding(store.policy, userId, accountSeq);
+  if (confirmation.trim() !== LOCAL_LIVE_TRADING_CONSENT_CONFIRMATION) {
+    throw new Error(`동의 문구 \"${LOCAL_LIVE_TRADING_CONSENT_CONFIRMATION}\"를 정확히 입력해야 합니다.`);
   }
-  store.policy.manualQaApprovedAt = nowIso();
+  store.policy.userConsentAt = nowIso();
   return snapshot(store);
 });
 
@@ -336,8 +361,8 @@ export const setLocalManualLiveTrading = async ({
     store.policy.automationEnabled = false;
     return snapshot(store);
   }
-  if (!isBoundTo(store.policy, userId, accountSeq) || !store.policy.manualQaApprovedAt) {
-    throw new Error("현재 설치와 선택 계좌에서 완료된 실거래 QA 승인이 필요합니다.");
+  if (!isBoundTo(store.policy, userId, accountSeq) || !store.policy.readinessVerifiedAt || !store.policy.userConsentAt) {
+    throw new Error("현재 설치와 선택 계좌의 자동 읽기 전용 점검 및 실거래 이용 동의가 필요합니다.");
   }
   if (confirmation?.trim() !== LOCAL_LIVE_TRADING_MANUAL_CONFIRMATION) {
     throw new Error(`수동 주문 해제 문구 \"${LOCAL_LIVE_TRADING_MANUAL_CONFIRMATION}\"를 정확히 입력해야 합니다.`);
@@ -443,7 +468,8 @@ export const getLocalLiveTradingGate = async ({
   resetDailyLimitIfNeeded(store.policy);
   const remainingDailyBuyKrw = Math.max(0, LOCAL_LIVE_TRADING_MAX_DAILY_BUY_KRW - store.policy.dailyBuyKrwSubmitted);
   if (!globalGateOpen) return { effective: false, reason: globalGateReason ?? "실거래 기본 게이트가 닫혀 있습니다.", remainingDailyBuyKrw };
-  if (!isBoundTo(store.policy, userId, accountSeq)) return { effective: false, reason: "현재 설치와 선택 계좌에 실거래 QA가 바인딩되지 않았습니다.", remainingDailyBuyKrw };
+  if (!isBoundTo(store.policy, userId, accountSeq) || !store.policy.readinessVerifiedAt || !store.policy.bindingHash) return { effective: false, reason: "현재 설치와 선택 계좌의 자동 읽기 전용 점검이 필요합니다.", remainingDailyBuyKrw };
+  if (!store.policy.userConsentAt) return { effective: false, reason: "주식 실거래 위험 이용 동의가 필요합니다.", remainingDailyBuyKrw };
   if (store.policy.unknownLock) return { effective: false, reason: "결과 불명 주문이 있어 운영자 확인 전까지 실거래를 잠급니다.", remainingDailyBuyKrw };
   if (killSwitchEngaged) return { effective: false, reason: "긴급 중지가 켜져 있습니다.", remainingDailyBuyKrw };
   if (workerPaused) return { effective: false, reason: "워커 일시중지 상태입니다.", remainingDailyBuyKrw };

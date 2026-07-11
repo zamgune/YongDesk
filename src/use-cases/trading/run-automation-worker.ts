@@ -75,6 +75,8 @@ export type RunAutomationWorkerTickInput = {
   resolveEntryPrice?: (symbol: string) => Promise<number | null>;
   /** rescueMode=cancel-and-liquidate 시 취소할 미체결 주문 ID 해석기 */
   resolveOpenOrderIds?: (symbol: string) => Promise<string[]>;
+  /** 거래소 체결 조회 전에는 전략 단계를 완료 처리하지 않는 실거래 경계 */
+  deferExecutionUntilFill?: boolean;
   now?: string;
 };
 
@@ -121,6 +123,7 @@ export const runAutomationWorkerTick = async ({
   resolveExitQuantity,
   resolveEntryPrice,
   resolveOpenOrderIds,
+  deferExecutionUntilFill = false,
   now = new Date().toISOString(),
 }: RunAutomationWorkerTickInput): Promise<AutomationWorkerTickResult> => {
   const logs: WorkerLog[] = [];
@@ -132,6 +135,19 @@ export const runAutomationWorkerTick = async ({
   const symbol = config.symbol.trim().toUpperCase();
 
   // 순환분할식 퍼센트 그리드 모드
+  if (deferExecutionUntilFill && config.mode !== "ladder") {
+    return {
+      strategyId: config.id,
+      symbol,
+      marketPrice,
+      liveTradingEnabled,
+      evaluatedAt: now,
+      triggers: 0,
+      orders: [],
+      logs: [{ level: "warning", message: "체결 확인형 코인 실거래 자동화는 ladder 지정가 전략만 지원합니다." }],
+    };
+  }
+
   if (config.mode === "percent-grid" && config.grid) {
     return runGridTick({
       userId,
@@ -227,7 +243,7 @@ export const runAutomationWorkerTick = async ({
       message: outcome.message,
     });
     // 실제 전송된 경우에만 원장에 기록 (blocked/error 는 다음 틱 재평가)
-    if (outcome.status === "submitted") {
+    if (outcome.status === "submitted" && !deferExecutionUntilFill) {
       state = recordExecutedStep(state, trigger.stepKey, trigger.side);
     }
   }
@@ -256,7 +272,7 @@ export const runAutomationWorkerTick = async ({
           level: outcome.status === "error" ? "error" : outcome.status === "blocked" ? "warning" : "info",
           message: outcome.message,
         });
-        if (outcome.status === "submitted") {
+        if (outcome.status === "submitted" && !deferExecutionUntilFill) {
           state = clearStopLossPending(
             recordExecutedStep(state, exitStepKey, "sell"),
             config.id,
@@ -268,7 +284,7 @@ export const runAutomationWorkerTick = async ({
           strategyTransition = {
             status: "disabled",
             reason: "stop-loss",
-            completed: outcome.status === "submitted",
+            completed: outcome.status === "submitted" && !deferExecutionUntilFill,
           };
         }
       } else {

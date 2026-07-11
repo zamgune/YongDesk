@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import test from "node:test";
@@ -10,6 +10,7 @@ process.env.STOCK_ANALYSIS_STORAGE_ROOT = await mkdtemp(join(tmpdir(), "stock-an
 process.env.STOCK_ANALYSIS_RUNTIME = "macos-local";
 process.env.STOCK_ANALYSIS_DISABLE_MARKET_SNAPSHOT = "1";
 process.env.STOCK_ANALYSIS_SIDECAR_BUILD_ID = "test-sidecar-build";
+process.env.STOCK_ANALYSIS_SKIP_AUTO_READINESS = "1";
 process.env.BROKER_CREDENTIAL_ENC_KEY = `test:${Buffer.alloc(32, 7).toString("base64")}`;
 
 const { handleLocalEngineRequest, startLocalEngineServer } = await import("../scripts/local_engine.mts");
@@ -20,6 +21,20 @@ const {
 } = await import("../src/lib/local-engine/news.ts");
 const { clearTossTokenCache } = await import("../src/lib/toss/client.ts");
 const { LocalAutomationScheduler } = await import("../src/lib/automation/local-scheduler.ts");
+const {
+  beginLocalCryptoOrderSubmission,
+  clearLocalCryptoLiveTradingBinding,
+  getLocalCryptoLiveTradingSnapshot,
+  markLocalCryptoOrderUnknown,
+  reconcileLocalCryptoOrder,
+  recordLocalCryptoOrderPreview,
+  recordLocalCryptoRecoveryProof,
+  setLocalCryptoAutomationLiveTrading,
+  setLocalCryptoLiveTradingConsent,
+  setLocalCryptoManualLiveTrading,
+  verifyLocalCryptoReadiness,
+} = await import("../src/lib/automation/local-crypto-live-trading.ts");
+const { consentLocalLiveTrading, getLocalLiveTradingSnapshot, verifyLocalManualReadiness } = await import("../src/lib/automation/local-live-trading.ts");
 const {
   getPaperTradingStorageRootForUser,
   readPaperTradingState,
@@ -33,6 +48,10 @@ const {
   clearInstrumentDisplayCache,
   resolveInstrumentDisplay,
 } = await import("../src/lib/market/instrument-display.ts");
+const {
+  normalizeCryptoRealPortfolio,
+  normalizeTossRealPortfolio,
+} = await import("../src/lib/local-engine/real-portfolio.ts");
 
 type FetchCall = {
   url: string;
@@ -427,6 +446,168 @@ test("local engine exposes fail-closed crypto exchange setup", async () => {
   assert.equal(precheck.orderSubmissionAttempted, false);
 });
 
+test("real portfolio normalizes Toss multi-currency holdings without treating buying power as cash", () => {
+  const provider = normalizeTossRealPortfolio([{
+    account: { accountNo: "1234567890", accountSeq: 7, accountType: "BROKERAGE" },
+    maskedAccount: "******7890",
+    holdings: {
+      marketValue: { krw: "125000", usd: "220" },
+      profitLoss: { krw: "25000", usd: "20" },
+      items: [{
+        symbol: "005930",
+        name: "삼성전자",
+        marketCountry: "KR",
+        currency: "KRW",
+        quantity: "1",
+        lastPrice: "125000",
+        averagePurchasePrice: "100000",
+        marketValue: { krw: "125000" },
+        profitLoss: { krw: "25000" },
+        cost: { krw: "100000" },
+      }],
+    },
+    buyingPower: {
+      KRW: { currency: "KRW", cashBuyingPower: "300000" },
+      USD: { currency: "USD", cashBuyingPower: "75" },
+    },
+    openOrders: [],
+    errors: [],
+  }], "2026-07-11T00:00:00.000Z");
+  assert.equal(provider.connectionStatus, "connected");
+  assert.equal(provider.accounts[0]?.maskedAccount, "******7890");
+  assert.equal(provider.accounts[0]?.balances[0]?.total, null);
+  assert.equal(provider.accounts[0]?.balances[0]?.buyingPower, 300000);
+  assert.equal(provider.positions[0]?.symbol, "005930");
+  assert.equal(provider.positions[0]?.marketValue, 125000);
+  assert.equal(provider.totalsByCurrency.find((total) => total.currency === "KRW")?.profitLoss, 25000);
+});
+
+test("real portfolio preserves locked crypto and unpriced assets", () => {
+  const provider = normalizeCryptoRealPortfolio({
+    exchange: "bithumb",
+    accounts: [
+      { currency: "KRW", balance: "50000", locked: "10000" },
+      { currency: "BTC", balance: "0.01", locked: "0.002", avg_buy_price: "100000000", unit_currency: "KRW" },
+      { currency: "NOQUOTE", balance: "3", locked: "1", avg_buy_price: "20", unit_currency: "KRW" },
+    ],
+    tickers: [{ market: "KRW-BTC", tradePrice: 120000000, timestamp: Date.now(), tradeTimestamp: null }],
+    openOrders: [{
+      orderId: "bithumb-order-1",
+      clientOrderId: "client-1",
+      market: "KRW-BTC",
+      side: "bid",
+      state: "wait",
+      price: 110000000,
+      volume: 0.001,
+      executedVolume: 0,
+    }],
+    generatedAt: "2026-07-11T00:00:00.000Z",
+  });
+  assert.equal(provider.accounts[0]?.balances[0]?.total, 60000);
+  assert.equal(provider.positions.find((position) => position.symbol === "KRW-BTC")?.lockedQuantity, 0.002);
+  assert.equal(provider.positions.find((position) => position.symbol === "KRW-NOQUOTE")?.valuationSupported, false);
+  assert.equal(provider.partial, true);
+  assert.equal(provider.openOrders[0]?.clientOrderId, "client-1");
+});
+
+test("real portfolio endpoint is fail-closed and never attempts orders without credentials", async () => {
+  const previousUserId = process.env.STOCK_ANALYSIS_LOCAL_USER_ID;
+  process.env.STOCK_ANALYSIS_LOCAL_USER_ID = `real-portfolio-empty-${Date.now()}`;
+  try {
+    const response = await handleLocalEngineRequest(new Request(
+      "http://127.0.0.1:38771/api/local/portfolio/real?refresh=1",
+    ));
+    assert.equal(response.status, 200);
+    const payload = await response.json() as {
+      providers?: Array<{ provider?: string; connectionStatus?: string }>;
+      orderSubmissionAttempted?: boolean;
+    };
+    assert.deepEqual(payload.providers?.map((provider) => provider.provider), ["toss", "upbit", "bithumb"]);
+    assert.equal(payload.providers?.every((provider) => provider.connectionStatus === "disconnected"), true);
+    assert.equal(payload.orderSubmissionAttempted, false);
+    assert.doesNotMatch(JSON.stringify(payload), /clientSecret|secretKey|access_token|accountNo/);
+  } finally {
+    if (previousUserId === undefined) delete process.env.STOCK_ANALYSIS_LOCAL_USER_ID;
+    else process.env.STOCK_ANALYSIS_LOCAL_USER_ID = previousUserId;
+  }
+});
+
+test("legacy QA approvals never migrate into live trading toggles", async () => {
+  const root = process.env.STOCK_ANALYSIS_STORAGE_ROOT!;
+  const directory = join(root, "automation-platform");
+  await mkdir(directory, { recursive: true });
+  await writeFile(join(directory, "local-crypto-live-trading.json"), JSON.stringify({
+    policy: { installationId: "legacy-crypto", boundUserId: "legacy", boundExchange: "upbit", qaApprovedAt: new Date().toISOString(), manualEnabled: true },
+    previews: [], attempts: [],
+  }));
+  await writeFile(join(directory, "local-live-trading.json"), JSON.stringify({
+    version: 1,
+    policy: { installationId: "legacy-toss", boundUserId: "legacy", boundAccountSeq: 1, manualQaApprovedAt: new Date().toISOString(), manualEnabled: true, automationEnabled: true },
+    attempts: [],
+  }));
+  const [crypto, toss] = await Promise.all([
+    getLocalCryptoLiveTradingSnapshot("upbit"),
+    getLocalLiveTradingSnapshot(),
+  ]);
+  assert.equal(crypto.policy.readinessVerifiedAt, null);
+  assert.equal(crypto.policy.manualEnabled, false);
+  assert.equal(crypto.policy.automationEnabled, false);
+  assert.equal(toss.policy.readinessVerifiedAt, null);
+  assert.equal(toss.policy.manualEnabled, false);
+  assert.equal(toss.policy.automationEnabled, false);
+});
+
+test("release mode hides developer QA endpoints", async () => {
+  const previous = process.env.STOCK_ANALYSIS_DEVELOPER_MODE;
+  delete process.env.STOCK_ANALYSIS_DEVELOPER_MODE;
+  try {
+    for (const path of ["/api/local/live-trading/qa", "/api/local/crypto-exchanges/upbit/live-trading/qa"]) {
+      const response = await handleLocalEngineRequest(new Request(`http://127.0.0.1:38771${path}`, { method: "POST" }));
+      assert.equal(response.status, 404);
+    }
+  } finally {
+    if (previous === undefined) delete process.env.STOCK_ANALYSIS_DEVELOPER_MODE;
+    else process.env.STOCK_ANALYSIS_DEVELOPER_MODE = previous;
+  }
+});
+
+test("crypto credential registration records automatic read-only readiness without orders", async () => {
+  const previousSkip = process.env.STOCK_ANALYSIS_SKIP_AUTO_READINESS;
+  const previousUserId = process.env.STOCK_ANALYSIS_LOCAL_USER_ID;
+  delete process.env.STOCK_ANALYSIS_SKIP_AUTO_READINESS;
+  process.env.STOCK_ANALYSIS_LOCAL_USER_ID = `auto-readiness-${Date.now()}`;
+  const timestamp = Date.now();
+  try {
+    await withMockFetch([
+      Response.json([{ currency: "KRW", balance: "1000000", locked: "0" }]),
+      Response.json([{ currency: "KRW", balance: "1000000", locked: "0" }]),
+      Response.json({ bid_fee: "0.0005", ask_fee: "0.0005", market: { bid: { min_total: "5000" }, ask: { min_total: "5000" } } }),
+      Response.json([{ market: "KRW-BTC", trade_price: 100_000_000, timestamp }]),
+      Response.json([{ market: "KRW-BTC", quote_currency: "KRW", tick_size: "1000" }]),
+    ], async (calls) => {
+      const response = await handleLocalEngineRequest(new Request("http://127.0.0.1:38771/api/local/crypto-exchanges/upbit/credentials", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ accessKey: "auto-ready-access", secretKey: "auto-ready-secret" }),
+      }));
+      assert.equal(response.status, 200, await response.clone().text());
+      const payload = await response.json() as { readiness?: { ready?: boolean }; orderSubmissionAttempted?: boolean };
+      assert.equal(payload.readiness?.ready, true);
+      assert.equal(payload.orderSubmissionAttempted, false);
+      assert.equal(calls.some((call) => call.init?.method === "POST"), false);
+    });
+    const state = await getLocalCryptoLiveTradingSnapshot("upbit");
+    assert.ok(state.policy.readinessVerifiedAt);
+    assert.equal(state.policy.manualEnabled, false);
+    assert.equal(state.policy.automationEnabled, false);
+  } finally {
+    if (previousSkip === undefined) delete process.env.STOCK_ANALYSIS_SKIP_AUTO_READINESS;
+    else process.env.STOCK_ANALYSIS_SKIP_AUTO_READINESS = previousSkip;
+    if (previousUserId === undefined) delete process.env.STOCK_ANALYSIS_LOCAL_USER_ID;
+    else process.env.STOCK_ANALYSIS_LOCAL_USER_ID = previousUserId;
+  }
+});
+
 test("Upbit readiness uses official tick size and response timestamp freshness", async () => {
   const previousUserId = process.env.STOCK_ANALYSIS_LOCAL_USER_ID;
   process.env.STOCK_ANALYSIS_LOCAL_USER_ID = `local-engine-upbit-readiness-${Date.now()}`;
@@ -489,7 +670,7 @@ test("Upbit readiness uses official tick size and response timestamp freshness",
   }
 });
 
-test("Upbit manual live orders require read-only QA, persist before submit, and reconcile unknown results", async () => {
+test("Upbit manual live orders require automatic readiness and consent, persist before submit, and reconcile unknown results", async () => {
   const previousUserId = process.env.STOCK_ANALYSIS_LOCAL_USER_ID;
   process.env.STOCK_ANALYSIS_LOCAL_USER_ID = `local-engine-upbit-live-${Date.now()}`;
   const responseTimestamp = Date.now();
@@ -539,21 +720,23 @@ test("Upbit manual live orders require read-only QA, persist before submit, and 
           body: JSON.stringify({ accessKey: "upbit-live-access", secretKey: "upbit-live-secret" }),
         },
       ));
-      assert.equal(response.status, 200);
+      assert.equal(response.status, 200, await response.clone().text());
     });
 
-    await withMockFetch(readonlyPrecheckResponses(), async (calls) => {
+    await verifyLocalCryptoReadiness({ userId: process.env.STOCK_ANALYSIS_LOCAL_USER_ID!, exchange: "upbit", bindingHash: "test-upbit-binding" });
+    await withMockFetch([], async (calls) => {
       const response = await handleLocalEngineRequest(new Request(
-        "http://127.0.0.1:38771/api/local/crypto-exchanges/upbit/live-trading/qa",
+        "http://127.0.0.1:38771/api/local/crypto-exchanges/upbit/live-trading/consent",
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ confirmation: "코인 실거래 QA 승인" }),
+          body: JSON.stringify({ confirmation: "코인 실거래 위험을 확인했습니다" }),
         },
       ));
-      assert.equal(response.status, 200);
-      const payload = await response.json() as { liveTrading?: { policy?: { qaApprovedAt?: string | null; manualEnabled?: boolean } } };
-      assert.ok(payload.liveTrading?.policy?.qaApprovedAt);
+      assert.equal(response.status, 200, await response.clone().text());
+      const payload = await response.json() as { liveTrading?: { policy?: { readinessVerifiedAt?: string | null; userConsentAt?: string | null; manualEnabled?: boolean } } };
+      assert.ok(payload.liveTrading?.policy?.readinessVerifiedAt);
+      assert.ok(payload.liveTrading?.policy?.userConsentAt);
       assert.equal(payload.liveTrading?.policy?.manualEnabled, false);
       assert.equal(calls.some((call) => call.init?.method === "POST"), false);
     });
@@ -583,20 +766,21 @@ test("Upbit manual live orders require read-only QA, persist before submit, and 
       "http://127.0.0.1:38771/api/local/crypto-exchanges/upbit/live-trading",
     ));
     const reRegisteredState = await reRegisteredStateResponse.json() as {
-      liveTrading?: { effective?: boolean; policy?: { qaApprovedAt?: string | null; manualEnabled?: boolean } };
+      liveTrading?: { effective?: boolean; policy?: { readinessVerifiedAt?: string | null; manualEnabled?: boolean } };
     };
     assert.equal(reRegisteredStateResponse.status, 200);
     assert.equal(reRegisteredState.liveTrading?.effective, false);
-    assert.equal(reRegisteredState.liveTrading?.policy?.qaApprovedAt, null);
+    assert.equal(reRegisteredState.liveTrading?.policy?.readinessVerifiedAt, null);
     assert.equal(reRegisteredState.liveTrading?.policy?.manualEnabled, false);
 
-    await withMockFetch(readonlyPrecheckResponses(), async () => {
+    await verifyLocalCryptoReadiness({ userId: process.env.STOCK_ANALYSIS_LOCAL_USER_ID!, exchange: "upbit", bindingHash: "test-upbit-binding-replaced" });
+    await withMockFetch([], async () => {
       const response = await handleLocalEngineRequest(new Request(
-        "http://127.0.0.1:38771/api/local/crypto-exchanges/upbit/live-trading/qa",
+        "http://127.0.0.1:38771/api/local/crypto-exchanges/upbit/live-trading/consent",
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ confirmation: "코인 실거래 QA 승인" }),
+          body: JSON.stringify({ confirmation: "코인 실거래 위험을 확인했습니다" }),
         },
       ));
       assert.equal(response.status, 200);
@@ -684,7 +868,7 @@ test("Upbit manual live orders require read-only QA, persist before submit, and 
       assert.equal(response.status, 200);
       const payload = await response.json() as { status?: string; attempt?: { status?: string; brokerOrderId?: string } };
       assert.equal(payload.status, "reconciled");
-      assert.equal(payload.attempt?.status, "reconciled");
+      assert.equal(payload.attempt?.status, "open");
       assert.equal(payload.attempt?.brokerOrderId, "upbit-live-order-unknown");
       assert.match(calls[0]?.url ?? "", /\/v1\/order\?identifier=/);
       assert.equal(calls[0]?.init?.method, "GET");
@@ -693,6 +877,99 @@ test("Upbit manual live orders require read-only QA, persist before submit, and 
     if (previousUserId === undefined) delete process.env.STOCK_ANALYSIS_LOCAL_USER_ID;
     else process.env.STOCK_ANALYSIS_LOCAL_USER_ID = previousUserId;
   }
+});
+
+test("Bithumb manual live limit order uses the shared ledger and client_order_id", async () => {
+  const previousUserId = process.env.STOCK_ANALYSIS_LOCAL_USER_ID;
+  process.env.STOCK_ANALYSIS_LOCAL_USER_ID = `local-engine-bithumb-live-${Date.now()}`;
+  const accounts = [{ currency: "KRW", balance: "1000000", locked: "0" }];
+  const chance = { bid_fee: "0.0004", ask_fee: "0.0004", market: { bid: { min_total: "5000", price_unit: "1000" }, ask: { min_total: "5000", price_unit: "1000" } } };
+  const ticker = [{ market: "KRW-BTC", trade_price: 50_000_000, timestamp: Date.now() }];
+  const precheckResponses = () => [Response.json(accounts), Response.json(chance), Response.json(ticker)];
+  try {
+    await withMockFetch([Response.json(accounts)], async () => {
+      const response = await handleLocalEngineRequest(new Request("http://127.0.0.1:38771/api/local/crypto-exchanges/bithumb/credentials", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ accessKey: "bithumb-live-access", secretKey: "bithumb-live-secret" }),
+      }));
+      assert.equal(response.status, 200);
+    });
+    await verifyLocalCryptoReadiness({ userId: process.env.STOCK_ANALYSIS_LOCAL_USER_ID, exchange: "bithumb", bindingHash: "test-bithumb-binding" });
+    const consent = await handleLocalEngineRequest(new Request("http://127.0.0.1:38771/api/local/crypto-exchanges/bithumb/live-trading/consent", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ confirmation: "코인 실거래 위험을 확인했습니다" }),
+    }));
+    assert.equal(consent.status, 200, await consent.clone().text());
+    const enabled = await handleLocalEngineRequest(new Request("http://127.0.0.1:38771/api/local/crypto-exchanges/bithumb/live-trading", {
+      method: "PUT", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ enabled: true, confirmation: "코인 실거래 수동 주문 해제" }),
+    }));
+    assert.equal(enabled.status, 200, await enabled.clone().text());
+    let preview: { id: string; confirmationText: string } | undefined;
+    await withMockFetch(precheckResponses(), async () => {
+      const response = await handleLocalEngineRequest(new Request("http://127.0.0.1:38771/api/local/crypto-exchanges/bithumb/orders/live-precheck", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ market: "KRW-BTC", side: "buy", volume: 0.001, price: 50_000_000 }),
+      }));
+      const payload = await response.json() as { preview?: { id?: string; confirmationText?: string } };
+      assert.equal(response.status, 200);
+      assert.ok(payload.preview?.id && payload.preview.confirmationText);
+      preview = { id: payload.preview.id, confirmationText: payload.preview.confirmationText };
+    });
+    await withMockFetch([...precheckResponses(), Response.json({ order_id: "bithumb-live-order-1", client_order_id: "bithumb-client" }, { status: 201 })], async (calls) => {
+      const response = await handleLocalEngineRequest(new Request("http://127.0.0.1:38771/api/local/crypto-exchanges/bithumb/orders/live-submit", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ previewId: preview?.id, confirmation: preview?.confirmationText }),
+      }));
+      assert.equal(response.status, 201, await response.clone().text());
+      const submitCall = calls.find((call) => call.url.endsWith("/v2/orders") && call.init?.method === "POST");
+      assert.ok(submitCall);
+      const body = JSON.parse(String(submitCall?.init?.body)) as Record<string, unknown>;
+      assert.equal(body.order_type, "limit");
+      assert.equal(typeof body.client_order_id, "string");
+    });
+  } finally {
+    if (previousUserId === undefined) delete process.env.STOCK_ANALYSIS_LOCAL_USER_ID;
+    else process.env.STOCK_ANALYSIS_LOCAL_USER_ID = previousUserId;
+  }
+});
+
+test("crypto automation unlock requires five exchange-confirmed manual orders and recovery proofs", async () => {
+  const userId = `crypto-automation-policy-${Date.now()}`;
+  const exchange = "bithumb" as const;
+  await clearLocalCryptoLiveTradingBinding(exchange);
+  await verifyLocalCryptoReadiness({ userId, exchange, bindingHash: "automation-binding" });
+  await setLocalCryptoLiveTradingConsent({ userId, exchange, confirmation: "코인 실거래 위험을 확인했습니다" });
+  await setLocalCryptoManualLiveTrading({ userId, exchange, enabled: true, confirmation: "코인 실거래 수동 주문 해제" });
+  await assert.rejects(
+    setLocalCryptoAutomationLiveTrading({ userId, exchange, enabled: true, confirmation: "코인 지정가 자동매매 해제" }),
+    /수동 주문 5건/,
+  );
+  for (let index = 0; index < 5; index += 1) {
+    const confirmationText = `manual-confirm-${index}`;
+    const preview = await recordLocalCryptoOrderPreview({
+      userId, exchange, market: "KRW-BTC", side: "sell", volume: 0.0001, price: 50_000_000,
+      confirmationText, payloadHash: `hash-${index}`,
+    });
+    const { attempt } = await beginLocalCryptoOrderSubmission({ userId, exchange, previewId: preview.id, confirmation: confirmationText });
+    await reconcileLocalCryptoOrder({ exchange, attemptId: attempt.id, brokerOrderId: `broker-${index}`, state: "open" });
+  }
+  await recordLocalCryptoRecoveryProof({ exchange, kind: "restart" });
+  await recordLocalCryptoRecoveryProof({ exchange, kind: "kill-switch" });
+  const enabled = await setLocalCryptoAutomationLiveTrading({ userId, exchange, enabled: true, confirmation: "코인 지정가 자동매매 해제" });
+  assert.equal(enabled.policy.automationEnabled, true);
+  assert.equal(enabled.policy.manualConfirmedOrderCount, 5);
+
+  const preview = await recordLocalCryptoOrderPreview({
+    userId, exchange, source: "automation", strategyKey: "strategy-1:buy-1",
+    market: "KRW-BTC", side: "sell", volume: 0.0001, price: 50_000_000,
+    confirmationText: "automation-confirm", payloadHash: "automation-hash",
+  });
+  const { attempt } = await beginLocalCryptoOrderSubmission({ userId, exchange, previewId: preview.id, confirmation: "automation-confirm" });
+  await markLocalCryptoOrderUnknown(attempt.id, "timeout", exchange);
+  const locked = await getLocalCryptoLiveTradingSnapshot(exchange);
+  assert.equal(locked.policy.automationEnabled, false);
+  assert.ok(locked.policy.unknownLock);
 });
 
 test("local engine server logs sanitized request status", async () => {
@@ -1783,7 +2060,7 @@ test("local engine does not persist rejected Toss broker credentials", async () 
   assert.equal(stored.accountPreference, null);
 });
 
-test("local engine keeps Toss manual live policy OFF until account QA is approved", async () => {
+test("local engine keeps Toss manual live policy OFF until readiness and consent", async () => {
   const previousLiveTrading = process.env.ENABLE_LIVE_TRADING;
   process.env.ENABLE_LIVE_TRADING = "true";
   try {
@@ -1916,7 +2193,7 @@ test("local engine previews Toss order precheck without submitting live orders",
       assert.equal(payload.preview?.brokerOrderId, undefined);
       assert.equal(payload.liveTradingGate?.effective, false);
       assert.equal(payload.liveTradingGate?.masterEnabled, true);
-      assert.ok(payload.blockers?.some((blocker) => blocker.includes("수동 실거래") || blocker.includes("실거래")));
+      assert.ok(payload.blockers?.some((blocker) => /실거래|읽기 전용|이용 동의/.test(blocker)));
       assert.match(payload.message ?? "", /완료되지/);
       assert.equal(calls.length, 4);
       assert.match(calls[2]?.url ?? "", /\/api\/v1\/buying-power/);
@@ -1970,19 +2247,8 @@ test("local engine persists before Toss submit and locks unknown requests withou
       assert.equal(response.status, 200);
     });
 
-    await withMockFetch([
-      jsonResponse({ access_token: "live-submit-qa", token_type: "Bearer", expires_in: 3600 }),
-      jsonResponse({ result: [account] }),
-      jsonResponse({ result: { items: [] } }),
-      jsonResponse({ result: { orders: [], nextCursor: null } }),
-    ], async () => {
-      const response = await handleLocalEngineRequest(new Request("http://127.0.0.1:38771/api/local/live-trading/qa", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ confirmation: "실거래 QA 승인" }),
-      }));
-      assert.equal(response.status, 200);
-    });
+    await verifyLocalManualReadiness({ userId: process.env.STOCK_ANALYSIS_LOCAL_USER_ID!, accountSeq: 81, bindingHash: "test-toss-binding" });
+    await consentLocalLiveTrading({ userId: process.env.STOCK_ANALYSIS_LOCAL_USER_ID!, accountSeq: 81, confirmation: "주식 실거래 위험을 확인했습니다" });
 
     const toggleResponse = await handleLocalEngineRequest(new Request("http://127.0.0.1:38771/api/local/live-trading", {
       method: "PUT",
@@ -2074,7 +2340,7 @@ test("local engine persists before Toss submit and locks unknown requests withou
   }
 });
 
-test("local engine requires QA confirmation after credential verification", async () => {
+test("local engine requires readiness and consent after credential verification", async () => {
   const previousLiveTrading = process.env.ENABLE_LIVE_TRADING;
   const previousUserId = process.env.STOCK_ANALYSIS_LOCAL_USER_ID;
   process.env.ENABLE_LIVE_TRADING = "true";
@@ -2115,7 +2381,7 @@ test("local engine requires QA confirmation after credential verification", asyn
       error?: string;
       orderSubmissionAttempted?: boolean;
     };
-    assert.match(payload.error ?? "", /QA 승인/);
+    assert.match(payload.error ?? "", /읽기 전용 점검|이용 동의/);
 
     const offResponse = await handleLocalEngineRequest(new Request("http://127.0.0.1:38771/api/local/live-trading", {
       method: "PUT",
@@ -2211,7 +2477,7 @@ test("local engine saves explicit Toss automation account preference", async () 
     }));
     assert.equal(response.status, 423);
     const payload = await response.json() as { error?: string; orderSubmissionAttempted?: boolean };
-    assert.match(payload.error ?? "", /QA 승인/);
+    assert.match(payload.error ?? "", /읽기 전용 점검|이용 동의/);
   } finally {
     if (previousLiveTrading === undefined) {
       delete process.env.ENABLE_LIVE_TRADING;
@@ -3055,7 +3321,7 @@ test("crypto strategy runs through shared paper automation without exchange subm
     };
     assert.equal(blockedLive.result?.cryptoAutomation?.submitted, 0);
     assert.equal(blockedLive.result?.cryptoAutomation?.liveTradingEnabled, false);
-    assert.equal(blockedLive.result?.cryptoAutomation?.reason, "paper-automation-crypto-live-not-supported");
+    assert.equal(blockedLive.result?.cryptoAutomation?.reason, "crypto-live-automation");
   } finally {
     if (previousLive === undefined) delete process.env.ENABLE_LIVE_TRADING;
     else process.env.ENABLE_LIVE_TRADING = previousLive;
