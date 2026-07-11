@@ -21,7 +21,7 @@ SwiftUI
 → Toss·Upbit·Bithumb adapter
 ```
 
-이 다이어그램은 전체 코드 경계를 나타낸다. 1.1.0은 sidecar 정책 원장을 통과한 Toss KR/US 지정가만 adapter submit에 도달하며, 코인은 계속 paper 계좌에만 기록된다.
+이 다이어그램은 전체 코드 경계를 나타낸다. 1.2.0-beta.1은 `liveSubmissionMode=disabled` 고정 정책으로 모든 adapter submit·cancel을 네트워크 호출 전에 차단하며 자동화는 paper 계좌에만 기록된다.
 
 ## 로컬 엔진
 
@@ -59,6 +59,7 @@ curl http://127.0.0.1:38771/health
 
 - 첫 설치에서는 시작 안내가 자동으로 열리고 `삼성전자 예제 분석 시작`, `내 API 연결하기`, `나중에 연결` 중 필요한 경로를 선택한다. API 연결은 별도 팝업이 아니라 설정 workspace의 Toss·Upbit·Bithumb 인라인 연결 관리로 이동한다.
 - credential은 선택 사항이다. API 키 없이도 삼성전자 Yahoo fallback 분석, Upbit 공개 분석, 공식/RSS 뉴스와 모의투자를 사용할 수 있다.
+- `내 자산`은 Toss·Upbit·Bithumb 실자산만 포지션 중심 보드로 표시한다. 공급자별 색상·연결 상태와 종목 수를 구분하고 평가금액은 공급자·통화별로만 표시하며, 모의계좌 전환은 노출하지 않는다. paper 엔진은 무실주문 베타의 자동화·안전 검증을 위해 유지한다.
 - 차트에서 현재 종목을 관심종목에 추가하면 최대 20개를 이 Mac의 sidecar 저장소에 보관한다. 관심종목은 현재가·등락·출처·갱신 상태만 비교하며, 행 선택 후 단건 분석으로 이동한다.
 - Finder/Dock 실행 시 번들 sidecar를 우선 사용한다.
 - 번들 경로가 없으면 빌드 시 저장한 저장소 경로와 사용자가 저장한 sidecar 경로를 순서대로 확인한다.
@@ -108,6 +109,8 @@ curl http://127.0.0.1:38771/health
 
 - 거래소별 credential을 검증하고 암호화 저장소와 Keychain에 보관한다.
 - 계좌, 주문 가능 정보, REST 현재가 응답 신선도, 최소·최대 주문금액과 수수료를 확인하고 limit 주문 입력을 preview한다. Upbit 호가 단위는 deprecated chance 필드가 아니라 공식 `/v1/orderbook/instruments`의 `tick_size`를 사용하고, Bithumb은 chance 응답의 `price_unit`을 사용한다.
+- Upbit는 공식 `/v1/orders/test`로 실제 주문 없이 권한·JWT·KRW 지정가 형식을 확인한다. 테스트 식별자는 실제 원장·조회·취소·수동 5건 조건에 반영하지 않는다. Upbit 미체결 조회는 `/v1/orders/open`을 사용한다.
+- Bithumb은 1.2.0-beta.1에서 mock lifecycle까지만 검증하며 실제 연결·실주문 인수는 완료로 표시하지 않는다.
 - 암호화폐 전략은 거래소를 명시하며 페이퍼 모드에서는 소수 수량을 지원한다.
 - Upbit·Bithumb `KRW-*` 지정가는 자동 readiness, 현재 설치·API binding hash, 이용 동의, 거래소별 토글, `OrderIntent`·`RiskCheck`, 잔고·수수료·최소 주문금액·호가 단위·현재가 신선도 재검증과 주문 요약 재입력을 모두 통과한 경우에만 제출한다. 거래소별 주문당 100,000 KRW, KST 일일 누적 300,000 KRW 한도를 수동·자동이 공유한다.
 - 429·5xx·timeout 또는 응답 불명은 자동 재시도하지 않고 해당 거래소 토글을 잠근다. Upbit `identifier`, Bithumb `client_order_id` 조회가 주문을 확인할 때만 잠금을 해소한다.

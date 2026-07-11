@@ -6,6 +6,8 @@ import { fileURLToPath } from "node:url";
 
 import {
   assertMacNodeVersionOverride,
+  macMarketingVersion,
+  macReleaseChannel,
   normalizeMacBuildNumber,
   readMacPackageVersion,
   readPinnedMacNodeVersion,
@@ -247,7 +249,7 @@ export const buildMacReleaseInstallGuide = ({
 6. \`점검\`에서 Sidecar, 뉴스/RSS, 분석, 브리핑, 전략 저장/시뮬레이션, 자동화 dry-run 실패가 0인지 확인합니다.
 7. 실계좌 조회가 필요할 때만 \`Toss\`에서 API 키를 검증 후 sidecar 저장소와 macOS Keychain에 저장하고 사용할 BROKERAGE 계좌를 선택합니다.
 8. Toss 개발자 콘솔 허용 IP가 앱의 Toss 연결 진단 공인 IP와 같은지 확인합니다.
-9. Toss 실거래는 이 Mac의 선택 계좌 QA, 수동/자동화 별도 토글, 지정가·한도를 모두 통과한 경우에만 허용합니다. Upbit는 KRW 마켓의 수동 지정가만 별도 QA 승인, 재입력 수동 토글, 사전·직전 검증을 모두 통과한 경우에만 허용합니다. Bithumb과 코인 자동화·시장가는 paper 전용입니다.
+9. 1.2.0-beta.1은 Toss·Upbit·Bithumb 실제 주문과 취소를 HTTP 423으로 차단하며 자동화는 paper 전용입니다.
 
 ## 패키징 검증 근거
 
@@ -294,7 +296,7 @@ export const buildDmgInstallReadme = ({
 4. 첫 실행 설정에서 Toss API 키, 자동매매 전략, 앱 점검, 앱 배포 시트를 확인합니다.
 5. Toss 실계좌 조회가 필요하면 API 키를 이 Mac에서 다시 검증하고 사용할 계좌를 선택합니다.
 6. Toss 개발자 콘솔 허용 IP와 앱의 공인 IP 진단 결과가 일치해야 합니다.
-7. Toss 실거래는 이 Mac의 선택 계좌 QA, 수동/자동화 별도 토글, 지정가·한도를 모두 통과한 경우에만 허용합니다. Upbit는 KRW 마켓 수동 지정가만 별도 QA 승인, 재입력 수동 토글, 사전·직전 검증을 모두 통과한 경우에만 허용합니다. Bithumb과 코인 자동화·시장은 paper 전용입니다.
+7. 1.2.0-beta.1은 Toss·Upbit·Bithumb 실제 주문과 취소를 HTTP 423으로 차단하며 자동화는 paper 전용입니다.
 
 모든 실제 주문은 TypeScript sidecar의 OrderIntent와 RiskCheck 경계를 통과합니다. Upbit 수동 주문은 1회 10만원, KST 일일 30만원 한도이며 timeout·429·5xx 결과는 자동 재시도하지 않고 잠급니다.
 
@@ -341,7 +343,7 @@ const writeMacReleaseHandoffFiles = async (version: string, buildNumber: string)
       "StockAnalysis-<version>-macos-install-verification.json에서 sidecarEndpointChecks.strategyBackupImport/automationScheduler, appLaunchVerified/uiSmokeVerified, uiSmokeChecks.samsungFixtureAnalysis/horizonPlans/paperOrderDrawerNoSubmit/strategyWorkflowOrder/responsiveWindowSizes가 true인지 확인합니다.",
       "Toss API 키는 Mac마다 다시 검증해 sidecar 저장소와 macOS Keychain에 저장하고 자동거래 계좌를 다시 선택합니다.",
       "Toss 허용 IP와 앱 연결 진단 공인 IP가 일치해야 합니다.",
-      "Toss 실거래는 이 Mac의 선택 계좌 QA, 수동/자동화 별도 토글, 지정가·한도를 모두 통과한 경우에만 허용합니다. Upbit는 KRW 마켓 수동 지정가만 별도 QA 승인, 재입력 수동 토글, 사전·직전 검증을 모두 통과한 경우에만 허용합니다. Bithumb과 코인 자동화·시장은 paper 전용입니다.",
+      "1.2.0-beta.1은 Toss·Upbit·Bithumb 실제 주문과 취소를 HTTP 423으로 차단하며 자동화는 paper 전용입니다.",
     ],
   }, null, 2)}\n`, "utf8");
   await writeFile(installGuidePath, buildMacReleaseInstallGuide({ version, generatedAt, entries }), "utf8");
@@ -399,6 +401,10 @@ const distributionReadiness = (options: { arch: string; signingIdentity: string;
   if (archWarning) {
     warnings.push(archWarning);
   }
+  if (options.arch === "x64") {
+    warnings.push("Intel 하드웨어에서 Finder 실행을 직접 검증하지 않았습니다.");
+  }
+  warnings.push("1.2.0-beta.1은 live submission disabled 정책의 내부 베타입니다.");
 
   return {
     status: readyForExternalDistribution ? "external-ready" : "local-test",
@@ -416,7 +422,7 @@ const distributionReadiness = (options: { arch: string; signingIdentity: string;
       "install-verification 리포트에서 sidecarEndpointVerified/appLaunchVerified/uiSmokeVerified와 Beginner-first 핵심 UI checks가 true인지 확인하세요.",
       "새 Mac에서는 Toss API 키를 앱 설정에서 다시 검증해 sidecar 저장소와 macOS Keychain에 저장하고 자동거래 계좌를 선택해야 합니다.",
       "Toss 개발자 콘솔의 허용 IP와 앱의 연결 진단 공인 IP가 일치해야 합니다.",
-      "Toss 실거래는 이 Mac의 선택 계좌 QA, 수동/자동화 별도 토글, 지정가·한도를 모두 통과한 경우에만 허용합니다. Upbit는 KRW 마켓 수동 지정가만 별도 QA 승인, 재입력 수동 토글, 사전·직전 검증을 모두 통과한 경우에만 허용합니다. Bithumb과 코인 자동화·시장은 paper 전용입니다.",
+      "1.2.0-beta.1은 Toss·Upbit·Bithumb 실제 주문과 취소를 HTTP 423으로 차단하며 자동화는 paper 전용입니다.",
     ],
   };
 };
@@ -443,6 +449,10 @@ const main = async () => {
     app: "StockAnalysis",
     bundleIdentifier: "com.stockanalysis.mac",
     version,
+    semanticVersion: version,
+    marketingVersion: macMarketingVersion(version),
+    releaseChannel: macReleaseChannel(version),
+    liveSubmissionMode: "disabled",
     buildNumber,
     platform: "macos",
     arch,
@@ -498,6 +508,13 @@ const main = async () => {
     app: "StockAnalysis",
     bundleIdentifier: "com.stockanalysis.mac",
     version,
+    semanticVersion: version,
+    marketingVersion: macMarketingVersion(version),
+    releaseChannel: macReleaseChannel(version),
+    liveSubmissionMode: "disabled",
+    signingState: signingIdentity === "ad-hoc" ? "ad-hoc signed" : "signed",
+    notarizationState: notarization.stapled ? "notarized" : "not notarized",
+    intelHardwareVerified: arch === "x64" ? false : null,
     buildNumber,
     platform: "macos",
     arch,

@@ -656,9 +656,6 @@ const verifyCoreFlow = () => {
   waitForAX("beginner-watchlist-refresh");
   waitForAX("beginner-watchlist-insights");
   waitForText("관심종목");
-  waitForText("상승 우세");
-  waitForText("근거 부족");
-  waitForText("관심 높음");
 
   clickAX("beginner-nav-chart");
   waitForAX("beginner-chart-workspace");
@@ -675,8 +672,11 @@ const verifyCoreFlow = () => {
 
   clickAX("beginner-nav-assets");
   waitForAX("beginner-assets-workspace");
-  waitForText("내 자산");
-  waitForText("통화가 다른 계좌는 합산하지 않고");
+  waitForText("포트폴리오 보드");
+  waitForText("공급자까지 한눈에 구분합니다");
+  waitForAX("beginner-assets-provider-status");
+  waitForAX("beginner-assets-sort");
+  waitForAX("beginner-assets-position-list");
 
   clickAX("beginner-nav-strategy");
   waitForAX("beginner-strategy-workspace");
@@ -746,15 +746,17 @@ const main = () => {
   sleep(500);
 
   const appSupportRoot = mkdtempSync(join(tmpdir(), "yongstockdesk-macos-ui-"));
-  let appProcess: ChildProcess | null = spawn(appExecutable, {
+  let appProcess: ChildProcess | null = spawn("/usr/bin/open", [
+    "-F",
+    "-n",
+    "--env", `STOCK_ANALYSIS_MAC_APP_SUPPORT_ROOT=${appSupportRoot}`,
+    "--env", "STOCK_ANALYSIS_MARKET_FIXTURE_MODE=1",
+    "--env", "STOCK_ANALYSIS_EGRESS_IP_OVERRIDE=198.51.100.42",
+    "--env", "STOCK_ANALYSIS_UI_SMOKE_REJECT_TOSS_CREDENTIALS=1",
+    appRoot,
+  ], {
     cwd: repoRoot,
-    env: {
-      ...process.env,
-      STOCK_ANALYSIS_MAC_APP_SUPPORT_ROOT: appSupportRoot,
-      STOCK_ANALYSIS_MARKET_FIXTURE_MODE: "1",
-      STOCK_ANALYSIS_EGRESS_IP_OVERRIDE: "198.51.100.42",
-      STOCK_ANALYSIS_UI_SMOKE_REJECT_TOSS_CREDENTIALS: "1",
-    },
+    env: process.env,
     stdio: "ignore",
   });
 

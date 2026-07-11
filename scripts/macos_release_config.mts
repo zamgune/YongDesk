@@ -11,11 +11,20 @@ export const parseMacPackageVersion = (raw: string, label = "package.json") => {
   const version = parsed && typeof parsed === "object" && "version" in parsed
     ? (parsed as { version?: unknown }).version
     : null;
-  if (typeof version !== "string" || !/^\d+\.\d+\.\d+$/.test(version)) {
-    throw new Error(`${label} version must use numeric major.minor.patch format.`);
+  if (typeof version !== "string" || !/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(version)) {
+    throw new Error(`${label} version must use semantic major.minor.patch format.`);
   }
   return version;
 };
+
+export const macMarketingVersion = (semanticVersion: string) => {
+  const match = semanticVersion.match(/^(\d+\.\d+\.\d+)/);
+  if (!match) throw new Error(`Invalid semantic version: ${semanticVersion}`);
+  return match[1];
+};
+
+export const macReleaseChannel = (semanticVersion: string) =>
+  semanticVersion.includes("-") ? semanticVersion.split("-", 2)[1]?.split(".", 1)[0] ?? "prerelease" : "stable";
 
 export const normalizeMacNodeVersion = (value: string, label = "Node version") => {
   const normalized = value.trim();
@@ -35,7 +44,7 @@ export const assertMacNodeVersion = (actual: string, expected: string, label: st
 };
 
 export const normalizeMacBuildNumber = (value: string | undefined) => {
-  const buildNumber = value?.trim() || "1";
+  const buildNumber = value?.trim() || "12001";
   if (!/^[1-9]\d*$/.test(buildNumber)) {
     throw new Error(`MACOS_BUILD_NUMBER must be a positive integer, got: ${value ?? "(unset)"}`);
   }

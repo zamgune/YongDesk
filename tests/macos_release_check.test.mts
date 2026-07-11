@@ -35,6 +35,7 @@ import { assertMacAppVersionConsistency } from "../scripts/verify_macos_app.mts"
 import {
   assertMacNodeVersion,
   assertMacNodeVersionOverride,
+  macMarketingVersion,
   readPinnedMacNodeVersion,
 } from "../scripts/macos_release_config.mts";
 import {
@@ -232,12 +233,14 @@ test("mac app plist uses the package version and a numeric build number", () => 
 
   assert.match(plist, /<key>CFBundleDisplayName<\/key>\s*<string>Yong'Desk<\/string>/);
   assert.match(plist, /<key>CFBundleIconFile<\/key>\s*<string>YongDesk\.icns<\/string>/);
-  assert.match(plist, new RegExp(`<key>CFBundleShortVersionString</key>\\s*<string>${packageVersion.replaceAll(".", "\\.")}</string>`));
+  assert.match(plist, new RegExp(`<key>CFBundleShortVersionString</key>\\s*<string>${macMarketingVersion(packageVersion).replaceAll(".", "\\.")}</string>`));
+  assert.match(plist, new RegExp(`<key>YongStockDeskSemanticVersion</key>\\s*<string>${packageVersion.replaceAll(".", "\\.")}</string>`));
+  assert.match(plist, /<key>YongStockDeskLiveSubmissionMode<\/key>\s*<string>disabled<\/string>/);
   assert.match(plist, /<key>CFBundleVersion<\/key>\s*<string>42<\/string>/);
 });
 
 test("mac app build number accepts only positive integers", () => {
-  assert.equal(normalizeMacBuildNumber(undefined), "1");
+  assert.equal(normalizeMacBuildNumber(undefined), "12001");
   assert.equal(normalizeMacBuildNumber(" 17 "), "17");
   for (const invalid of ["0", "-1", "1.2", "build-1"]) {
     assert.throws(() => normalizeMacBuildNumber(invalid), /positive integer/);
@@ -775,7 +778,7 @@ test("mac dmg install verification parses copied app UI smoke checks", () => {
     "    \"paperOrderDrawerNoSubmit\": true,",
     "    \"assetsWorkspace\": true,",
     "    \"strategyWorkflowOrder\": true,",
-    "    \"strategySheetReadOnlySmoke\": true,",
+    "    \"strategyWorkspaceSmoke\": true,",
     "    \"automationPaperOnly\": true,",
     "    \"killSwitchReachable\": true,",
     "    \"settingsApiReachable\": true,",

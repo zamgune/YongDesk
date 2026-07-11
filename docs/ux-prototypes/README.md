@@ -5,6 +5,7 @@ HTML 시안은 사용자 흐름 검토용 독립 프로토타입이다. SwiftUI 
 ## 현재 참고 시안
 
 - [Beginner-first macOS v3](macos-native/beginner-first-v3.html) — 현재 SwiftUI의 차트·자산·전략·자동화 정보 구조 참고
+- [내 자산 UI/UX 3안](macos-native/assets-workspace-options.html) — 요약 우선, 공급자 카드, 종목 중심 구조 비교
 
 ## 활성 계산 명세
 

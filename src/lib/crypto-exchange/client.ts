@@ -103,6 +103,11 @@ export type CryptoOrderResult = {
   raw: Record<string, unknown>;
 };
 
+export type UpbitOrderTestResult = {
+  identifier: string;
+  raw: Record<string, unknown>;
+};
+
 export type CryptoOrderStatus = {
   orderId: string;
   clientOrderId: string | null;
@@ -578,6 +583,30 @@ export const createCryptoLimitOrder = async (
   return { orderId: orderId(exchange, raw), clientOrderId: orderClientId(exchange, raw), raw };
 };
 
+export const testUpbitLimitOrder = async (
+  credentials: CryptoExchangeCredentials,
+  request: CryptoLimitOrderRequest,
+  fetchImpl: typeof fetch = fetch,
+): Promise<UpbitOrderTestResult> => {
+  const body = {
+    market: request.market,
+    side: request.side,
+    volume: request.volume,
+    price: request.price,
+    ord_type: "limit",
+    identifier: request.clientOrderId,
+  };
+  const raw = await privateRequest<Record<string, unknown>>({
+    exchange: "upbit",
+    credentials,
+    path: "/v1/orders/test",
+    method: "POST",
+    body,
+    fetchImpl,
+  });
+  return { identifier: request.clientOrderId, raw };
+};
+
 export const createCryptoMarketSellOrder = async (
   exchange: CryptoExchange,
   credentials: CryptoExchangeCredentials,
@@ -649,8 +678,8 @@ export const getCryptoOpenOrders = async (
   const raw = await privateRequest<Array<Record<string, unknown>>>({
     exchange,
     credentials,
-    path: "/v1/orders",
-    parameters: { state: "wait" },
+    path: exchange === "upbit" ? "/v1/orders/open" : "/v1/orders",
+    parameters: exchange === "upbit" ? undefined : { state: "wait" },
     fetchImpl,
   });
   return raw.flatMap((item): CryptoOpenOrder[] => {

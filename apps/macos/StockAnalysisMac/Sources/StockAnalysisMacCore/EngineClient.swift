@@ -237,6 +237,14 @@ public struct EngineClient: Sendable {
         return try decoder.decode(CryptoOrderPrecheckResponse.self, from: data)
     }
 
+    public func testUpbitOrder(market: String, side: String, volume: Double, price: Double) async throws -> UpbitOrderTestResponse {
+        let data = try await postJSON(
+            "/api/local/crypto-exchanges/upbit/orders/test",
+            body: CryptoOrderPrecheckPayload(market: market, side: side, volume: volume, price: price)
+        )
+        return try decoder.decode(UpbitOrderTestResponse.self, from: data)
+    }
+
     public func cryptoManualLiveTrading(exchange: String) async throws -> CryptoManualLiveTradingResponse {
         try await getJSON("/api/local/crypto-exchanges/\(exchange)/live-trading")
     }

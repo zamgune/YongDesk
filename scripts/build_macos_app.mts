@@ -8,6 +8,8 @@ import {
   assertMacNodeVersion,
   assertMacNodeVersionOverride,
   normalizeMacBuildNumber,
+  macMarketingVersion,
+  macReleaseChannel,
   readMacPackageVersion,
   readPinnedMacNodeVersion,
 } from "./macos_release_config.mts";
@@ -75,9 +77,15 @@ export const buildMacInfoPlist = ({
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>
-  <string>${version}</string>
+  <string>${macMarketingVersion(version)}</string>
   <key>CFBundleVersion</key>
   <string>${buildNumber}</string>
+  <key>YongStockDeskSemanticVersion</key>
+  <string>${version}</string>
+  <key>YongStockDeskReleaseChannel</key>
+  <string>${macReleaseChannel(version)}</string>
+  <key>YongStockDeskLiveSubmissionMode</key>
+  <string>disabled</string>
   <key>LSMinimumSystemVersion</key>
   <string>14.0</string>
   <key>NSHighResolutionCapable</key>

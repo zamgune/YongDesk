@@ -213,13 +213,9 @@ struct BeginnerFirstRootView: View {
             )
         case .assets:
             BeginnerAssetsWorkspace(
-                selectedSymbol: selectedSymbol,
-                selectedSession: selectedSession,
-                assetClass: assetClass,
                 onOpenAPIConnection: { provider in
                     openConnectionManagement(provider: provider)
                 },
-                onOpenOrder: { showingOrderDrawer = true },
                 onSelectRealPosition: { position in
                     selectRealPosition(position)
                 }
@@ -451,6 +447,9 @@ private struct BeginnerSidebar: View {
                         Text("시장 판단을 한눈에")
                             .font(.system(size: 10))
                             .foregroundStyle(BeginnerPalette.muted)
+                        Text("1.2.0-beta.1 · 실주문 잠금")
+                            .font(.system(size: 9, weight: .semibold))
+                            .foregroundStyle(BeginnerPalette.amber)
                     }
                 }
             }

@@ -13,12 +13,14 @@ import {
   getCryptoAccounts,
   getCryptoOrderConstraints,
   getCryptoOrderChance,
+  getCryptoOpenOrders,
   getCryptoOrderByClientOrderId,
   getCryptoTicker,
   getUpbitOrderByIdentifier,
   getUpbitCandles,
   getUpbitOrderbookInstrument,
   previewCryptoLimitOrder,
+  testUpbitLimitOrder,
 } from "../src/lib/crypto-exchange/client.ts";
 
 const credentials = { accessKey: "access-key", secretKey: "secret-key" };
@@ -222,6 +224,31 @@ test("Upbit limit order signs the JSON body and uses official field names", asyn
   assert.equal(body.order_type, undefined);
   assert.match(String(new Headers(calls[0]?.init?.headers).get("Authorization")), /^Bearer /);
   assert.equal(result.orderId, "upbit-order-1");
+});
+
+test("Upbit order test calls only the official no-order endpoint", async () => {
+  const calls: Array<{ url: string; init?: RequestInit }> = [];
+  const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    calls.push({ url: String(input), init });
+    return Response.json({ market: "KRW-BTC", identifier: "test-only-1" });
+  }) as typeof fetch;
+  const result = await testUpbitLimitOrder(credentials, {
+    market: "KRW-BTC", side: "bid", volume: "0.001", price: "100000000", clientOrderId: "test-only-1",
+  }, fetchImpl);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0]?.url, "https://api.upbit.com/v1/orders/test");
+  assert.equal(calls[0]?.init?.method, "POST");
+  assert.equal(result.identifier, "test-only-1");
+});
+
+test("Upbit open orders use the non-deprecated open endpoint", async () => {
+  const calls: string[] = [];
+  const fetchImpl = (async (input: RequestInfo | URL) => {
+    calls.push(String(input));
+    return Response.json([]);
+  }) as typeof fetch;
+  assert.deepEqual(await getCryptoOpenOrders("upbit", credentials, fetchImpl), []);
+  assert.equal(calls[0], "https://api.upbit.com/v1/orders/open");
 });
 
 test("Upbit resolves an unknown submission by client identifier without posting another order", async () => {

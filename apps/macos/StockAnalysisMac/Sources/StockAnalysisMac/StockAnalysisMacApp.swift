@@ -104,6 +104,7 @@ final class AppModel: ObservableObject {
     @Published var cryptoExchangeMessage = "Upbit·Bithumb API 키를 검증하면 잔고와 주문 가능 정보를 읽기 전용으로 확인합니다."
     @Published var cryptoReadiness: CryptoReadinessResponse?
     @Published var cryptoOrderPrecheck: CryptoOrderPrecheckResponse?
+    @Published var upbitOrderTest: UpbitOrderTestResponse?
     @Published var cryptoLiveTrading: CryptoManualLiveTradingState?
     @Published var cryptoLiveOrderPrecheck: CryptoManualOrderPrecheckResponse?
     @Published var cryptoLiveOrderSubmission: CryptoManualOrderSubmissionResponse?
@@ -138,6 +139,7 @@ final class AppModel: ObservableObject {
     private var sidecar: Process?
     private var sidecarLogHandle: FileHandle?
     private var newsRefreshTask: Task<Void, Never>?
+    private var bootstrapStarted = false
     private var communityRefreshGeneration = 0
     private var workspaceAnalysisGeneration = 0
 
@@ -199,9 +201,14 @@ final class AppModel: ObservableObject {
             self.activeEnginePort = settings.enginePort
             self.statusLine = "app support fallback"
         }
+        Task { [weak self] in
+            await self?.bootstrap()
+        }
     }
 
     func bootstrap() async {
+        guard !bootstrapStarted else { return }
+        bootstrapStarted = true
         do {
             try store.prepareSidecarStorage()
             try database.migrate()
@@ -2011,6 +2018,17 @@ final class AppModel: ObservableObject {
         } catch {
             cryptoOrderPrecheck = nil
             cryptoExchangeMessage = "\(exchange) 주문 사전검증 실패: \(Self.errorMessage(error))"
+        }
+    }
+
+    func runUpbitOrderTest(market: String, side: String, volume: Double, price: Double) async {
+        upbitOrderTest = nil
+        do {
+            let response = try await client.testUpbitOrder(market: market, side: side, volume: volume, price: price)
+            upbitOrderTest = response
+            cryptoExchangeMessage = response.message ?? "Upbit 공식 무실주문 테스트를 완료했습니다. 실제 주문은 제출하지 않았습니다."
+        } catch {
+            cryptoExchangeMessage = "Upbit 주문 테스트 실패: \(Self.errorMessage(error))"
         }
     }
 

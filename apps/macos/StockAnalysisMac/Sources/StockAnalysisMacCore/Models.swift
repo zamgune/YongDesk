@@ -59,6 +59,8 @@ public struct EngineHealth: Codable, Equatable, Sendable {
     public let pid: Int?
     public let workingDirectory: String?
     public let sidecarBuildId: String?
+    public let releaseChannel: String?
+    public let liveSubmissionMode: String?
 }
 
 public enum AnalysisTimeframe: Codable, Equatable, Hashable, Sendable {
@@ -1221,6 +1223,18 @@ public struct CryptoOrderPrecheckResponse: Codable, Equatable, Sendable {
     public let orderConstraints: CryptoOrderConstraintView?
     public let ticker: CryptoTickerView?
     public let orderSubmissionAttempted: Bool
+}
+
+public struct UpbitOrderTestResponse: Codable, Equatable, Sendable {
+    public let status: String?
+    public let exchange: String?
+    public let message: String?
+    public let error: String?
+    public let testOrderAttempted: Bool
+    public let orderSubmissionAttempted: Bool
+    public let cancellationAttempted: Bool?
+    public let reusableForOrderLookup: Bool?
+    public let countedAsManualAcceptance: Bool?
 }
 
 public struct CryptoManualLiveTradingLimits: Codable, Equatable, Sendable {

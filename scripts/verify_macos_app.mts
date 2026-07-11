@@ -12,6 +12,7 @@ import {
 } from "../src/lib/toss/contract.ts";
 import {
   assertMacNodeVersion,
+  macMarketingVersion,
   parseMacPackageVersion,
   readMacPackageVersion,
   readPinnedMacNodeVersion,
@@ -751,11 +752,11 @@ const verifySidecar = async (expectedVersion: string) => {
       throw new Error("Account preference endpoint did not fail closed without Toss credentials");
     }
     if (
-      liveTradingState.status !== 412 ||
-      typeof liveTradingState.payload.error !== "string" ||
-      !liveTradingState.payload.error.includes("선택")
+      liveTradingState.status !== 423 ||
+      liveTradingState.payload.code !== "PRE_RELEASE_LIVE_LOCK" ||
+      liveTradingState.payload.orderSubmissionAttempted !== false
     ) {
-      throw new Error("Live trading toggle endpoint did not fail closed without a selected Toss account");
+      throw new Error("Live trading toggle endpoint did not enforce the pre-release live lock");
     }
     if (
       precheckState.status !== 412 ||
@@ -831,14 +832,19 @@ const main = async () => {
   }
 
   run("plutil", ["-lint", infoPlistPath]);
+  const rootPackageVersion = await readMacPackageVersion(repoRoot);
   const versionChecks = assertMacAppVersionConsistency({
-    rootPackageVersion: await readMacPackageVersion(repoRoot),
-    infoPlistVersion: run("plutil", ["-extract", "CFBundleShortVersionString", "raw", "-o", "-", infoPlistPath], { capture: true }),
+    rootPackageVersion,
+    infoPlistVersion: run("plutil", ["-extract", "YongStockDeskSemanticVersion", "raw", "-o", "-", infoPlistPath], { capture: true }),
     bundledPackageVersion: parseMacPackageVersion(
       await readFile(bundledPackagePath, "utf8"),
       "bundled package.json",
     ),
   });
+  const marketingVersion = run("plutil", ["-extract", "CFBundleShortVersionString", "raw", "-o", "-", infoPlistPath], { capture: true });
+  if (marketingVersion !== macMarketingVersion(rootPackageVersion)) {
+    throw new Error(`Info.plist marketing version mismatch: expected ${macMarketingVersion(rootPackageVersion)}, got ${marketingVersion}`);
+  }
   const buildNumber = run("plutil", ["-extract", "CFBundleVersion", "raw", "-o", "-", infoPlistPath], { capture: true });
   if (!/^[1-9]\d*$/.test(buildNumber)) {
     throw new Error(`Info.plist CFBundleVersion must be a positive integer, got: ${buildNumber || "(empty)"}`);

@@ -565,9 +565,44 @@ test("release mode hides developer QA endpoints", async () => {
       const response = await handleLocalEngineRequest(new Request(`http://127.0.0.1:38771${path}`, { method: "POST" }));
       assert.equal(response.status, 404);
     }
+    const report = await handleLocalEngineRequest(new Request("http://127.0.0.1:38771/api/local/developer-qa/release-acceptance"));
+    assert.equal(report.status, 404);
   } finally {
     if (previous === undefined) delete process.env.STOCK_ANALYSIS_DEVELOPER_MODE;
     else process.env.STOCK_ANALYSIS_DEVELOPER_MODE = previous;
+  }
+});
+
+test("pre-release live lock blocks every submit and cancel route before network", async () => {
+  const originalFetch = globalThis.fetch;
+  let networkCalls = 0;
+  globalThis.fetch = (async () => {
+    networkCalls += 1;
+    throw new Error("network must not be called");
+  }) as typeof fetch;
+  try {
+    const routes = [
+      "/api/local/live-orders/submit",
+      "/api/local/crypto-exchanges/upbit/orders/live-submit",
+      "/api/local/crypto-exchanges/bithumb/orders/live-submit",
+      "/api/local/crypto-exchanges/upbit/open-orders/cancel-all",
+      "/api/local/crypto-exchanges/bithumb/open-orders/cancel-all",
+    ];
+    for (const route of routes) {
+      const response = await handleLocalEngineRequest(new Request(`http://127.0.0.1:38771${route}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+      }));
+      const payload = await response.json() as Record<string, unknown>;
+      assert.equal(response.status, 423);
+      assert.equal(payload.code, "PRE_RELEASE_LIVE_LOCK");
+      assert.equal(payload.orderSubmissionAttempted, false);
+      assert.equal(payload.cancellationAttempted, false);
+    }
+    assert.equal(networkCalls, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
   }
 });
 
@@ -670,7 +705,50 @@ test("Upbit readiness uses official tick size and response timestamp freshness",
   }
 });
 
-test("Upbit manual live orders require automatic readiness and consent, persist before submit, and reconcile unknown results", async () => {
+test("Upbit official order test never changes the real order ledger", async () => {
+  const previousUserId = process.env.STOCK_ANALYSIS_LOCAL_USER_ID;
+  process.env.STOCK_ANALYSIS_LOCAL_USER_ID = `upbit-order-test-${Date.now()}`;
+  const timestamp = Date.now();
+  const accounts = [{ currency: "KRW", balance: "1000000", locked: "0" }];
+  const chance = { bid_fee: "0.0005", ask_fee: "0.0005", market: { id: "KRW-BTC", bid: { min_total: "5000" }, ask: { min_total: "5000" } } };
+  const ticker = [{ market: "KRW-BTC", trade_price: 100_000_000, timestamp }];
+  const instrument = [{ market: "KRW-BTC", quote_currency: "KRW", tick_size: "1000" }];
+  try {
+    await withMockFetch([
+      Response.json(accounts), Response.json(accounts), Response.json(chance), Response.json(ticker), Response.json(instrument),
+      Response.json(accounts), Response.json(chance), Response.json(ticker), Response.json(instrument),
+      Response.json({ market: "KRW-BTC", identifier: "test-only" }),
+    ], async (calls) => {
+      const registered = await handleLocalEngineRequest(new Request("http://127.0.0.1:38771/api/local/crypto-exchanges/upbit/credentials", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ accessKey: "order-test-access", secretKey: "order-test-secret" }),
+      }));
+      assert.equal(registered.status, 200, await registered.clone().text());
+      const before = await getLocalCryptoLiveTradingSnapshot("upbit");
+      const response = await handleLocalEngineRequest(new Request("http://127.0.0.1:38771/api/local/crypto-exchanges/upbit/orders/test", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ market: "KRW-BTC", side: "buy", volume: 0.00005, price: 100_000_000 }),
+      }));
+      assert.equal(response.status, 200, await response.clone().text());
+      const payload = await response.json() as Record<string, unknown>;
+      assert.equal(payload.testOrderAttempted, true);
+      assert.equal(payload.orderSubmissionAttempted, false);
+      assert.equal(payload.reusableForOrderLookup, false);
+      assert.equal(payload.countedAsManualAcceptance, false);
+      const after = await getLocalCryptoLiveTradingSnapshot("upbit");
+      assert.equal(after.attempts.length, before.attempts.length);
+      assert.equal(after.policy.manualConfirmedOrderCount, before.policy.manualConfirmedOrderCount);
+      const posts = calls.filter((call) => call.init?.method === "POST");
+      assert.equal(posts.length, 1);
+      assert.equal(posts[0]?.url, "https://api.upbit.com/v1/orders/test");
+    });
+  } finally {
+    if (previousUserId === undefined) delete process.env.STOCK_ANALYSIS_LOCAL_USER_ID;
+    else process.env.STOCK_ANALYSIS_LOCAL_USER_ID = previousUserId;
+  }
+});
+
+test.skip("legacy Upbit live-submit lifecycle is disabled by the pre-release lock", async () => {
   const previousUserId = process.env.STOCK_ANALYSIS_LOCAL_USER_ID;
   process.env.STOCK_ANALYSIS_LOCAL_USER_ID = `local-engine-upbit-live-${Date.now()}`;
   const responseTimestamp = Date.now();
@@ -879,7 +957,7 @@ test("Upbit manual live orders require automatic readiness and consent, persist 
   }
 });
 
-test("Bithumb manual live limit order uses the shared ledger and client_order_id", async () => {
+test.skip("legacy Bithumb live-submit lifecycle is disabled by the pre-release lock", async () => {
   const previousUserId = process.env.STOCK_ANALYSIS_LOCAL_USER_ID;
   process.env.STOCK_ANALYSIS_LOCAL_USER_ID = `local-engine-bithumb-live-${Date.now()}`;
   const accounts = [{ currency: "KRW", balance: "1000000", locked: "0" }];
@@ -2060,7 +2138,7 @@ test("local engine does not persist rejected Toss broker credentials", async () 
   assert.equal(stored.accountPreference, null);
 });
 
-test("local engine keeps Toss manual live policy OFF until readiness and consent", async () => {
+test.skip("legacy Toss live toggle workflow is disabled by the pre-release lock", async () => {
   const previousLiveTrading = process.env.ENABLE_LIVE_TRADING;
   process.env.ENABLE_LIVE_TRADING = "true";
   try {
@@ -2214,7 +2292,7 @@ test("local engine previews Toss order precheck without submitting live orders",
   }
 });
 
-test("local engine persists before Toss submit and locks unknown requests without retry", async () => {
+test.skip("legacy Toss live-submit lifecycle is disabled by the pre-release lock", async () => {
   const previousUserId = process.env.STOCK_ANALYSIS_LOCAL_USER_ID;
   process.env.STOCK_ANALYSIS_LOCAL_USER_ID = `local-engine-live-submit-${Date.now()}`;
   const account = {
@@ -2340,7 +2418,7 @@ test("local engine persists before Toss submit and locks unknown requests withou
   }
 });
 
-test("local engine requires readiness and consent after credential verification", async () => {
+test.skip("legacy Toss consent-to-live workflow is disabled by the pre-release lock", async () => {
   const previousLiveTrading = process.env.ENABLE_LIVE_TRADING;
   const previousUserId = process.env.STOCK_ANALYSIS_LOCAL_USER_ID;
   process.env.ENABLE_LIVE_TRADING = "true";
@@ -2406,7 +2484,7 @@ test("local engine requires readiness and consent after credential verification"
   }
 });
 
-test("local engine saves explicit Toss automation account preference", async () => {
+test.skip("legacy Toss automation live toggle workflow is disabled by the pre-release lock", async () => {
   const previousLiveTrading = process.env.ENABLE_LIVE_TRADING;
   const previousUserId = process.env.STOCK_ANALYSIS_LOCAL_USER_ID;
   process.env.ENABLE_LIVE_TRADING = "true";
@@ -3321,7 +3399,7 @@ test("crypto strategy runs through shared paper automation without exchange subm
     };
     assert.equal(blockedLive.result?.cryptoAutomation?.submitted, 0);
     assert.equal(blockedLive.result?.cryptoAutomation?.liveTradingEnabled, false);
-    assert.equal(blockedLive.result?.cryptoAutomation?.reason, "crypto-live-automation");
+    assert.equal(blockedLive.result?.cryptoAutomation?.reason, "paper-automation-pre-release-live-lock");
   } finally {
     if (previousLive === undefined) delete process.env.ENABLE_LIVE_TRADING;
     else process.env.ENABLE_LIVE_TRADING = previousLive;
