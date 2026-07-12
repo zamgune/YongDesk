@@ -962,6 +962,8 @@ test("mac release install guide covers cross-arch handoff and Toss setup", () =>
   assert.match(guide, /읽기 전용 API 키/);
   assert.match(guide, /조회 권한을 분리하지 못하면 해당 키를 연결하지 않습니다/);
   assert.match(guide, /credential.*삭제하고 다시 등록/);
+  assert.match(guide, /다시 사용할 계획이 없다면.*API 키를 폐기/);
+  assert.match(guide, /계속 사용할 예정이면 삭제할 필요가 없습니다/);
   assert.match(guide, /로그·스크린샷에는 키, 토큰, 계좌번호를 포함하지 않습니다/);
 
   const armOnlyGuide = buildMacReleaseInstallGuide({
