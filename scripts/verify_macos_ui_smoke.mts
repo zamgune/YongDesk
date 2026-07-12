@@ -21,6 +21,7 @@ type AXAction = "exists" | "enabled" | "frame" | "press";
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const argumentsList = process.argv.slice(2);
 const appRootArgument = argumentsList.find((argument) => !argument.startsWith("--"));
+const apiRegistrationOnly = argumentsList.includes("--api-registration-only");
 const appRoot = resolve(appRootArgument ?? join(repoRoot, "dist", "macos", "StockAnalysis.app"));
 const appExecutable = join(appRoot, "Contents", "MacOS", "StockAnalysisMac");
 const bundledNodeExecutable = join(appRoot, "Contents", "Resources", "node", "bin", "node");
@@ -263,6 +264,36 @@ const axFrame = (query: string, role?: string) => {
     throw new Error(result.output || `Could not read AX frame for ${query}`);
   }
   return parseFrame(result.output, query);
+};
+
+const typeAXValue = (query: string, value: string) => {
+  const result = osascript([
+    `set targetQuery to ${appleScriptString(query)}`,
+    `set targetValue to ${appleScriptString(value)}`,
+    "tell application \"System Events\"",
+    `  tell (first process whose bundle identifier is "${bundleIdentifier}")`,
+    "    repeat with candidateWindow in windows",
+    "      set candidates to entire contents of candidateWindow",
+    "      repeat with candidate in candidates",
+    "        set candidateIdentifier to \"\"",
+    "        try",
+    "          set candidateIdentifier to value of attribute \"AXIdentifier\" of candidate as text",
+    "        end try",
+    "        if candidateIdentifier is targetQuery then",
+    "          set focused of candidate to true",
+    "          delay 0.1",
+    "          keystroke targetValue",
+    "          return \"typed\"",
+    "        end if",
+    "      end repeat",
+    "    end repeat",
+    "  end tell",
+    "end tell",
+    "return \"not-found\"",
+  ], { allowFailure: true });
+  if (!result.ok || result.output !== "typed") {
+    throw new Error(result.output || `Could not type AX value for ${query}`);
+  }
 };
 
 const fullAXContents = () =>
@@ -714,11 +745,35 @@ const verifyCoreFlow = () => {
   waitForAX("beginner-api-provider-toss");
   waitForAX("beginner-api-provider-upbit");
   waitForAX("beginner-api-provider-bithumb");
+  waitForAX("beginner-api-engine-status");
+  waitForAX("beginner-api-engine-retry");
+  waitForAX("beginner-api-engine-log");
   waitForAX("beginner-api-identifier");
   waitForAX("beginner-api-secret");
   waitForAX("beginner-api-save");
+  typeAXValue("beginner-api-identifier", "friend-test-id");
+  typeAXValue("beginner-api-secret", "friend-test-secret");
+  waitForAXEnabled("beginner-api-save");
 
   assertNoBrokerSubmitControl();
+};
+
+const verifyAPIRegistrationControls = () => {
+  waitForAX("beginner-onboarding", 30_000);
+  waitForAX("beginner-onboarding-connect-api");
+  clickAX("beginner-onboarding-connect-api");
+  waitForAXAbsent("beginner-onboarding", 30_000);
+  waitForAX("beginner-settings-workspace", 30_000);
+  waitForAX("beginner-api-connection-workspace");
+  waitForAX("beginner-api-engine-status");
+  waitForAX("beginner-api-engine-retry");
+  waitForAX("beginner-api-engine-log");
+  waitForAX("beginner-api-identifier");
+  waitForAX("beginner-api-secret");
+  waitForAX("beginner-api-save");
+  typeAXValue("beginner-api-identifier", "friend-test-id");
+  typeAXValue("beginner-api-secret", "friend-test-secret");
+  waitForAXEnabled("beginner-api-save");
 };
 
 const main = () => {
@@ -758,6 +813,23 @@ const main = () => {
   try {
     waitForWindow();
     setAndVerifyWindowSize(requestedWindowSizes[0]);
+    if (apiRegistrationOnly) {
+      verifyAPIRegistrationControls();
+      console.log(JSON.stringify({
+        ok: true,
+        appRoot,
+        apiRegistrationOnly: true,
+        checks: {
+          apiInputsReachable: true,
+          apiSaveEnabledAfterInput: true,
+          sidecarStatusReachable: true,
+          sidecarRecoveryReachable: true,
+          sidecarLogReachable: true,
+          credentialSubmissionAttempted: false,
+        },
+      }, null, 2));
+      return;
+    }
     verifyCoreFlow();
     const windowSizes = requestedWindowSizes.map(verifyWorkspaceLayout);
     assertNoBrokerSubmitControl();
@@ -807,6 +879,9 @@ const main = () => {
       "beginner-api-identifier",
       "beginner-api-secret",
       "beginner-api-save",
+      "beginner-api-engine-status",
+      "beginner-api-engine-retry",
+      "beginner-api-engine-log",
     ];
     const unverifiedIdentifiers = requiredIdentifiers.filter((identifier) => !identifiersUsed.has(identifier));
     if (unverifiedIdentifiers.length > 0) {
@@ -834,6 +909,8 @@ const main = () => {
         automationPaperOnly: true,
         killSwitchReachable: true,
         settingsApiReachable: true,
+        apiSaveEnabledAfterInput: true,
+        sidecarRecoveryReachable: true,
         supportToolsSeparated: true,
         responsiveWindowSizes: true,
       },

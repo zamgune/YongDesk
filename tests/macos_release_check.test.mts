@@ -352,6 +352,11 @@ test("mac release check requires Developer ID and stapled notarization for exter
     arch: "universal",
     builtAt: "2026-07-09T00:00:00.000Z",
     signingIdentity: "Developer ID Application: StockAnalysis Team (ABCDE12345)",
+    developerIdSigned: true,
+    notarized: true,
+    staplerValidated: true,
+    gatekeeperAccepted: true,
+    hardwareVerified: true,
     notarization: {
       requested: true,
       stapled: true,
@@ -374,6 +379,12 @@ test("mac release check requires Developer ID and stapled notarization for exter
   assert.equal(report.status, "external-ready");
   assert.equal(report.gatekeeperRisk, "low");
   assert.equal(report.warnings.length, 0);
+
+  const withoutHardwareAcceptance = assessMacRelease({ ...manifest, hardwareVerified: false }, completeFiles);
+  assert.equal(withoutHardwareAcceptance.ok, true);
+  assert.equal(withoutHardwareAcceptance.readyForExternalDistribution, false);
+  assert.equal(withoutHardwareAcceptance.status, "local-test");
+  assert.ok(withoutHardwareAcceptance.warnings.some((warning) => warning.includes("실기기")));
 });
 
 test("mac release check verifies actual DMG stapler and Gatekeeper evidence", () => {
@@ -383,6 +394,11 @@ test("mac release check verifies actual DMG stapler and Gatekeeper evidence", ()
     arch: "universal",
     builtAt: "2026-07-09T00:00:00.000Z",
     signingIdentity: "Developer ID Application: StockAnalysis Team (ABCDE12345)",
+    developerIdSigned: true,
+    notarized: true,
+    staplerValidated: true,
+    gatekeeperAccepted: true,
+    hardwareVerified: true,
     notarization: {
       requested: true,
       stapled: true,

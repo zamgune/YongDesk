@@ -130,6 +130,8 @@ curl http://127.0.0.1:38771/health
 - Reddit은 뉴스·알림 화면에서 Client ID와 Secret을 입력하면 이 Mac의 Keychain에 저장하고 sidecar를 재시작해 공식 OAuth API로만 읽는다. 앱이 관리하는 sidecar는 부모 Reddit 환경변수를 상속하지 않으며, 환경변수 방식은 독립 실행한 개발용 sidecar에서만 유지한다. 설정이 없으면 `configuration-required`로 표시한다.
 - 일반 시작은 Toss·Upbit·Bithumb 비밀값을 읽지 않고 sidecar의 비민감 상태만 사용한다. Reddit은 연결된 경우 비대화식으로 최대 한 번 읽으며, 권한 확인 UI가 필요하면 값을 노출하지 않고 연결되지 않은 상태로 시작한다.
 - `Keychain 권한 재설정`은 사용자가 명시적으로 실행할 때만 상호작용 읽기를 허용하고, 현재 정식 서명 기준으로 항목을 재등록한다. 재등록 실패 시 메모리의 원본으로 복구를 시도하며 자동 삭제나 로그 노출을 하지 않는다.
+- Toss·Upbit·Bithumb의 `검증 후 저장`은 엔진 오프라인 여부와 무관하게 ID·Secret을 입력하면 활성화된다. 저장 시 앱이 sidecar를 자동 시작하고 최대 15초 기다리며, 시작 실패 시 credential POST와 Keychain 저장을 호출하지 않고 입력값을 유지한다.
+- 연결 화면은 번들 파일 누락, 실행 권한 거부, 프로세스 조기 종료 코드, health timeout을 구분해 표시한다. 해결 동작은 `엔진 다시 시작`과 앱 지원 폴더의 `로그 열기`이며 Gatekeeper 비활성화나 quarantine 임의 제거는 안내하지 않는다.
 
 ## 로컬 빌드와 검증
 
@@ -195,9 +197,11 @@ yarn mac:package:public
 yarn mac:release-check:all --require-external
 ```
 
+패키징은 번들 Node와 동적 라이브러리, Swift 실행 파일, 앱 순서로 hardened runtime 서명한 뒤 앱을 먼저 공증·staple한다. 그 앱으로 ZIP과 DMG를 만들고 DMG도 공증·staple한다. 대상 아키텍처의 새 사용자 실기기 설치까지 완료한 최종 패키지만 `MACOS_HARDWARE_VERIFIED=1`을 설정한다.
+
 Apple ID 방식을 사용할 때는 `APPLE_ID`, `APPLE_TEAM_ID`, `APPLE_APP_PASSWORD`를 로컬 환경에서만 제공한다. 이 값과 notary credential을 문서, Git, 로그와 리포트에 넣지 않는다.
 
-공개 준비 완료 판정에는 두 아키텍처의 checksum, `staplerValidated=true`, `gatekeeperAccepted=true`와 대상 Mac 설치 확인이 필요하다.
+manifest의 `developerIdSigned`, `notarized`, `staplerValidated`, `gatekeeperAccepted`, `hardwareVerified`가 모두 참이어야 하며, 공개 준비 완료 판정에는 두 아키텍처의 checksum과 Apple Silicon·Intel 대상 Mac 설치 확인이 모두 필요하다.
 
 Swift는 sidecar에 `--parent-pid`를 전달한다. 정상 종료는 관리 중인 자식 프로세스에 SIGTERM을 보내 최대 1초를 기다린 뒤 그 자식만 강제 종료하며, 앱 강제 종료 시 Node watchdog이 부모 PID 변경을 감지해 서버와 38771 포트를 닫는다.
 

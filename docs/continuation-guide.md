@@ -128,10 +128,11 @@ node --experimental-strip-types scripts/verify_desktop_readiness.mts
 
 1. 실제 Toss 키와 허용 IP로 `005930.KS`, `AAPL`의 1시간·일봉, 통화·기준 시각·부분 세션과 주문 미호출을 인수 확인한다.
 2. Upbit private credential로 잔고와 order chance·호가 단위·최소 주문금액을 읽기 전용으로 확인한다. 이 통과는 수동 주문 활성화가 아니며, 실제 주문이 필요한 사용자는 별도의 Upbit 수동 지정가 인수 절차를 따른다. 공개 KRW 마켓 1시간·4시간·일봉 분석은 키 없이 이미 사용할 수 있으며 BTC·USDT 호가 입력은 현재 명시적으로 거절한다.
-3. 외부 배포는 Developer ID 서명, notarization, stapling, Gatekeeper 승인과 실제 Intel Mac 설치·실행을 별도로 완료한다.
-4. WebSocket 실시간 차트와 재연결 정책은 후속이다. 현재 1시간·4시간·일봉 분석을 streaming으로 표현하지 않는다.
-5. Upbit 수동 지정가의 체결·부분체결·취소 동기화와 재시작 후 전체 주문 원장 재조정은 후속이다. 현재는 timeout/429/5xx 결과 불명 시 client order identifier 단건 조회로만 잠금을 해소하며 자동 재시도하지 않는다.
-6. 문장형 전략 조립기를 실제 계약에 연결하고, 기능 안정화 후 YongStockDesk 런타임 이름과 기존 Keychain/App Support 데이터를 함께 마이그레이션한다.
+3. 친구 Mac API 등록은 설정의 엔진 상태에서 `엔진 준비`를 먼저 확인한다. 실패 시 번들 누락·실행 거부·조기 종료 코드·15초 timeout을 구분하고 `엔진 다시 시작` 또는 `로그 열기`로 복구한다. 엔진 실패 중에는 credential POST와 Keychain 저장을 시도하지 않는다.
+4. 외부 배포는 Developer ID 서명, 앱·DMG notarization/stapling, Gatekeeper 승인과 실제 Apple Silicon·Intel Mac의 새 사용자 설치·실행을 별도로 완료한다. 해당 아키텍처 실기기 확인 전에는 `MACOS_HARDWARE_VERIFIED=1`을 사용하지 않는다.
+5. WebSocket 실시간 차트와 재연결 정책은 후속이다. 현재 1시간·4시간·일봉 분석을 streaming으로 표현하지 않는다.
+6. Upbit 수동 지정가의 체결·부분체결·취소 동기화와 재시작 후 전체 주문 원장 재조정은 후속이다. 현재는 timeout/429/5xx 결과 불명 시 client order identifier 단건 조회로만 잠금을 해소하며 자동 재시도하지 않는다.
+7. 문장형 전략 조립기를 실제 계약에 연결하고, 기능 안정화 후 YongStockDesk 런타임 이름과 기존 Keychain/App Support 데이터를 함께 마이그레이션한다.
 
 UX 시안과 계산 명세가 있다고 실제 앱에 구현된 것으로 처리하지 않는다. 각 단계는 SwiftUI, sidecar 계약, 테스트와 배포 검증까지 완료된 뒤 현재 기능 문서의 상태를 갱신한다.
 

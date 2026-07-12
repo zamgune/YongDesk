@@ -122,6 +122,7 @@ final class AppModel: ObservableObject {
     @Published var sidecarLogText = "로그를 아직 불러오지 않았습니다."
     @Published var sidecarLogMessage = "sidecar 로그는 앱 지원 폴더에 저장됩니다."
     @Published var statusLine = "sidecar stopped"
+    @Published var sidecarStartupDiagnostic = SidecarStartupDiagnostic.stopped
     @Published var activeEnginePort: Int
 
     private static let sidecarLoaderImport = #"data:text/javascript,import { register } from "node:module"; import { pathToFileURL } from "node:url"; register("./scripts/ts_path_loader.mjs", pathToFileURL("./"));"#
@@ -249,12 +250,27 @@ final class AppModel: ObservableObject {
         }
         let workingDirectory = sidecarWorkingDirectory()
         guard isValidSidecarDirectory(workingDirectory) else {
-            statusLine = "sidecar 경로를 찾을 수 없습니다: \(workingDirectory.path(percentEncoded: false))"
+            sidecarStartupDiagnostic = .missingBundle()
+            statusLine = "sidecar bundle missing"
             return
+        }
+        if isPackagedApp {
+            guard let nodeURL = bundledNodeCandidateURL(),
+                  FileManager.default.fileExists(atPath: nodeURL.path(percentEncoded: false)) else {
+                sidecarStartupDiagnostic = .missingBundle()
+                statusLine = "bundled node missing"
+                return
+            }
+            guard FileManager.default.isExecutableFile(atPath: nodeURL.path(percentEncoded: false)) else {
+                sidecarStartupDiagnostic = .launchDenied()
+                statusLine = "bundled node execution denied"
+                return
+            }
         }
         isStartingSidecar = true
         activeEnginePort = resolveSidecarPort()
         statusLine = "sidecar preparing"
+        sidecarStartupDiagnostic = .preparing
         let store = self.store
         let keychain = self.keychain
         Task.detached { [weak self, workingDirectory, store, keychain] in
@@ -333,6 +349,7 @@ final class AppModel: ObservableObject {
                 if let currentProcess = self.sidecar, currentProcess !== terminatedProcess {
                     return
                 }
+                let stoppedBeforeReady = self.health?.ok != true
                 try? self.sidecarLogHandle?.close()
                 self.sidecarLogHandle = nil
                 self.sidecar = nil
@@ -340,13 +357,20 @@ final class AppModel: ObservableObject {
                 self.health = nil
                 self.automationHealth = nil
                 self.localLiveTrading = nil
-                self.statusLine = "sidecar stopped"
+                if stoppedBeforeReady {
+                    self.sidecarStartupDiagnostic = .earlyExit(code: terminatedProcess.terminationStatus)
+                    self.statusLine = "sidecar exited (\(terminatedProcess.terminationStatus))"
+                } else {
+                    self.sidecarStartupDiagnostic = .stopped
+                    self.statusLine = "sidecar stopped"
+                }
             }
         }
         do {
             try process.run()
             sidecar = process
             statusLine = "sidecar starting"
+            sidecarStartupDiagnostic = .starting
             Task {
                 await refreshSidecarStartupState()
             }
@@ -354,15 +378,17 @@ final class AppModel: ObservableObject {
             isStartingSidecar = false
             try? sidecarLogHandle?.close()
             sidecarLogHandle = nil
-            statusLine = error.localizedDescription
+            sidecarStartupDiagnostic = .launchFailure(error)
+            statusLine = "sidecar launch failed"
         }
     }
 
     private func refreshSidecarStartupState() async {
-        for attempt in 1...12 {
+        for attempt in 1...30 {
             try? await Task.sleep(for: .milliseconds(500))
             await refreshHealth()
             if health?.ok == true {
+                sidecarStartupDiagnostic = .ready
                 await refreshBrokerCredential()
                 await refreshBrokerAccounts()
                 await refreshBrokerDiagnostics()
@@ -384,8 +410,11 @@ final class AppModel: ObservableObject {
             if sidecar == nil {
                 return
             }
-            statusLine = "sidecar starting (\(attempt)/12)"
+            sidecarStartupDiagnostic = .starting
+            statusLine = "sidecar starting (\(attempt)/30)"
         }
+        isStartingSidecar = false
+        sidecarStartupDiagnostic = .healthTimeout()
         statusLine = "sidecar health check timeout"
     }
 
@@ -401,6 +430,7 @@ final class AppModel: ObservableObject {
         sidecarLogHandle = nil
         health = nil
         localLiveTrading = nil
+        sidecarStartupDiagnostic = .stopped
         statusLine = "sidecar stopped"
     }
 
@@ -408,6 +438,32 @@ final class AppModel: ObservableObject {
         stopSidecar()
         statusLine = "sidecar restarting: \(reason)"
         startSidecar()
+    }
+
+    func ensureSidecarReadyForCredentialRegistration() async -> Bool {
+        await refreshHealth()
+        if health?.ok == true {
+            sidecarStartupDiagnostic = .ready
+            return true
+        }
+        if sidecar == nil, !isStartingSidecar {
+            startSidecar()
+        }
+        for _ in 1...30 {
+            try? await Task.sleep(for: .milliseconds(500))
+            await refreshHealth()
+            if health?.ok == true {
+                sidecarStartupDiagnostic = .ready
+                return true
+            }
+            if sidecarStartupDiagnostic.phase == .failed, sidecar == nil, !isStartingSidecar {
+                return false
+            }
+        }
+        isStartingSidecar = false
+        sidecarStartupDiagnostic = .healthTimeout()
+        statusLine = "sidecar health check timeout"
+        return false
     }
 
     func refreshRedditCredentialStatus() {
@@ -595,6 +651,10 @@ final class AppModel: ObservableObject {
             return configuredURL
         }
         return URL(fileURLWithPath: FileManager.default.currentDirectoryPath, isDirectory: true)
+    }
+
+    private var isPackagedApp: Bool {
+        Bundle.main.bundleURL.pathExtension == "app"
     }
 
     private func recordedRepositoryURL() -> URL? {
@@ -874,11 +934,15 @@ final class AppModel: ObservableObject {
     }
 
     private func bundledNodeURL() -> URL? {
-        guard let nodeURL = Bundle.main.resourceURL?.appending(path: "node/bin/node"),
+        guard let nodeURL = bundledNodeCandidateURL(),
               FileManager.default.isExecutableFile(atPath: nodeURL.path(percentEncoded: false)) else {
             return nil
         }
         return nodeURL
+    }
+
+    private func bundledNodeCandidateURL() -> URL? {
+        Bundle.main.resourceURL?.appending(path: "node/bin/node")
     }
 
     private func attachSidecarLog(to process: Process) {
@@ -923,6 +987,7 @@ final class AppModel: ObservableObject {
             }
             isStartingSidecar = false
             statusLine = "sidecar online"
+            sidecarStartupDiagnostic = .ready
             lastUpdated = Self.timeFormatter.string(from: Date())
         } catch {
             health = nil

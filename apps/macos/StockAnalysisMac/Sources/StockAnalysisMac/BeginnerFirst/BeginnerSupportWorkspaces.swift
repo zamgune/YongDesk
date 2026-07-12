@@ -1254,7 +1254,13 @@ struct BeginnerSettingsWorkspace: View {
                         .foregroundStyle(BeginnerPalette.muted)
                 }
 
-                BeginnerAPIConnectionWorkspace(selectedProvider: $selectedConnectionProvider)
+                BeginnerAPIConnectionWorkspace(
+                    selectedProvider: $selectedConnectionProvider,
+                    onOpenSidecarLog: {
+                        model.refreshSidecarLogTail()
+                        onOpen(.sidecarLog)
+                    }
+                )
 
                 BeginnerLiveTradingSettingsCard()
 
@@ -1351,6 +1357,7 @@ struct BeginnerSettingsWorkspace: View {
 private struct BeginnerAPIConnectionWorkspace: View {
     @EnvironmentObject private var model: AppModel
     @Binding var selectedProvider: BeginnerAPIConnectionProvider
+    let onOpenSidecarLog: () -> Void
 
     @State private var identifier = ""
     @State private var secret = ""
@@ -1417,10 +1424,28 @@ private struct BeginnerAPIConnectionWorkspace: View {
     }
 
     private var canSave: Bool {
-        model.health?.ok == true &&
-            !isSaving &&
+        !isSaving &&
             !identifier.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
             !secret.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private var engineStatusTitle: String {
+        if model.health?.ok == true || model.sidecarStartupDiagnostic.phase == .ready {
+            return "엔진 준비"
+        }
+        if model.isStartingSidecar || [.preparing, .starting].contains(model.sidecarStartupDiagnostic.phase) {
+            return "연결 중"
+        }
+        return model.sidecarStartupDiagnostic.phase == .failed ? "시작 실패" : "엔진 대기"
+    }
+
+    private var engineStatusColor: Color {
+        switch model.sidecarStartupDiagnostic.phase {
+        case .ready: return BeginnerPalette.green
+        case .preparing, .starting: return BeginnerPalette.amber
+        case .failed: return BeginnerPalette.red
+        case .stopped: return BeginnerPalette.muted
+        }
     }
 
     var body: some View {
@@ -1478,6 +1503,33 @@ private struct BeginnerAPIConnectionWorkspace: View {
                                 .accessibilityIdentifier("beginner-api-secret")
                         }
                     }
+
+                    HStack(alignment: .top, spacing: 10) {
+                        Image(systemName: model.sidecarStartupDiagnostic.phase == .failed ? "exclamationmark.triangle.fill" : "bolt.horizontal.circle")
+                            .foregroundStyle(engineStatusColor)
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(engineStatusTitle)
+                                .font(.caption.weight(.bold))
+                            Text(model.sidecarStartupDiagnostic.displayMessage)
+                                .font(.caption2)
+                                .foregroundStyle(BeginnerPalette.muted)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        Spacer()
+                        Button("엔진 다시 시작") {
+                            model.restartSidecar(reason: "API 등록 복구")
+                        }
+                        .buttonStyle(.bordered)
+                        .disabled(model.isStartingSidecar)
+                        .accessibilityIdentifier("beginner-api-engine-retry")
+                        Button("로그 열기", action: onOpenSidecarLog)
+                            .buttonStyle(.bordered)
+                            .accessibilityIdentifier("beginner-api-engine-log")
+                    }
+                    .padding(10)
+                    .background(engineStatusColor.opacity(0.08), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+                    .accessibilityElement(children: .contain)
+                    .accessibilityIdentifier("beginner-api-engine-status")
 
                     HStack(spacing: 8) {
                         Button(isSaving ? "검증 중" : "검증 후 저장") {
@@ -1850,19 +1902,25 @@ private struct BeginnerAPIConnectionWorkspace: View {
         isSaving = true
         defer { isSaving = false }
         credentialSaveFailure = nil
+        guard await model.ensureSidecarReadyForCredentialRegistration() else {
+            credentialSaveFailure = model.sidecarStartupDiagnostic.displayMessage
+            showingAdvanced = false
+            return
+        }
         let saved: Bool
         if selectedProvider == .toss {
             saved = await model.registerBrokerCredential(clientId: identifier, clientSecret: secret)
         } else {
             saved = await model.registerCryptoCredential(exchange: selectedProvider.rawValue, accessKey: identifier, secretKey: secret)
         }
-        secret = ""
         guard saved else {
+            secret = ""
             credentialSaveFailure = statusMessage
             showingAdvanced = false
             return
         }
         identifier = ""
+        secret = ""
         await refreshProviderState()
         showingAdvanced = isVerified
     }

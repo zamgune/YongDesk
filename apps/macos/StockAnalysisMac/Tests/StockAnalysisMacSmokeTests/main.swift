@@ -66,6 +66,27 @@ func assert(_ condition: @autoclosure () -> Bool, _ message: String) {
     }
 }
 
+func verifySidecarStartupDiagnostics() {
+    let missing = SidecarStartupDiagnostic.missingBundle()
+    assert(missing.failureCode == .missingBundle, "missing sidecar bundle should have a distinct diagnosis")
+    assert(!missing.displayMessage.contains("/"), "startup diagnosis should not expose local file paths")
+
+    let denied = SidecarStartupDiagnostic.launchFailure(
+        NSError(domain: NSPOSIXErrorDomain, code: Int(EACCES))
+    )
+    assert(denied.failureCode == .launchDenied, "permission errors should map to launch denied")
+    assert(!denied.displayMessage.lowercased().contains("xattr"), "recovery must not advise quarantine removal")
+
+    let earlyExit = SidecarStartupDiagnostic.earlyExit(code: 78)
+    assert(earlyExit.failureCode == .earlyExit && earlyExit.exitCode == 78, "early exit should retain only its exit code")
+
+    let timeout = SidecarStartupDiagnostic.healthTimeout()
+    assert(timeout.failureCode == .healthTimeout, "health timeout should have a distinct diagnosis")
+    assert(timeout.message.contains("15초"), "credential registration should wait up to 15 seconds")
+}
+
+verifySidecarStartupDiagnostics()
+
 func verifyManagedChildProcessTermination() throws {
     let child = Process()
     child.executableURL = URL(fileURLWithPath: "/bin/sleep")
@@ -137,6 +158,17 @@ func verifyBeginnerNavigationAndConnectionWorkspaceSource() throws {
     assert(rootView.contains(".contentShape(RoundedRectangle"), "sidebar tabs should use their full rounded hit area")
     assert(rootView.contains(".focusable()"), "sidebar tabs should remain keyboard focusable")
     assert(supportWorkspace.contains("BeginnerAPIConnectionWorkspace"), "settings should embed inline API connection management")
+    assert(!supportWorkspace.contains("model.health?.ok == true &&\n            !isSaving"), "API save must not stay disabled while the sidecar is offline")
+    assert(supportWorkspace.contains("ensureSidecarReadyForCredentialRegistration()"), "credential save should recover the sidecar before posting credentials")
+    assert(supportWorkspace.contains("beginner-api-engine-status"), "connection workspace should expose engine startup status")
+    assert(supportWorkspace.contains("beginner-api-engine-retry"), "connection workspace should expose sidecar recovery")
+    assert(supportWorkspace.contains("beginner-api-engine-log"), "connection workspace should expose the diagnostic log")
+    let readinessGuard = supportWorkspace.range(of: "guard await model.ensureSidecarReadyForCredentialRegistration() else")
+    let brokerPost = supportWorkspace.range(of: "model.registerBrokerCredential(clientId: identifier, clientSecret: secret)")
+    assert(
+        readinessGuard != nil && brokerPost != nil && readinessGuard!.lowerBound < brokerPost!.lowerBound,
+        "sidecar readiness failure must stop credential POST and Keychain persistence before registration"
+    )
     assert(models.contains("beginner-api-provider-"), "connection providers should have stable accessibility identifiers")
     assert(supportWorkspace.contains("DisclosureGroup(isExpanded: $showingAdvanced)"), "advanced diagnostics should stay collapsed until requested")
     assert(supportWorkspace.contains("TossOperationReport.make"), "Toss operational reports should remain available in advanced diagnostics")

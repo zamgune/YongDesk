@@ -49,6 +49,13 @@ const run = (command: string, args: string[], options: { capture?: boolean; env?
   return (result.stdout ?? "").trim();
 };
 
+const commandSucceeds = (command: string, args: string[]) =>
+  spawnSync(command, args, {
+    cwd: repoRoot,
+    encoding: "utf8",
+    stdio: "pipe",
+  }).status === 0;
+
 const checksum = (path: string) =>
   run("shasum", ["-a", "256", path], { capture: true }).split(/\s+/)[0];
 
@@ -382,33 +389,61 @@ const notarizationArgs = (artifactPath: string) => {
   return ["notarytool", "submit", artifactPath, "--apple-id", appleId, "--team-id", teamId, "--password", password, "--wait"];
 };
 
-const maybeNotarize = (dmgPath: string) => {
+const notarizationEnabled = () => process.env.MACOS_NOTARIZE === "1";
+
+const assertNotarizationConfiguration = () => {
+  if (!process.env.MACOS_CODESIGN_IDENTITY?.trim()) {
+    throw new Error("MACOS_NOTARIZE=1 requires MACOS_CODESIGN_IDENTITY for Developer ID signing.");
+  }
+};
+
+const maybeNotarizeApp = (temporaryZipPath: string) => {
+  if (!notarizationEnabled()) {
+    return { requested: false, stapled: false, validated: false };
+  }
+  assertNotarizationConfiguration();
+  run("ditto", ["-c", "-k", "--keepParent", appRoot, temporaryZipPath]);
+  run("xcrun", notarizationArgs(temporaryZipPath));
+  run("xcrun", ["stapler", "staple", appRoot]);
+  run("xcrun", ["stapler", "validate", appRoot]);
+  run("rm", ["-f", temporaryZipPath]);
+  return { requested: true, stapled: true, validated: true };
+};
+
+const maybeNotarizeDmg = (dmgPath: string) => {
   if (process.env.MACOS_NOTARIZE !== "1") {
     return {
       requested: false,
       stapled: false,
+      validated: false,
     };
   }
-  if (!process.env.MACOS_CODESIGN_IDENTITY?.trim()) {
-    throw new Error("MACOS_NOTARIZE=1 requires MACOS_CODESIGN_IDENTITY for Developer ID signing.");
-  }
+  assertNotarizationConfiguration();
   run("xcrun", notarizationArgs(dmgPath));
   run("xcrun", ["stapler", "staple", dmgPath]);
   run("xcrun", ["stapler", "validate", dmgPath]);
   return {
     requested: true,
     stapled: true,
+    validated: true,
   };
 };
 
 const distributionReadiness = (options: {
   arch: string;
   signingIdentity: string;
-  notarizationStapled: boolean;
+  notarized: boolean;
+  staplerValidated: boolean;
+  gatekeeperAccepted: boolean;
+  hardwareVerified: boolean;
   version: string;
 }) => {
   const developerIdSigned = options.signingIdentity.startsWith("Developer ID Application:");
-  const readyForExternalDistribution = developerIdSigned && options.notarizationStapled;
+  const readyForExternalDistribution = developerIdSigned &&
+    options.notarized &&
+    options.staplerValidated &&
+    options.gatekeeperAccepted &&
+    options.hardwareVerified;
   const warnings: string[] = [];
   const nextSteps: string[] = [];
 
@@ -416,9 +451,15 @@ const distributionReadiness = (options: {
     warnings.push("현재 앱은 ad-hoc 또는 비 Developer ID 서명입니다. 다른 Mac에서 Gatekeeper 경고가 날 수 있습니다.");
     nextSteps.push("MACOS_CODESIGN_IDENTITY=\"Developer ID Application: ...\" 환경변수로 다시 패키징하세요.");
   }
-  if (!options.notarizationStapled) {
+  if (!options.notarized || !options.staplerValidated) {
     warnings.push("Apple 공증 티켓이 stapled 상태가 아닙니다. 외부 배포 전 공증이 필요합니다.");
     nextSteps.push("MACOS_NOTARIZE=1과 notarytool credential을 설정한 뒤 npm run mac:package를 실행하세요.");
+  }
+  if (!options.gatekeeperAccepted) {
+    warnings.push("Gatekeeper 실행 평가가 아직 통과하지 않았습니다.");
+  }
+  if (!options.hardwareVerified) {
+    warnings.push(`${options.arch} 실기기에서 새 사용자 설치·첫 실행을 확인하지 않았습니다.`);
   }
   const archWarning = architectureWarning(options.arch);
   if (archWarning) {
@@ -434,7 +475,11 @@ const distributionReadiness = (options: {
     label: readyForExternalDistribution ? "외부 배포 준비" : "로컬 테스트 빌드",
     readyForExternalDistribution,
     developerIdSigned,
-    notarizationStapled: options.notarizationStapled,
+    notarized: options.notarized,
+    staplerValidated: options.staplerValidated,
+    gatekeeperAccepted: options.gatekeeperAccepted,
+    hardwareVerified: options.hardwareVerified,
+    notarizationStapled: options.staplerValidated,
     gatekeeperRisk: readyForExternalDistribution ? "low" : "high",
     architecture: options.arch,
     warnings,
@@ -462,11 +507,15 @@ const main = async () => {
   const manifestPath = join(releaseRoot, `${artifactBase}.manifest.json`);
   const signingIdentity = process.env.MACOS_CODESIGN_IDENTITY?.trim() || "ad-hoc";
   const notarizationExpected = process.env.MACOS_NOTARIZE === "1";
+  const hardwareVerified = process.env.MACOS_HARDWARE_VERIFIED === "1";
   const builtAt = new Date().toISOString();
   const expectedDistribution = distributionReadiness({
     arch,
     signingIdentity,
-    notarizationStapled: notarizationExpected,
+    notarized: notarizationExpected,
+    staplerValidated: notarizationExpected,
+    gatekeeperAccepted: false,
+    hardwareVerified,
     version,
   });
   const releaseStatus = {
@@ -501,6 +550,7 @@ const main = async () => {
   run(process.execPath, ["--experimental-strip-types", "scripts/verify_macos_app.mts", appRoot]);
 
   await mkdir(releaseRoot, { recursive: true });
+  const appNotarization = maybeNotarizeApp(join(distRoot, `${artifactBase}.notary.zip`));
   await rm(zipPath, { force: true });
   await rm(dmgPath, { force: true });
   await rm(manifestPath, { force: true });
@@ -508,11 +558,26 @@ const main = async () => {
   const dmgStage = await prepareDmgStage(version, arch);
   run("hdiutil", ["create", "-volname", "StockAnalysis", "-srcfolder", dmgStage, "-ov", "-format", "UDZO", dmgPath]);
 
-  const notarization = maybeNotarize(dmgPath);
+  const dmgNotarization = maybeNotarizeDmg(dmgPath);
+  const notarized = appNotarization.stapled && dmgNotarization.stapled;
+  const staplerValidated = appNotarization.validated && dmgNotarization.validated;
+  const gatekeeperAccepted = commandSucceeds("spctl", ["--assess", "--type", "execute", "--verbose", appRoot]) &&
+    commandSucceeds("spctl", [
+      "--assess",
+      "--type",
+      "open",
+      "--context",
+      "context:primary-signature",
+      "--verbose",
+      dmgPath,
+    ]);
   const distribution = distributionReadiness({
     arch,
     signingIdentity,
-    notarizationStapled: notarization.stapled,
+    notarized,
+    staplerValidated,
+    gatekeeperAccepted,
+    hardwareVerified,
     version,
   });
   const files = [
@@ -538,15 +603,25 @@ const main = async () => {
     releaseChannel: macReleaseChannel(version),
     liveSubmissionMode: "disabled",
     signingState: signingIdentity === "ad-hoc" ? "ad-hoc signed" : "signed",
-    notarizationState: notarization.stapled ? "notarized" : "not notarized",
-    intelHardwareVerified: arch === "x64" ? false : null,
+    notarizationState: notarized ? "notarized" : "not notarized",
+    developerIdSigned: distribution.developerIdSigned,
+    notarized,
+    staplerValidated,
+    gatekeeperAccepted,
+    hardwareVerified,
+    intelHardwareVerified: arch === "x64" ? hardwareVerified : null,
     buildNumber,
     platform: "macos",
     arch,
     builtAt,
     signingIdentity,
     codesign: codesignDetails(),
-    notarization,
+    notarization: {
+      requested: notarizationEnabled(),
+      stapled: notarized,
+      app: appNotarization,
+      dmg: dmgNotarization,
+    },
     compatibility: releaseCompatibility({ arch, sidecarVerified: true }),
     distribution,
     files,
@@ -580,7 +655,12 @@ const main = async () => {
     manifestPath,
     installGuidePath: handoff.installGuidePath,
     releaseIndexPath: handoff.indexPath,
-    notarization,
+    notarization: {
+      requested: notarizationEnabled(),
+      stapled: notarized,
+      app: appNotarization,
+      dmg: dmgNotarization,
+    },
   }, null, 2));
 };
 

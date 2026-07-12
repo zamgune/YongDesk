@@ -23,6 +23,11 @@ export type MacReleaseManifest = {
   arch?: string;
   builtAt?: string;
   signingIdentity?: string;
+  developerIdSigned?: boolean;
+  notarized?: boolean;
+  staplerValidated?: boolean;
+  gatekeeperAccepted?: boolean;
+  hardwareVerified?: boolean;
   notarization?: {
     requested?: boolean;
     stapled?: boolean;
@@ -377,8 +382,12 @@ export const assessMacRelease = (
   expectations?: MacReleaseExpectations,
 ): MacReleaseCheckReport => {
   const signingIdentity = manifest.signingIdentity?.trim() || "ad-hoc";
-  const developerIdSigned = signingIdentity.startsWith("Developer ID Application:");
-  const notarizationStapled = manifest.notarization?.stapled === true;
+  const developerIdSigned = manifest.developerIdSigned === true &&
+    signingIdentity.startsWith("Developer ID Application:");
+  const notarizationStapled = manifest.notarized === true &&
+    manifest.staplerValidated === true &&
+    manifest.notarization?.stapled === true;
+  const hardwareVerified = manifest.hardwareVerified === true;
   const targetArch = manifest.compatibility?.targetArch ?? manifest.arch ?? "unknown";
   const supportedArchitectures = manifest.compatibility?.supportedArchitectures?.length
     ? manifest.compatibility.supportedArchitectures
@@ -453,6 +462,10 @@ export const assessMacRelease = (
     warnings.push("Apple 공증 티켓이 stapled 상태가 아닙니다. 외부 배포 전 공증이 필요합니다.");
     nextSteps.push("MACOS_NOTARIZE=1과 notarytool credential을 설정한 뒤 npm run mac:package를 실행하세요.");
   }
+  if (!hardwareVerified) {
+    warnings.push(`${targetArch} 실기기에서 새 사용자 설치·첫 실행 검증이 완료되지 않았습니다.`);
+    nextSteps.push("대상 아키텍처 실기기 검증 후 MACOS_HARDWARE_VERIFIED=1로 최종 패키지를 생성하세요.");
+  }
   if (developerIdSigned && notarizationStapled) {
     for (const file of staplerFailures) {
       issues.push(`DMG 공증 티켓 stapler 검증이 실패했습니다: ${file.path}`);
@@ -480,7 +493,7 @@ export const assessMacRelease = (
     dmgFiles.length > 0 &&
     dmgFiles.every((file) => file.staplerValidated === true && file.gatekeeperAccepted === true);
   const readyForExternalDistribution =
-    completeArtifacts && developerIdSigned && notarizationStapled && distributionChecksPassed;
+    completeArtifacts && developerIdSigned && notarizationStapled && distributionChecksPassed && hardwareVerified;
   const status = !completeArtifacts
     ? "incomplete"
     : readyForExternalDistribution

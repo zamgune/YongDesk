@@ -48,9 +48,9 @@
 | 모의투자 | 페이퍼 주문·체결·보유·감사 로그 | 구현됨 | 로컬 저장소 사용, 실브로커 호출 없음 | 없음 |
 | 주문 안전 | holdings, precheck, sync, `OrderIntent`, `RiskCheck` | 구현됨 | 10분 미리보기·제출 직전 재검증·typed confirmation·Toss KR/US 지정가 제출 | 실 API 인수 필요 |
 | 안전장치 | 설치·계좌 바인딩, 수동/자동화 gate, worker control, kill switch | 구현됨 | sidecar fail-closed, KST 매수 한도, `unknown` 주문 전역 잠금 | 차단 경계 |
-| Toss | credential 검증·저장, 계좌 선택, 공인 IP 확인 | 외부 설정 필요 | 사용자 키와 Toss 허용 IP 등록 필요 | 없음 |
+| Toss | credential 검증·저장, 계좌 선택, 공인 IP 확인 | 외부 설정 필요 | 엔진 오프라인이어도 저장 버튼 활성화. 저장 시 sidecar 자동 복구를 15초 기다리며 실패하면 입력 유지·POST/Keychain 저장 없음. 사용자 키와 Toss 허용 IP 등록 필요 | 없음 |
 | Toss | 국내·미국 주식 지정가 주문 | 구현됨 | 단일 Mac·선택 계좌에서 수동 기본 OFF. 매수 건당 10만원·KST 일 30만원, USD 환율 fail-closed | 실 API 인수 필요 |
-| 코인 | Upbit·Bithumb credential, 잔고·주문가능정보·현재가·최소금액 사전검증 | 외부 설정 필요 | 거래소별 API 키 필요. 조회·사전검증은 주문을 호출하지 않음 | 없음 |
+| 코인 | Upbit·Bithumb credential, 잔고·주문가능정보·현재가·최소금액 사전검증 | 외부 설정 필요 | 공통 sidecar 자동 복구·시작 진단 적용. 거래소별 API 키 필요. 조회·사전검증은 주문을 호출하지 않음 | 없음 |
 | 자산 | Toss·Upbit·Bithumb 통합 실자산 | 구현됨 | 포지션 중심 보드에서 공급자 색상·상태, 종목 수 분포, 공급자·통화별 평가를 표시. 15초 메모리 캐시, 30초 UI 갱신, stale/부분 실패 유지. 통화 간 합산 안 함 | 실 API 인수 필요 |
 | 코인 | Upbit·Bithumb KRW 수동 지정가 주문 | 구현됨 | 자동 readiness, 이용 동의, 거래소별 typed 토글, RiskCheck·잔고·호가 재검증, 주문 요약 재입력 필요 | 실 API 인수 필요 |
 | 코인 | Upbit·Bithumb 지정가 자동매매 | 구현됨 | 거래소별 수동 5건·재시작 재조정·kill switch 증거 뒤 별도 OFF 토글. ladder 전략은 실제 체결 후 단계 반영 | mock 검증·실 API 읽기 전용 인수 필요 |
@@ -58,7 +58,7 @@
 | 코인 | Upbit 공식 주문 생성 테스트 | 구현됨 | `/v1/orders/test`만 호출하며 실제 주문·체결·수수료·원장 반영 없음 | 주문하기 권한 필요 |
 | 코인 | 시장가·출금·다건 주문 제출 | 제외 | 사용자 확인형 미체결 일괄 취소만 별도 제공 | 차단 경계 |
 | 배포 | arm64/x64 앱·DMG·ZIP·manifest 생성·설치 검증 | 구현됨 | 생성·검증 도구가 구현됨. 1.0.0 로컬 검증 기록은 릴리스 이력에 보존되며, 새 패키지는 아키텍처별로 다시 검증해야 함 | 없음 |
-| 배포 | Gatekeeper 경고 없는 공개 배포 | 외부 설정 필요 | Developer ID, notarization과 stapling 필요 | 없음 |
+| 배포 | Gatekeeper 경고 없는 공개 배포 | 외부 설정 필요 | Developer ID, 앱·DMG notarization/stapling, Gatekeeper 평가, Apple Silicon·Intel 실기기 검증이 모두 필요 | 없음 |
 
 ## 현재 macOS 사용자 흐름
 
