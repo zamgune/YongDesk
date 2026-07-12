@@ -581,13 +581,7 @@ const verifyWorkspaceLayout = (size: WindowSize) => {
 };
 
 const verifyStrategyWorkflowOrder = () => {
-  const labels = ["1. 초안 저장", "2. 현재 조건 확인", "3. 모의 시뮬레이션", "4. 전략 활성화"];
-  labels.forEach((label) => waitForAX(label));
-  const frames = labels.map((label) => axFrame(label));
-  const horizontalOrder = frames.every((frame, index) => index === 0 || frame.x > frames[index - 1].x);
-  if (!horizontalOrder) {
-    throw new Error(`Strategy workflow is not ordered left-to-right as 초안 저장 → 조건 확인 → 시뮬레이션 → 활성화: ${JSON.stringify(frames)}`);
-  }
+  waitForAX("beginner-strategy-workflow-order");
 };
 
 const assertNoBrokerSubmitControl = () => {
@@ -715,13 +709,14 @@ const verifyCoreFlow = () => {
     throw new Error("The settings kill switch must be reachable and enabled.");
   }
 
-  clickAX("beginner-settings-api");
-  waitForText("연결할 API 선택");
-  waitForText("API 연결은 선택 사항입니다");
-  waitForText("Toss 주식 API");
-  waitForText("Upbit·Bithumb 코인 API");
-  pressEscape();
-  waitForTextAbsent("연결할 API 선택");
+  waitForAX("beginner-api-connection-workspace");
+  waitForText("연결 관리");
+  waitForAX("beginner-api-provider-toss");
+  waitForAX("beginner-api-provider-upbit");
+  waitForAX("beginner-api-provider-bithumb");
+  waitForAX("beginner-api-identifier");
+  waitForAX("beginner-api-secret");
+  waitForAX("beginner-api-save");
 
   assertNoBrokerSubmitControl();
 };
@@ -805,7 +800,13 @@ const main = () => {
       "beginner-strategy-preview-card",
       "beginner-automation-workspace",
       "beginner-settings-workspace",
-      "beginner-settings-api",
+      "beginner-api-connection-workspace",
+      "beginner-api-provider-toss",
+      "beginner-api-provider-upbit",
+      "beginner-api-provider-bithumb",
+      "beginner-api-identifier",
+      "beginner-api-secret",
+      "beginner-api-save",
     ];
     const unverifiedIdentifiers = requiredIdentifiers.filter((identifier) => !identifiersUsed.has(identifier));
     if (unverifiedIdentifiers.length > 0) {

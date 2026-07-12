@@ -268,7 +268,9 @@ struct BeginnerStrategyWorkspace: View {
                 workflowStep(4, "활성화")
             }
         }
-        .accessibilityIdentifier("beginner-strategy-workflow")
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("1. 초안 저장, 2. 조건 확인, 3. 시뮬레이션, 4. 활성화")
+        .accessibilityIdentifier("beginner-strategy-workflow-order")
     }
 
     private func workflowStep(_ index: Int, _ title: String) -> some View {
@@ -329,7 +331,6 @@ struct BeginnerStrategyWorkspace: View {
                 }
             }
         }
-        .accessibilityIdentifier("beginner-strategy-instrument")
     }
 
     private var quoteCard: some View {
@@ -459,7 +460,6 @@ struct BeginnerStrategyWorkspace: View {
                 }
             }
         }
-        .accessibilityIdentifier("beginner-strategy-sizing")
     }
 
     private var conditionSection: some View {
@@ -500,7 +500,6 @@ struct BeginnerStrategyWorkspace: View {
                 }
             }
         }
-        .accessibilityIdentifier("beginner-strategy-conditions")
     }
 
     private var preview: some View {

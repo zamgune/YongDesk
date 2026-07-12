@@ -217,6 +217,22 @@ enum BeginnerTradeHorizon: String, CaseIterable, Identifiable {
     }
 }
 
+enum BeginnerEntryPriceMode: String, CaseIterable, Identifiable {
+    case latestClose
+    case holdingAverage
+    case custom
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .latestClose: return "최근 확정 종가"
+        case .holdingAverage: return "보유 평단"
+        case .custom: return "직접 입력"
+        }
+    }
+}
+
 enum BeginnerSettingsSheet: Identifiable {
     case strategy
     case selfTest
@@ -332,7 +348,8 @@ func beginnerDataSourceLabel(_ source: AnalysisDataSource?) -> String {
     case .yahoo: return "Yahoo 보조 시세"
     case .fixture: return "테스트 fixture"
     case .auto: return "자동 선택"
-    case let .unknown(value): return value
+    case let .unknown(value):
+        return value == "toss+yahoo" || value == "yahoo+toss" ? "Toss + Yahoo 시간봉 보완" : value
     case nil: return "출처 확인 중"
     }
 }

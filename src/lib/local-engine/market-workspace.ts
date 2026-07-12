@@ -1,5 +1,10 @@
 import { loadDecryptedCredentials } from "@/lib/broker/credential-store";
-import { calculateHorizonExitPlans, type HorizonPlanContext, type PlanReliabilityGrade } from "@/lib/market/horizon-exit-plans";
+import {
+  calculateHorizonExitPlans,
+  type HoldingPlanMode,
+  type HorizonPlanContext,
+  type PlanReliabilityGrade,
+} from "@/lib/market/horizon-exit-plans";
 import { getMarketDataProvider, type GetCandlesOptions, type MarketCandleResponse, type MarketDataProvider } from "@/lib/market-data";
 import type { CandleSeriesSnapshot, OfficialTimeframe } from "@/lib/market-data/official-types";
 import { TossMarketDataProvider } from "@/lib/market-data/toss";
@@ -406,6 +411,34 @@ const yahooAnalysis = async ({
 const getBasis = (analysis: AnalysisPayload | null) =>
   asObject(analysis?.analysisBasis);
 
+const hasSufficientHourlyPlanInputs = (analysis: AnalysisPayload | null) => {
+  const basis = getBasis(analysis);
+  const closedCandleCount = asNumber(basis?.closedCandleCount);
+  return isFinitePositive(asNumber(basis?.atr14))
+    && isFinitePositive(asNumber(basis?.recentLow20))
+    && (closedCandleCount === null || closedCandleCount >= 20);
+};
+
+const hasSufficientLongPlanInputs = (analysis: AnalysisPayload | null) => {
+  const basis = getBasis(analysis);
+  return isFinitePositive(asNumber(basis?.sma200))
+    && isFinitePositive(asNumber(basis?.tenMonthAverage))
+    && isFinitePositive(asNumber(basis?.weeklySma20))
+    && isFinitePositive(asNumber(basis?.weeklySma60));
+};
+
+const combinedDataSource = (
+  analyses: Array<AnalysisPayload | null>,
+  fallback: string,
+) => {
+  const sources = [...new Set(
+    analyses
+      .map((analysis) => asText(analysis?.dataSource))
+      .filter((source): source is string => source !== null),
+  )];
+  return sources.length ? sources.join("+") : fallback;
+};
+
 const getReliabilityGrade = (analysis: AnalysisPayload | null): PlanReliabilityGrade => {
   const reliability = asObject(analysis?.signalReliability);
   const grade = asText(reliability?.grade);
@@ -433,6 +466,8 @@ const buildHorizonContext = ({
   symbol,
   assetClass,
   entryPrice,
+  currentPrice,
+  planMode,
   stale,
   staleByHorizon,
   quoteAtByHorizon,
@@ -448,6 +483,8 @@ const buildHorizonContext = ({
   symbol: string;
   assetClass: MarketWorkspaceAssetClass;
   entryPrice: number;
+  currentPrice: number;
+  planMode: HoldingPlanMode;
   stale: boolean;
   staleByHorizon: HorizonPlanContext["staleByHorizon"];
   quoteAtByHorizon: HorizonPlanContext["quoteAtByHorizon"];
@@ -473,8 +510,21 @@ const buildHorizonContext = ({
     market,
     currency,
     dataSource,
+    dataSourceByHorizon: {
+      day: combinedDataSource(
+        assetClass === "crypto" ? [oneHour, fourHour] : [oneHour, daily],
+        dataSource,
+      ),
+      swing: combinedDataSource(
+        assetClass === "crypto" ? [daily, fourHour, oneHour] : [daily, oneHour],
+        dataSource,
+      ),
+      long: combinedDataSource([daily], dataSource),
+    },
     quoteAt,
     generatedAt,
+    planMode,
+    currentPrice,
     entryPrice,
     stale,
     staleByHorizon,
@@ -627,6 +677,7 @@ export const buildMarketWorkspace = async (
   const assetClassInput = url.searchParams.get("assetClass");
   const sourceInput = url.searchParams.get("source") ?? "auto";
   const entryPriceInput = url.searchParams.get("entryPrice");
+  const planModeInput = url.searchParams.get("planMode") ?? "new-entry";
 
   if (!symbolInput || symbolInput.length > 32) {
     throw new WorkspaceRequestError(400, "유효한 symbol 값이 필요합니다.");
@@ -654,6 +705,13 @@ export const buildMarketWorkspace = async (
   if (entryPriceInput !== null && !isFinitePositive(parsedEntryPrice)) {
     throw new WorkspaceRequestError(400, "entryPrice는 0보다 큰 숫자여야 합니다.");
   }
+  if (planModeInput !== "new-entry" && planModeInput !== "position-management") {
+    throw new WorkspaceRequestError(400, "planMode는 new-entry 또는 position-management여야 합니다.");
+  }
+  if (planModeInput === "position-management" && parsedEntryPrice === null) {
+    throw new WorkspaceRequestError(400, "position-management에는 보유 평단 entryPrice가 필요합니다.");
+  }
+  const planMode = planModeInput as HoldingPlanMode;
 
   const dependencies = options.dependencies ?? {};
   const fixtureMode = dependencies.fixtureMode === true && Boolean(dependencies.fixtureProvider);
@@ -678,6 +736,8 @@ export const buildMarketWorkspace = async (
   let officialProvider: OfficialSeriesProvider | null = null;
   let tossCredentials: TossCredentials | null = null;
   let tossFallbackWarning: string | null = null;
+  let tossHourlyFallbackWarning: string | null = null;
+  let tossDailyFallbackWarning: string | null = null;
   if (fixtureMode) {
     source = "fixture";
     officialProvider = dependencies.fixtureProvider ?? null;
@@ -702,22 +762,22 @@ export const buildMarketWorkspace = async (
   let oneHourResult: AnalysisResult;
   let fourHourResult: AnalysisResult | null = null;
   let dailyResult: AnalysisResult;
-  const runYahooAnalyses = async () => {
-    const metadata: AnalysisRunOptions["metadata"] = {
-      market: stockMarket,
-      currency: fallbackCurrency,
-      dataSource: "yahoo",
-    };
-    const yahooProvider = createClosedCandleYahooProvider(
-      dependencies.yahooProvider ?? getMarketDataProvider(),
-      now,
-      stockMarket,
-    );
-    return Promise.all([
-      yahooAnalysis({ provider: yahooProvider, symbol, timeframe: "1h", days: 30, metadata, analyze, now }),
-      yahooAnalysis({ provider: yahooProvider, symbol, timeframe: "1d", days: 365, metadata, analyze, now }),
-    ]);
+  const yahooMetadata: AnalysisRunOptions["metadata"] = {
+    market: stockMarket,
+    currency: fallbackCurrency,
+    dataSource: "yahoo",
   };
+  const yahooProvider = createClosedCandleYahooProvider(
+    dependencies.yahooProvider ?? getMarketDataProvider(),
+    now,
+    stockMarket,
+  );
+  const runYahooAnalysis = (timeframe: "1h" | "1d", days: number) =>
+    yahooAnalysis({ provider: yahooProvider, symbol, timeframe, days, metadata: yahooMetadata, analyze, now });
+  const runYahooAnalyses = () => Promise.all([
+    runYahooAnalysis("1h", 30),
+    runYahooAnalysis("1d", 730),
+  ]);
 
   if (officialProvider) {
     const metadata: AnalysisRunOptions["metadata"] = {
@@ -742,7 +802,7 @@ export const buildMarketWorkspace = async (
           snapshotCache,
           symbol,
           timeframe: "1d",
-          days: 365,
+          days: 730,
           metadata,
           analyze,
           dataSourceOverride: source === "fixture" ? "fixture" : undefined,
@@ -763,6 +823,24 @@ export const buildMarketWorkspace = async (
       oneHourResult = oneHour;
       dailyResult = daily;
       fourHourResult = fourHour;
+      if (
+        assetClass === "stock" &&
+        source === "toss" &&
+        requestedSource === "auto" &&
+        !hasSufficientHourlyPlanInputs(oneHourResult.payload)
+      ) {
+        oneHourResult = await runYahooAnalysis("1h", 30);
+        tossHourlyFallbackWarning = "Toss 1시간봉 표본이 손절·익절 계산에 부족해 해당 시간봉만 Yahoo 보조 시세로 계산했습니다.";
+      }
+      if (
+        assetClass === "stock" &&
+        source === "toss" &&
+        requestedSource === "auto" &&
+        !hasSufficientLongPlanInputs(dailyResult.payload)
+      ) {
+        dailyResult = await runYahooAnalysis("1d", 730);
+        tossDailyFallbackWarning = "Toss 장기 일봉 표본이 SMA200·주봉 SMA60 계산에 부족해 일봉만 Yahoo 보조 시세로 계산했습니다.";
+      }
     } catch (error) {
       if (assetClass === "stock" && source === "toss" && requestedSource === "auto") {
         const reason = safeProviderFailure(error, tossCredentials);
@@ -794,9 +872,8 @@ export const buildMarketWorkspace = async (
   if (!quoteAt) {
     throw new WorkspaceRequestError(422, "확정된 최근 봉의 기준 시각을 확인할 수 없습니다.");
   }
-  const entryPrice = parsedEntryPrice
-    ?? latestCandleClose(oneHour)
-    ?? latestCandleClose(daily);
+  const currentPrice = latestCandleClose(oneHour) ?? latestCandleClose(daily);
+  const entryPrice = parsedEntryPrice ?? currentPrice;
   if (!isFinitePositive(entryPrice)) {
     throw new WorkspaceRequestError(422, "확정된 최근 종가 또는 유효한 entryPrice가 필요합니다.");
   }
@@ -807,12 +884,12 @@ export const buildMarketWorkspace = async (
     dailyResult.snapshot,
   ].filter((snapshot): snapshot is CandleSeriesSnapshot => snapshot !== null);
   const oneHourStale = asBoolean(oneHour.stale)
-    ?? (source === "yahoo" ? isYahooStale(oneHour, now(), 8) : oneHourResult.snapshot?.stale ?? true);
+    ?? (asText(oneHour.dataSource) === "yahoo" ? isYahooStale(oneHour, now(), 8) : oneHourResult.snapshot?.stale ?? true);
   const fourHourStale = fourHour
     ? asBoolean(fourHour.stale) ?? fourHourResult?.snapshot?.stale ?? true
     : false;
   const dailyStale = asBoolean(daily.stale)
-    ?? (source === "yahoo" ? isYahooStale(daily, now(), 96) : dailyResult.snapshot?.stale ?? true);
+    ?? (asText(daily.dataSource) === "yahoo" ? isYahooStale(daily, now(), 96) : dailyResult.snapshot?.stale ?? true);
   const staleByHorizon: NonNullable<HorizonPlanContext["staleByHorizon"]> = {
     day: oneHourStale || (assetClass === "crypto" ? fourHourStale : dailyStale),
     swing: dailyStale || oneHourStale || (assetClass === "crypto" && fourHourStale),
@@ -831,6 +908,8 @@ export const buildMarketWorkspace = async (
     symbol,
     assetClass,
     entryPrice,
+    currentPrice: currentPrice ?? entryPrice,
+    planMode,
     stale,
     staleByHorizon,
     quoteAtByHorizon,
@@ -846,6 +925,8 @@ export const buildMarketWorkspace = async (
   const warnings = uniqueWarnings([
     ...officialSnapshots.flatMap((snapshot) => snapshot.warnings),
     tossFallbackWarning,
+    tossHourlyFallbackWarning,
+    tossDailyFallbackWarning,
     source === "yahoo" && !tossFallbackWarning
       ? "Toss API가 연결되지 않아 Yahoo fallback 데이터를 사용했습니다. 실제 주문 전 공식 시세로 다시 확인하세요."
       : null,
@@ -868,6 +949,8 @@ export const buildMarketWorkspace = async (
     dataSource: source,
     quoteAt,
     generatedAt,
+    planMode,
+    currentPrice: currentPrice ?? entryPrice,
     stale,
     analyses: {
       oneHour: withLatestClose(oneHour),

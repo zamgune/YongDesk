@@ -134,7 +134,7 @@ final class AppModel: ObservableObject {
 
     let store: AppSupportStore
     let database: LocalSQLiteStore
-    private let keychain = KeychainCredentialStore()
+    private let keychain: any CredentialStoring
     private let notifier = NotificationService()
     private var sidecar: Process?
     private var sidecarLogHandle: FileHandle?
@@ -176,7 +176,8 @@ final class AppModel: ObservableObject {
         EngineClient(baseURL: URL(string: "http://127.0.0.1:\(activeEnginePort)")!)
     }
 
-    init() {
+    init(keychain: any CredentialStoring = KeychainCredentialStore()) {
+        self.keychain = keychain
         do {
             let store = try AppSupportStore()
             var settings = store.loadSettings()
@@ -218,7 +219,6 @@ final class AppModel: ObservableObject {
             statusLine = error.localizedDescription
         }
         await refreshHealth()
-        refreshRedditCredentialStatus()
         if health?.ok == true, !isCurrentBundledSidecar(health) {
             terminateManagedSidecar(on: activeEnginePort, reason: "stale sidecar build")
             health = nil
@@ -226,7 +226,6 @@ final class AppModel: ObservableObject {
         if health?.ok == true {
             await refreshNews()
             startNewsRefreshLoop()
-            refreshKeychainCredentialStatus()
             await refreshBrokerCredential()
             await refreshBrokerAccounts()
             await refreshBrokerDiagnostics()
@@ -260,17 +259,17 @@ final class AppModel: ObservableObject {
         let keychain = self.keychain
         Task.detached { [weak self, workingDirectory, store, keychain] in
             let brokerEncryptionKey = Self.resolveLocalBrokerEncryptionKey(store: store)
-            let redditClientId = try? keychain.readSecret(account: "reddit-client-id")
-            let redditClientSecret = try? keychain.readSecret(account: "reddit-client-secret")
-            Task.detached {
-                try? keychain.saveSecret(brokerEncryptionKey, account: "broker-credential-encryption-key")
-            }
+            let redditCredential = try? StartupCredentialLoader.load(using: keychain).reddit
             await MainActor.run {
+                self?.redditCredentialStored = redditCredential != nil
+                self?.redditCredentialMessage = redditCredential == nil
+                    ? "Reddit OAuth는 선택 사항입니다. 연결하면 미국 종목의 게시글·댓글 근거를 함께 수집합니다."
+                    : "Reddit 공식 OAuth 키가 이 Mac의 Keychain에 저장되어 있습니다."
                 self?.runSidecar(
                     workingDirectory: workingDirectory,
                     brokerEncryptionKey: brokerEncryptionKey,
-                    redditClientId: redditClientId,
-                    redditClientSecret: redditClientSecret
+                    redditClientId: redditCredential?.clientId,
+                    redditClientSecret: redditCredential?.clientSecret
                 )
             }
         }
@@ -293,7 +292,8 @@ final class AppModel: ObservableObject {
             Self.sidecarLoaderImport,
             "--experimental-strip-types",
             "scripts/local_engine.mts",
-            "--port=\(activeEnginePort)"
+            "--port=\(activeEnginePort)",
+            "--parent-pid=\(ProcessInfo.processInfo.processIdentifier)"
         ]
         process.arguments = bundledNodeURL() == nil ? ["node"] + engineArguments : engineArguments
         process.currentDirectoryURL = workingDirectory
@@ -363,7 +363,6 @@ final class AppModel: ObservableObject {
             try? await Task.sleep(for: .milliseconds(500))
             await refreshHealth()
             if health?.ok == true {
-                refreshKeychainCredentialStatus()
                 await refreshBrokerCredential()
                 await refreshBrokerAccounts()
                 await refreshBrokerDiagnostics()
@@ -393,10 +392,10 @@ final class AppModel: ObservableObject {
     func stopSidecar() {
         newsRefreshTask?.cancel()
         newsRefreshTask = nil
-        let port = activeEnginePort
-        sidecar?.terminate()
+        if let process = sidecar {
+            ManagedChildProcessTerminator.terminate(process)
+        }
         sidecar = nil
-        terminateManagedSidecar(on: port, reason: "app stop")
         isStartingSidecar = false
         try? sidecarLogHandle?.close()
         sidecarLogHandle = nil
@@ -406,17 +405,14 @@ final class AppModel: ObservableObject {
     }
 
     func restartSidecar(reason: String) {
-        let previousPort = activeEnginePort
         stopSidecar()
-        terminateManagedSidecar(on: previousPort, reason: reason)
+        statusLine = "sidecar restarting: \(reason)"
         startSidecar()
     }
 
     func refreshRedditCredentialStatus() {
         do {
-            let clientId = try keychain.readSecret(account: "reddit-client-id")
-            let clientSecret = try keychain.readSecret(account: "reddit-client-secret")
-            redditCredentialStored = !(clientId ?? "").isEmpty && !(clientSecret ?? "").isEmpty
+            redditCredentialStored = try keychain.readInteractively(broker: "reddit") != nil
             redditCredentialMessage = redditCredentialStored
                 ? "Reddit 공식 OAuth 키가 이 Mac의 Keychain에 저장되어 있습니다. 다음 민심 갱신부터 게시글·댓글을 수집합니다."
                 : "Reddit OAuth는 선택 사항입니다. 연결하면 미국 종목의 게시글·댓글 근거를 함께 수집합니다."
@@ -434,14 +430,15 @@ final class AppModel: ObservableObject {
             return
         }
         do {
-            try keychain.saveSecret(normalizedClientId, account: "reddit-client-id")
-            do {
-                try keychain.saveSecret(normalizedClientSecret, account: "reddit-client-secret")
-            } catch {
-                try? keychain.delete(broker: "reddit-client-id")
-                throw error
-            }
-            refreshRedditCredentialStatus()
+            try keychain.save(BrokerCredential(
+                broker: "reddit",
+                clientId: normalizedClientId,
+                clientSecret: normalizedClientSecret
+            ))
+            try? keychain.delete(broker: "reddit-client-id")
+            try? keychain.delete(broker: "reddit-client-secret")
+            redditCredentialStored = true
+            redditCredentialMessage = "Reddit 공식 OAuth 키가 이 Mac의 Keychain에 저장되어 있습니다."
             communityRefreshGeneration += 1
             communitySentiment = nil
             communitySentimentMessage = "Reddit OAuth 반영을 위해 엔진을 다시 시작합니다. 잠시 후 민심을 갱신하세요."
@@ -454,8 +451,9 @@ final class AppModel: ObservableObject {
 
     func deleteRedditCredential() {
         do {
-            try keychain.delete(broker: "reddit-client-id")
-            try keychain.delete(broker: "reddit-client-secret")
+            try keychain.delete(broker: "reddit")
+            try? keychain.delete(broker: "reddit-client-id")
+            try? keychain.delete(broker: "reddit-client-secret")
             redditCredentialStored = false
             redditCredentialMessage = "Reddit OAuth 연결을 삭제했습니다. 미국 민심은 다른 허용 소스만 사용합니다."
             communityRefreshGeneration += 1
@@ -1165,7 +1163,6 @@ final class AppModel: ObservableObject {
     }
 
     func refreshBrokerCredential() async {
-        refreshKeychainCredentialStatus()
         do {
             let response = try await client.brokerCredential()
             applyBrokerCredentialResponse(response)
@@ -1176,7 +1173,7 @@ final class AppModel: ObservableObject {
 
     func refreshKeychainCredentialStatus() {
         do {
-            keychainCredentialStored = try keychain.read(broker: "toss") != nil
+            keychainCredentialStored = try keychain.readInteractively(broker: "toss") != nil
             keychainCredentialMessage = keychainCredentialStored
                 ? "macOS Keychain에 Toss credential 백업이 있습니다."
                 : "macOS Keychain에 저장된 Toss credential이 없습니다."
@@ -1186,9 +1183,29 @@ final class AppModel: ObservableObject {
         }
     }
 
+    @discardableResult
+    func resetKeychainAccess() -> Bool {
+        guard Self.isDeveloperIDApplicationSigned() else {
+            keychainCredentialMessage = "Keychain 권한 재설정은 Developer ID로 서명·공증한 /Applications 설치본에서만 실행할 수 있습니다."
+            return false
+        }
+        do {
+            let result = try KeychainAccessResetter.reset(using: keychain)
+            keychainCredentialStored = result.hasToss
+            redditCredentialStored = result.hasReddit
+            keychainCredentialMessage = result.credentialCount == 0
+                ? "재설정할 Keychain credential이 없습니다."
+                : "Keychain credential \(result.credentialCount)개의 앱 접근 권한을 현재 서명 기준으로 다시 저장했습니다."
+            return true
+        } catch {
+            keychainCredentialMessage = "Keychain 권한 재설정 실패: \(Self.errorMessage(error)). API 키를 삭제하지 않았습니다."
+            return false
+        }
+    }
+
     func restoreBrokerCredentialFromKeychain() async {
         do {
-            guard let credential = try keychain.read(broker: "toss") else {
+            guard let credential = try keychain.readInteractively(broker: "toss") else {
                 keychainCredentialStored = false
                 keychainCredentialMessage = "Keychain에 복구할 Toss credential이 없습니다."
                 return
@@ -1830,7 +1847,9 @@ final class AppModel: ObservableObject {
     func refreshWorkspaceAnalysis(
         symbol: String,
         assetClass: AnalysisAssetClass,
-        session: String
+        session: String,
+        entryPrice: Double? = nil,
+        planMode: AnalysisHoldingPlanMode = .newEntry
     ) async -> String {
         let normalizedSymbol = symbol.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
         let targetSymbol = normalizedSymbol.isEmpty
@@ -1850,7 +1869,9 @@ final class AppModel: ObservableObject {
             let data = try await client.workspaceAnalysisData(
                 symbol: targetSymbol,
                 assetClass: assetClass,
-                source: .auto
+                source: .auto,
+                entryPrice: entryPrice,
+                planMode: planMode
             )
             let workspace = try JSONDecoder().decode(WorkspaceAnalysis.self, from: data)
             guard requestGeneration == workspaceAnalysisGeneration else {
@@ -1953,7 +1974,7 @@ final class AppModel: ObservableObject {
     }
 
     func cryptoCredentialFromKeychain(exchange: String) throws -> BrokerCredential? {
-        try keychain.read(broker: exchange)
+        try keychain.readInteractively(broker: exchange)
     }
 
     func registerCryptoCredential(exchange: String, accessKey: String, secretKey: String) async -> Bool {
@@ -3121,6 +3142,26 @@ final class AppModel: ObservableObject {
             )
         }
         return value
+    }
+
+    nonisolated private static func isDeveloperIDApplicationSigned() -> Bool {
+        var staticCode: SecStaticCode?
+        guard Bundle.main.bundleURL.path(percentEncoded: false).hasPrefix("/Applications/"),
+              SecStaticCodeCreateWithPath(Bundle.main.bundleURL as CFURL, [], &staticCode) == errSecSuccess,
+              let staticCode,
+              SecStaticCodeCheckValidity(staticCode, [], nil) == errSecSuccess else {
+            return false
+        }
+        var signingInfo: CFDictionary?
+        guard
+              SecCodeCopySigningInformation(staticCode, SecCSFlags(rawValue: kSecCSSigningInformation), &signingInfo) == errSecSuccess,
+              let info = signingInfo as? [String: Any],
+              let certificates = info[kSecCodeInfoCertificates as String] as? [SecCertificate],
+              let leaf = certificates.first,
+              let subject = SecCertificateCopySubjectSummary(leaf) as String? else {
+            return false
+        }
+        return subject.hasPrefix("Developer ID Application:")
     }
 
     private func credentialStatusLabel(_ status: String) -> String {
@@ -5568,7 +5609,6 @@ struct TossCredentialSheet: View {
                     Button(isRefreshing ? "조회 중" : "상태 새로고침") {
                         Task {
                             isRefreshing = true
-                            model.refreshKeychainCredentialStatus()
                             await model.refreshBrokerCredential()
                             await model.refreshBrokerAccounts()
                             await model.refreshBrokerDiagnostics()
@@ -5617,7 +5657,6 @@ struct TossCredentialSheet: View {
         .foregroundStyle(Color.terminalText)
         .task {
             if model.health?.ok == true {
-                model.refreshKeychainCredentialStatus()
                 await model.refreshBrokerCredential()
                 await model.refreshBrokerAccounts()
                 await model.refreshBrokerDiagnostics()

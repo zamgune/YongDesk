@@ -10,6 +10,7 @@ export type ReleaseIndexFile = {
   fileName?: string;
   path?: string;
   sha256?: string | null;
+  exists?: boolean;
 };
 
 export type ReleaseIndexEntry = {
@@ -75,9 +76,7 @@ export type UiSmokeChecks = {
   automationPaperOnly?: boolean;
   killSwitchReachable?: boolean;
   settingsApiReachable?: boolean;
-  selfTestReachable?: boolean;
-  sidecarLogReachable?: boolean;
-  distributionReachable?: boolean;
+  supportToolsSeparated?: boolean;
   responsiveWindowSizes?: boolean;
 };
 
@@ -164,7 +163,7 @@ const dmgPathsFromIndex = (index: ReleaseIndex) => {
   const paths: string[] = [];
   for (const entry of index.entries ?? []) {
     for (const file of entry.files ?? []) {
-      if (file.kind !== "dmg") {
+      if (file.kind !== "dmg" || file.exists === false) {
         continue;
       }
       const path = file.path ?? (file.fileName ? join(releaseRoot, file.fileName) : "");
@@ -181,7 +180,7 @@ const expectedDmgFilesFromIndex = (index: ReleaseIndex) => {
   const seen = new Set<string>();
   for (const entry of index.entries ?? []) {
     for (const file of entry.files ?? []) {
-      if (file.kind !== "dmg" || !file.fileName) {
+      if (file.kind !== "dmg" || file.exists === false || !file.fileName) {
         continue;
       }
       const path = file.path ?? join(releaseRoot, file.fileName);
@@ -277,9 +276,7 @@ const requiredUiSmokeChecks = [
   "automationPaperOnly",
   "killSwitchReachable",
   "settingsApiReachable",
-  "selfTestReachable",
-  "sidecarLogReachable",
-  "distributionReachable",
+  "supportToolsSeparated",
   "responsiveWindowSizes",
 ] as const;
 

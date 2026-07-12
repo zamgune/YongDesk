@@ -462,14 +462,18 @@ public struct EngineClient: Sendable {
     public func workspaceAnalysis(
         symbol: String,
         assetClass: AnalysisAssetClass,
-        source: AnalysisDataSource = .auto
+        source: AnalysisDataSource = .auto,
+        entryPrice: Double? = nil,
+        planMode: AnalysisHoldingPlanMode = .newEntry
     ) async throws -> WorkspaceAnalysis {
         try decoder.decode(
             WorkspaceAnalysis.self,
             from: try await workspaceAnalysisData(
                 symbol: symbol,
                 assetClass: assetClass,
-                source: source
+                source: source,
+                entryPrice: entryPrice,
+                planMode: planMode
             )
         )
     }
@@ -477,7 +481,9 @@ public struct EngineClient: Sendable {
     public func workspaceAnalysisData(
         symbol: String,
         assetClass: AnalysisAssetClass,
-        source: AnalysisDataSource = .auto
+        source: AnalysisDataSource = .auto,
+        entryPrice: Double? = nil,
+        planMode: AnalysisHoldingPlanMode = .newEntry
     ) async throws -> Data {
         let normalizedSymbol = symbol.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !normalizedSymbol.isEmpty else {
@@ -490,6 +496,10 @@ public struct EngineClient: Sendable {
             URLQueryItem(name: "assetClass", value: assetClass.rawValue),
             URLQueryItem(name: "source", value: source.rawValue),
         ]
+        if let entryPrice, entryPrice.isFinite, entryPrice > 0 {
+            components.queryItems?.append(URLQueryItem(name: "entryPrice", value: String(entryPrice)))
+        }
+        components.queryItems?.append(URLQueryItem(name: "planMode", value: planMode.rawValue))
         guard let path = components.string else {
             throw URLError(.badURL)
         }

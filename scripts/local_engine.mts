@@ -374,7 +374,7 @@ const jsonResponse = (payload: JsonValue, init?: ResponseInit) => {
   });
 };
 
-const preReleaseLiveLockResponse = (message = "1.2.0-beta.1 무실주문 베타에서는 실제 주문과 취소가 잠겨 있습니다.") =>
+const preReleaseLiveLockResponse = (message = "1.2.0-beta.2 무실주문 베타에서는 실제 주문과 취소가 잠겨 있습니다.") =>
   jsonResponse({
     code: "PRE_RELEASE_LIVE_LOCK",
     error: message,
@@ -1563,7 +1563,7 @@ const getCryptoLiveTradingGate = async (
     reason,
   });
   if (!liveSubmissionEnabled()) {
-    return closed("1.2.0-beta.1 무실주문 베타의 전역 실주문 잠금이 적용되어 있습니다.");
+    return closed("1.2.0-beta.2 무실주문 베타의 전역 실주문 잠금이 적용되어 있습니다.");
   }
   if (!CRYPTO_LIVE_AUTOMATION_SUPPORTED) {
     return closed("1.0.0에서는 코인 API 조회·사전검증·모의 자동화만 지원합니다. 체결 동기화가 포함된 후 실거래를 엽니다.", 501);
@@ -2935,7 +2935,7 @@ const localLiveTradingState = async () => {
       userEnabled: false,
       effective: false,
       status: 423,
-      reason: "1.2.0-beta.1 무실주문 베타의 전역 실주문 잠금이 적용되어 있습니다.",
+      reason: "1.2.0-beta.2 무실주문 베타의 전역 실주문 잠금이 적용되어 있습니다.",
       featureEnabled: false,
       localRuntime: process.env.STOCK_ANALYSIS_RUNTIME === "macos-local",
       storageRoot: process.env.STOCK_ANALYSIS_STORAGE_ROOT ?? null,
@@ -2949,7 +2949,7 @@ const localLiveTradingState = async () => {
     },
     readiness,
     guidance: [
-      "1.2.0-beta.1은 Toss·Upbit·Bithumb 실제 주문과 취소를 전역에서 차단합니다.",
+      "1.2.0-beta.2는 Toss·Upbit·Bithumb 실제 주문과 취소를 전역에서 차단합니다.",
       "자동화 cycle은 저장된 정책과 무관하게 paper 경로만 사용합니다.",
       "IP address not allowed 오류가 나오면 Toss Open API 콘솔 허용 IP를 현재 공인 IP로 갱신하세요.",
     ],
@@ -4636,7 +4636,7 @@ const cryptoLiveTradingState = async (exchange: CryptoExchange) => {
       manualOnly: false,
       manualEnabled: false,
       effective: false,
-      reason: "1.2.0-beta.1 무실주문 베타의 전역 실주문 잠금이 적용되어 있습니다.",
+      reason: "1.2.0-beta.2 무실주문 베타의 전역 실주문 잠금이 적용되어 있습니다.",
       remainingDailyBuyKrw: gate.remainingDailyBuyKrw,
       limits: {
         perBuyOrderKrw: LOCAL_CRYPTO_LIVE_TRADING_MAX_BUY_ORDER_KRW,
@@ -5947,11 +5947,26 @@ const argValue = (name: string) => {
 
 const main = async () => {
   const port = Number(argValue("port") ?? process.env.STOCK_ANALYSIS_LOCAL_ENGINE_PORT ?? DEFAULT_PORT);
+  const parentPid = Number(argValue("parent-pid") ?? 0);
   const server = await startLocalEngineServer(port);
   console.log(`${ENGINE_NAME} listening on http://127.0.0.1:${port}`);
+  let parentWatchdog: ReturnType<typeof setInterval> | null = null;
   const close = () => {
+    if (parentWatchdog) {
+      clearInterval(parentWatchdog);
+      parentWatchdog = null;
+    }
     server.close();
   };
+  if (Number.isInteger(parentPid) && parentPid > 1) {
+    parentWatchdog = setInterval(() => {
+      if (process.ppid !== parentPid) {
+        console.log(`[local-engine] parent ${parentPid} exited; stopping sidecar`);
+        close();
+      }
+    }, 1_000);
+    parentWatchdog.unref();
+  }
   process.on("SIGINT", close);
   process.on("SIGTERM", close);
 };

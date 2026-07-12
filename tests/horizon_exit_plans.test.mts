@@ -120,9 +120,88 @@ test("stale, forming, weak-trend, and low-reward inputs produce wait plans", () 
 
   const plans = calculateHorizonExitPlans(context);
   assert.deepEqual(plans.map((plan) => plan.status), ["wait", "wait", "wait"]);
+  assert.ok(plans.every((plan) => plan.stop.price !== null));
+  assert.ok(plans.every((plan) => plan.takeProfits.length === 2));
   assert.ok(plans[0].blockers.some((reason) => reason.includes("형성 중")));
   assert.ok(plans[1].blockers.some((reason) => reason.includes("종목 일봉 위험 게이트")));
   assert.ok(plans[2].blockers.some((reason) => reason.includes("SMA20")));
+});
+
+test("a custom entry price recalculates every horizon price without changing safety status", () => {
+  const defaultPlans = calculateHorizonExitPlans(baseContext());
+  const customContext = baseContext();
+  customContext.entryPrice = 90_000;
+  const customPlans = calculateHorizonExitPlans(customContext);
+
+  assert.ok(customPlans.every((plan) => plan.entryPrice === 90_000));
+  for (let index = 0; index < customPlans.length; index += 1) {
+    assert.notEqual(customPlans[index].takeProfits[0]?.price, defaultPlans[index].takeProfits[0]?.price);
+    assert.equal(customPlans[index].stop.isBrokerStopEligible, false);
+  }
+  assert.notEqual(customPlans[0].stop.price, defaultPlans[0].stop.price);
+  assert.notEqual(customPlans[1].stop.price, defaultPlans[1].stop.price);
+  assert.equal(customPlans[2].stop.price, defaultPlans[2].stop.price, "장기 구조 무효선은 진입가와 무관해야 한다");
+});
+
+test("missing readiness indicators wait without hiding calculable prices", () => {
+  const context = baseContext();
+  context.day = {
+    ...context.day!,
+    higherTimeframeTrendUp: null,
+    entryTrendUp: null,
+    trendQualityPassed: null,
+    volumeConfirmed: null,
+  };
+  context.swing = {
+    ...context.swing!,
+    marketGatePassed: null,
+    dailyTrendUp: null,
+    entryTrendUp: null,
+  };
+  context.long = {
+    ...context.long!,
+    marketGatePassed: null,
+    weeklySma60: null,
+  };
+
+  const plans = calculateHorizonExitPlans(context);
+  assert.deepEqual(plans.map((plan) => plan.status), ["wait", "wait", "wait"]);
+  assert.ok(plans.every((plan) => plan.stop.price !== null));
+  assert.ok(plans.every((plan) => plan.takeProfits.length === 2));
+  assert.ok(plans[2].blockers.some((blocker) => blocker.includes("SMA60 표본")));
+});
+
+test("position management preserves original targets after the market breaches long invalidation", () => {
+  const context = baseContext();
+  context.planMode = "position-management";
+  context.entryPrice = 90_000;
+  context.currentPrice = 70_000;
+
+  const long = calculateHorizonExitPlans(context)[2];
+  assert.equal(long.status, "wait");
+  assert.equal(long.planMode, "position-management");
+  assert.equal(long.currentPrice, 70_000);
+  assert.equal(long.stop.price, 74_000);
+  assert.equal(long.managementState?.state, "invalidation-breached");
+  assert.equal(long.managementState?.averagePrice, 90_000);
+  assert.equal(long.managementState?.reentryConfirmationPrice, 78_000);
+  assert.equal(long.takeProfits[0]?.price, 122_000);
+  assert.ok(long.blockers.some((blocker) => blocker.includes("보유관리 상태")));
+});
+
+test("position management still reports invalidation when the average price cannot form positive R", () => {
+  const context = baseContext();
+  context.planMode = "position-management";
+  context.entryPrice = 70_000;
+  context.currentPrice = 68_000;
+
+  const long = calculateHorizonExitPlans(context)[2];
+  assert.equal(long.status, "wait");
+  assert.equal(long.stop.price, 74_000);
+  assert.deepEqual(long.takeProfits, []);
+  assert.equal(long.managementState?.state, "invalidation-breached");
+  assert.equal(long.riskPerShare, null);
+  assert.ok(long.managementState?.actions.some((action) => action.includes("신규 매수")));
 });
 
 test("long plans never turn a monthly thesis line into a broker stop", () => {

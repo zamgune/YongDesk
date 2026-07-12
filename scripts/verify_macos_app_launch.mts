@@ -105,6 +105,29 @@ const waitForProcessClose = async (child: ReturnType<typeof spawn>, timeoutMs = 
   }
 };
 
+const waitForSidecarClose = async (pid: number, port: number, timeoutMs = 5_000) => {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    let pidAlive = true;
+    try {
+      process.kill(pid, 0);
+    } catch {
+      pidAlive = false;
+    }
+    let portAlive = true;
+    try {
+      await fetch(`http://127.0.0.1:${port}/health`, { signal: AbortSignal.timeout(300) });
+    } catch {
+      portAlive = false;
+    }
+    if (!pidAlive && !portAlive) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+  throw new Error(`Sidecar ${pid} or port ${port} survived forced app termination`);
+};
+
 const main = async () => {
   const requiredPaths = [
     appRoot,
@@ -165,6 +188,7 @@ const main = async () => {
   };
 
   let sidecarPid: number | null = null;
+  let forcedShutdownVerified = false;
   try {
     const health = await waitForHealth(port);
     assertAppStillRunning();
@@ -194,6 +218,14 @@ const main = async () => {
       throw new Error("App launch did not write the expected sidecar log markers");
     }
 
+    if (!sidecarPid) {
+      throw new Error("App-launched sidecar did not report a process ID");
+    }
+    appProcess.kill("SIGKILL");
+    await waitForProcessClose(appProcess);
+    await waitForSidecarClose(sidecarPid, port);
+    forcedShutdownVerified = true;
+
     console.log(JSON.stringify({
       ok: true,
       appRoot,
@@ -215,11 +247,16 @@ const main = async () => {
         terminalDashboard: true,
         localSelfTest: true,
         sidecarLog: true,
+        forcedAppTerminationCleanup: true,
+        sidecarProcessClosed: true,
+        sidecarPortClosed: true,
       },
     }, null, 2));
   } finally {
-    terminatePid(sidecarPid);
-    appProcess.kill("SIGTERM");
+    if (!forcedShutdownVerified) {
+      terminatePid(sidecarPid);
+      appProcess.kill("SIGTERM");
+    }
     await waitForProcessClose(appProcess);
     await rm(appSupportRoot, { recursive: true, force: true });
     if (appOutput.trim()) {

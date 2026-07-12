@@ -13,7 +13,7 @@ struct BeginnerChartWorkspace: View {
     @Binding var resultPreview: String
     let isLoading: Bool
     let compact: Bool
-    let onAnalyze: () -> Void
+    let onAnalyze: (Double?, AnalysisHoldingPlanMode) -> Void
     let onChartTimeframeChanged: (BeginnerChartTimeframe) -> Void
     let onAddToWatchlist: () -> Void
     let onOpenOrder: () -> Void
@@ -27,6 +27,9 @@ struct BeginnerChartWorkspace: View {
     @State private var chartReloadToken = 0
     @State private var chartError: String?
     @State private var selectedChartSignal: String?
+    @State private var entryPriceMode: BeginnerEntryPriceMode = .latestClose
+    @State private var customEntryPrice = ""
+    @State private var customEntryPriceError: String?
 
     private var workspaceAnalysis: WorkspaceAnalysis? {
         guard let latest = model.latestWorkspaceAnalysis,
@@ -61,6 +64,11 @@ struct BeginnerChartWorkspace: View {
         .onChange(of: selectedChartTimeframe) { _, timeframe in
             chartResetToken += 1
             onChartTimeframeChanged(timeframe)
+        }
+        .onChange(of: selectedSymbol) { _, _ in
+            entryPriceMode = .latestClose
+            customEntryPrice = ""
+            customEntryPriceError = nil
         }
     }
 
@@ -136,7 +144,9 @@ struct BeginnerChartWorkspace: View {
                     Button("관심종목 추가", action: onAddToWatchlist)
                         .buttonStyle(.bordered)
                         .accessibilityIdentifier("beginner-add-watchlist")
-                    Button("다시 분석", action: onAnalyze)
+                    Button("다시 분석") {
+                        onAnalyze(selectedEntryPrice, selectedPlanMode)
+                    }
                         .buttonStyle(.bordered)
                         .disabled(isLoading)
                         .accessibilityIdentifier("beginner-refresh-analysis")
@@ -320,12 +330,12 @@ struct BeginnerChartWorkspace: View {
                         VStack(alignment: .leading, spacing: 5) {
                             Text("보유 기간별 손절·익절 계획")
                                 .font(.headline)
-                            Text("최근 확정 봉 종가 진입을 가정하되, 데이터가 부족하면 가격을 임의로 만들지 않습니다.")
+                            Text("최근 확정 종가·보유 평단·직접 입력 중 기준가를 선택하며, 데이터가 부족하면 가격을 임의로 만들지 않습니다.")
                                 .font(.caption)
                                 .foregroundStyle(BeginnerPalette.muted)
                         }
                         Spacer()
-                        BeginnerStatusBadge("계산 근거 우선", color: BeginnerPalette.blue)
+                        BeginnerStatusBadge("가격·진입 판단 분리", color: BeginnerPalette.blue)
                     }
 
                     Picker("매매 기간", selection: $selectedHorizon) {
@@ -335,6 +345,8 @@ struct BeginnerChartWorkspace: View {
                     }
                     .pickerStyle(.segmented)
                     .accessibilityIdentifier("beginner-horizon-picker")
+
+                    entryPriceControls
 
                     BeginnerHorizonPlan(
                         horizon: selectedHorizon,
@@ -381,6 +393,126 @@ struct BeginnerChartWorkspace: View {
                 }
             }
         }
+    }
+
+    private var entryPriceControls: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 10) {
+                Text("계산 기준가")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(BeginnerPalette.muted)
+                Picker("계산 기준가", selection: $entryPriceMode) {
+                    Text(BeginnerEntryPriceMode.latestClose.title)
+                        .tag(BeginnerEntryPriceMode.latestClose)
+                    Text(BeginnerEntryPriceMode.holdingAverage.title)
+                        .tag(BeginnerEntryPriceMode.holdingAverage)
+                        .disabled(matchingHoldingAverage == nil)
+                    Text(BeginnerEntryPriceMode.custom.title)
+                        .tag(BeginnerEntryPriceMode.custom)
+                }
+                .labelsHidden()
+                .pickerStyle(.segmented)
+                .frame(maxWidth: 430)
+                .accessibilityIdentifier("beginner-entry-price-mode")
+                Spacer()
+                if entryPriceMode == .holdingAverage, let matchingHoldingAverage {
+                    Text(beginnerPrice(matchingHoldingAverage, currency: planCurrency))
+                        .font(.caption.monospacedDigit().weight(.semibold))
+                }
+            }
+
+            if entryPriceMode == .custom {
+                HStack(spacing: 8) {
+                    TextField("0보다 큰 기준가", text: $customEntryPrice)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(maxWidth: 220)
+                        .onSubmit(applyCustomEntryPrice)
+                        .accessibilityIdentifier("beginner-custom-entry-price")
+                    Text(planCurrency)
+                        .font(.caption.monospaced())
+                        .foregroundStyle(BeginnerPalette.muted)
+                    Button("기준가 적용", action: applyCustomEntryPrice)
+                        .buttonStyle(.borderedProminent)
+                        .tint(BeginnerPalette.blue)
+                        .accessibilityIdentifier("beginner-apply-entry-price")
+                }
+                if let customEntryPriceError {
+                    Text(customEntryPriceError)
+                        .font(.caption2)
+                        .foregroundStyle(BeginnerPalette.red)
+                }
+            } else {
+                Text(entryPriceMode == .holdingAverage
+                     ? "현재 종목·통화와 일치하는 실제 보유 평단으로 다시 계산합니다."
+                     : "최근 확정 1시간봉 종가를 기본 진입가로 사용합니다.")
+                    .font(.caption2)
+                    .foregroundStyle(BeginnerPalette.muted)
+            }
+        }
+        .onChange(of: entryPriceMode) { _, mode in
+            customEntryPriceError = nil
+            switch mode {
+            case .latestClose:
+                onAnalyze(nil, .newEntry)
+            case .holdingAverage:
+                if let matchingHoldingAverage {
+                    onAnalyze(matchingHoldingAverage, .positionManagement)
+                } else {
+                    entryPriceMode = .latestClose
+                }
+            case .custom:
+                break
+            }
+        }
+    }
+
+    private var planCurrency: String {
+        workspaceAnalysis?.currency ?? analysis?.currency ?? defaultCurrency
+    }
+
+    private var matchingHoldingAverage: Double? {
+        model.realPortfolio?.providers
+            .flatMap(\.positions)
+            .first {
+                beginnerCanonicalSymbol($0.symbol) == beginnerCanonicalSymbol(selectedSymbol)
+                    && $0.currency == planCurrency
+                    && ($0.averagePrice ?? 0) > 0
+            }?
+            .averagePrice
+    }
+
+    private var selectedEntryPrice: Double? {
+        switch entryPriceMode {
+        case .latestClose:
+            return nil
+        case .holdingAverage:
+            return matchingHoldingAverage
+        case .custom:
+            return parsedCustomEntryPrice
+        }
+    }
+
+    private var parsedCustomEntryPrice: Double? {
+        let normalized = customEntryPrice
+            .replacingOccurrences(of: ",", with: "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let value = Double(normalized), value.isFinite, value > 0 else {
+            return nil
+        }
+        return value
+    }
+
+    private func applyCustomEntryPrice() {
+        guard let entryPrice = parsedCustomEntryPrice else {
+            customEntryPriceError = "0보다 큰 숫자를 입력하세요."
+            return
+        }
+        customEntryPriceError = nil
+        onAnalyze(entryPrice, .newEntry)
+    }
+
+    private var selectedPlanMode: AnalysisHoldingPlanMode {
+        entryPriceMode == .holdingAverage ? .positionManagement : .newEntry
     }
 
     private func conditionCard(title: String, value: String, color: Color) -> some View {
@@ -468,7 +600,10 @@ private struct BeginnerHorizonPlan: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer()
-                BeginnerStatusBadge(statusLabel, color: statusColor)
+                HStack(spacing: 6) {
+                    BeginnerStatusBadge(calculationStatusLabel, color: calculationStatusColor)
+                    BeginnerStatusBadge(entryStatusLabel, color: entryStatusColor)
+                }
             }
 
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 190), spacing: 10)], spacing: 10) {
@@ -497,6 +632,10 @@ private struct BeginnerHorizonPlan: View {
                     value: beginnerPrice(plan?.trailingExit?.price, currency: currency),
                     detail: trailingExitDetail
                 )
+            }
+
+            if let managementState = plan?.managementState {
+                managementPanel(managementState)
             }
 
             HStack(alignment: .top, spacing: 8) {
@@ -550,11 +689,39 @@ private struct BeginnerHorizonPlan: View {
         .overlay { RoundedRectangle(cornerRadius: 9).stroke(BeginnerPalette.line) }
     }
 
-    private var entryPriceTitle: String {
-        if workspaceAnalysis?.analyses?.oneHour?.latestClose != nil {
-            return "최근 확정 1시간봉 종가 진입"
+    private func managementPanel(_ state: AnalysisHorizonManagementState) -> some View {
+        VStack(alignment: .leading, spacing: 9) {
+            HStack {
+                Label(
+                    state.state == .invalidationBreached ? "장기 무효선 이탈 보유관리" : "장기 보유관리",
+                    systemImage: state.state == .invalidationBreached ? "exclamationmark.shield.fill" : "shield.checkered"
+                )
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(state.state == .invalidationBreached ? BeginnerPalette.red : BeginnerPalette.green)
+                Spacer()
+                Text("현재 \(beginnerPrice(state.currentPrice, currency: currency)) · 평단 \(beginnerPrice(state.averagePrice, currency: currency))")
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(BeginnerPalette.muted)
+            }
+            HStack(spacing: 14) {
+                Text("무효선 \(beginnerPrice(state.invalidationPrice, currency: currency))")
+                Text("재진입 확인 \(beginnerPrice(state.reentryConfirmationPrice, currency: currency))")
+            }
+            .font(.caption.weight(.semibold))
+            ForEach(state.actions, id: \.self) { action in
+                Label(action, systemImage: "checkmark.circle")
+                    .font(.caption)
+                    .foregroundStyle(BeginnerPalette.muted)
+            }
         }
-        return "최근 확정 일봉 종가 진입"
+        .padding(12)
+        .background(BeginnerPalette.surfaceRaised, in: RoundedRectangle(cornerRadius: 10))
+        .overlay { RoundedRectangle(cornerRadius: 10).stroke(BeginnerPalette.line) }
+        .accessibilityIdentifier("beginner-position-management")
+    }
+
+    private var entryPriceTitle: String {
+        "선택한 계산 기준가"
     }
 
     private var statusDescription: String {
@@ -641,18 +808,41 @@ private struct BeginnerHorizonPlan: View {
         }
     }
 
-    private var statusLabel: String {
-        guard let plan else { return "계산 데이터 대기" }
+    private var hasCalculatedPrices: Bool {
+        guard let plan else { return false }
+        if plan.managementState != nil, plan.stop?.price != nil {
+            return true
+        }
+        return plan.stop?.price != nil && plan.takeProfits.count >= 2
+    }
+
+    private var calculationStatusLabel: String {
+        if plan?.managementState != nil { return "보유관리 계산 완료" }
+        return hasCalculatedPrices ? "가격 계산 완료" : plan == nil ? "계산 데이터 대기" : "가격 계산 불가"
+    }
+
+    private var calculationStatusColor: Color {
+        hasCalculatedPrices ? BeginnerPalette.green : plan == nil ? BeginnerPalette.muted : BeginnerPalette.red
+    }
+
+    private var entryStatusLabel: String {
+        guard let plan else { return "진입 판단 대기" }
+        if plan.managementState?.state == .invalidationBreached { return "무효선 이탈" }
+        if plan.managementState?.state == .recoveryWatch { return "회복 관찰" }
+        if plan.managementState?.state == .active { return "보유관리 활성" }
         switch plan.status {
-        case .actionable: return "계산 완료"
-        case .wait: return "조건 대기"
-        case .unavailable: return "계산 불가"
+        case .actionable: return "진입 가능"
+        case .wait: return "진입 대기"
+        case .unavailable: return "진입 판단 불가"
         case let .unknown(value): return value
         }
     }
 
-    private var statusColor: Color {
+    private var entryStatusColor: Color {
         guard let plan else { return BeginnerPalette.muted }
+        if plan.managementState?.state == .invalidationBreached { return BeginnerPalette.red }
+        if plan.managementState?.state == .recoveryWatch { return BeginnerPalette.amber }
+        if plan.managementState?.state == .active { return BeginnerPalette.green }
         switch plan.status {
         case .actionable: return BeginnerPalette.green
         case .wait: return BeginnerPalette.amber
@@ -661,8 +851,16 @@ private struct BeginnerHorizonPlan: View {
     }
 
     private var planGuidance: String {
-        if let blocker = plan?.blockers.first, !blocker.isEmpty {
-            return "계산 보류: \(blocker) 임의 가격으로 대체하지 않습니다."
+        if let managementState = plan?.managementState {
+            return managementState.state == .invalidationBreached
+                ? "보유 평단 기준 계획의 장기 무효선이 이미 이탈했습니다. 익절 목표보다 축소·청산과 재진입 조건을 먼저 확인하세요."
+                : "실제 보유 평단과 현재가를 분리한 보유관리 계획입니다. 주문은 전송하지 않습니다."
+        }
+        if plan?.status == .unavailable, let blocker = plan?.blockers.first, !blocker.isEmpty {
+            return "가격 계산 불가: \(blocker) 임의 가격으로 대체하지 않습니다."
+        }
+        if plan?.status == .wait, let blocker = plan?.blockers.first, !blocker.isEmpty {
+            return "신규 진입 대기: \(blocker) 표시 가격은 위험 관리 참고값이며 지금 매수 신호가 아닙니다."
         }
         if isActionable {
             let source = beginnerDataSourceLabel(plan?.basis?.dataSource ?? workspaceAnalysis?.dataSource)

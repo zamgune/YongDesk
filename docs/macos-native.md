@@ -9,7 +9,7 @@
 - 앱은 번들된 TypeScript sidecar를 `127.0.0.1`의 임의 포트에서 자동 시작한다.
 - sidecar는 `src/domain`, `src/use-cases`, `src/ports`와 `src/adapters`의 기존 분석·자동화·브로커 코드를 재사용한다.
 - 앱은 `STOCK_ANALYSIS_STORAGE_ROOT`를 `~/Library/Application Support/com.stockanalysis.mac/sidecar`로 설정한다.
-- broker credential 암호화 키는 App Support의 권한 제한 파일을 시작 경로로 사용하고 macOS Keychain에 함께 보관한다.
+- broker credential 암호화 키는 App Support의 권한 제한 파일에서 읽으며, 생성·변경 시에만 기록하고 앱 시작마다 Keychain에 다시 저장하지 않는다.
 - 웹 route는 관리·fallback 용도로 유지하지만 Finder에서 실행한 앱은 별도의 Next 서버가 없어도 동작한다.
 
 ```text
@@ -21,7 +21,7 @@ SwiftUI
 → Toss·Upbit·Bithumb adapter
 ```
 
-이 다이어그램은 전체 코드 경계를 나타낸다. 1.2.0-beta.1은 `liveSubmissionMode=disabled` 고정 정책으로 모든 adapter submit·cancel을 네트워크 호출 전에 차단하며 자동화는 paper 계좌에만 기록된다.
+이 다이어그램은 전체 코드 경계를 나타낸다. 1.2.0-beta.2는 `liveSubmissionMode=disabled` 고정 정책으로 모든 adapter submit·cancel을 네트워크 호출 전에 차단하며 자동화는 paper 계좌에만 기록된다.
 
 ## 로컬 엔진
 
@@ -71,13 +71,15 @@ curl http://127.0.0.1:38771/health
 ### 차트와 멀티타임프레임 분석
 
 - 화면 차트는 `5분·15분·30분·1시간·4시간·일봉·주봉`을 선택해 확정 캔들을 다시 조회한다. 이는 REST 기반 조회이며 실시간 스트리밍 차트가 아니다.
-- 주식 `source=auto`는 저장된 Toss credential이 있으면 Toss를 사용하고, 없거나 자동 조회가 실패하면 경고와 함께 Yahoo fallback을 사용한다. `source=toss`는 credential이 없거나 공식 조회가 실패하면 오류를 반환한다.
+- 주식 `source=auto`는 저장된 Toss credential이 있으면 Toss를 사용하고, 없거나 자동 조회가 실패하면 경고와 함께 Yahoo fallback을 사용한다. Toss 조회가 성공해도 확정 1시간봉이 20개 미만이거나 ATR14·최근 저점이 없으면 해당 시간봉만 Yahoo로 보완한다. SMA200·10개월 평균·주봉 SMA20/60 중 하나가 없으면 일봉만 Yahoo로 보완하고 기간별 `dataSource`와 경고에 혼합 출처를 표시한다. `source=toss`는 자동 보완하지 않는다.
 - Toss는 1분봉을 한국·미국 정규장 마감 시각에 맞춘 1시간봉으로 집계한다. 세션 길이 때문에 생기는 장 초반 30분 부분 봉은 snapshot과 경고에는 남기되 지표 계산에서는 제외한다. 현재 주봉도 다음 market week가 시작되기 전에는 확정하지 않는다.
 - Upbit 공개 REST는 키 없이 KRW 마켓의 1시간·4시간·일봉을 제공한다. 코인은 일봉 방향, 4시간봉 진입과 1시간봉 재확인을 조합하고, 최근 무거래 시간 공백이 있으면 신규 진입 계획을 대기한다.
 - 데스크톱 코인 분석은 `KRW-*` 입력만 허용한다. BTC·USDT 호가 시장과 KRW 시장을 같은 종목처럼 변환하지 않는다.
-- 장기 계획의 10개월 이동평균은 진행 중인 현재 달을 제외한 완료 월 종가로 계산한다.
+- 장기 계획은 일봉 730일을 조회해 SMA200, 주봉 SMA20/60과 10개월 이동평균을 계산하며, 10개월 평균은 진행 중인 현재 달을 제외한 완료 월 종가만 사용한다.
 - 형성 중인 봉은 확정 분석에서 제외하고 `market`, `currency`, `dataSource`, `timeframe`, `quoteAt`, `stale`을 응답과 화면에 함께 표시한다.
-- 단타·스윙·장기 계획은 구조선·ATR·장기 이동평균 조건으로 손절·익절을 계산한다. 데이터가 부족하거나 오래됐으면 고정 퍼센트로 채우지 않고 `계산 불가` 또는 `조건 대기`를 표시한다.
+- 단타·스윙·장기 계획은 구조선·ATR·장기 이동평균 조건으로 손절·익절을 계산한다. 가격 계산 상태와 신규 진입 상태를 별도 배지로 표시하며, 추세 조건이 부족한 `조건 대기`에서도 계산된 가격은 유지한다. 필수 가격 데이터가 없을 때만 고정 퍼센트 없이 `계산 불가`를 표시한다.
+- 기준가는 최근 확정 종가, 일치하는 실제 보유 평단, 직접 입력 중 선택한다. 직접 입력은 0보다 큰 유한 숫자만 `entryPrice` 쿼리로 전달한다.
+- 실제 보유 평단은 `planMode=position-management`로 전달한다. 장기 현재가가 무효선 아래면 `invalidation-breached`와 축소·청산·회복 행동을 우선 표시하고, 평단이 무효선 위일 때만 기존 평단 기준 목표를 함께 유지한다.
 - 계획의 stop과 take-profit은 분석 조언이며 주문 제출이 아니다. `orderSubmissionAttempted=false`와 broker stop 부적격 계약을 유지한다.
 
 ### Toss 연결
@@ -110,7 +112,7 @@ curl http://127.0.0.1:38771/health
 - 거래소별 credential을 검증하고 암호화 저장소와 Keychain에 보관한다.
 - 계좌, 주문 가능 정보, REST 현재가 응답 신선도, 최소·최대 주문금액과 수수료를 확인하고 limit 주문 입력을 preview한다. Upbit 호가 단위는 deprecated chance 필드가 아니라 공식 `/v1/orderbook/instruments`의 `tick_size`를 사용하고, Bithumb은 chance 응답의 `price_unit`을 사용한다.
 - Upbit는 공식 `/v1/orders/test`로 실제 주문 없이 권한·JWT·KRW 지정가 형식을 확인한다. 테스트 식별자는 실제 원장·조회·취소·수동 5건 조건에 반영하지 않는다. Upbit 미체결 조회는 `/v1/orders/open`을 사용한다.
-- Bithumb은 1.2.0-beta.1에서 mock lifecycle까지만 검증하며 실제 연결·실주문 인수는 완료로 표시하지 않는다.
+- Bithumb은 1.2.0-beta.2에서 mock lifecycle까지만 검증하며 실제 연결·실주문 인수는 완료로 표시하지 않는다.
 - 암호화폐 전략은 거래소를 명시하며 페이퍼 모드에서는 소수 수량을 지원한다.
 - Upbit·Bithumb `KRW-*` 지정가는 자동 readiness, 현재 설치·API binding hash, 이용 동의, 거래소별 토글, `OrderIntent`·`RiskCheck`, 잔고·수수료·최소 주문금액·호가 단위·현재가 신선도 재검증과 주문 요약 재입력을 모두 통과한 경우에만 제출한다. 거래소별 주문당 100,000 KRW, KST 일일 누적 300,000 KRW 한도를 수동·자동이 공유한다.
 - 429·5xx·timeout 또는 응답 불명은 자동 재시도하지 않고 해당 거래소 토글을 잠근다. Upbit `identifier`, Bithumb `client_order_id` 조회가 주문을 확인할 때만 잠금을 해소한다.
@@ -126,6 +128,8 @@ curl http://127.0.0.1:38771/health
 - 커뮤니티 민심은 사용자가 `뉴스·알림 갱신`을 실행할 때 선택 종목 기준으로 계산한다. 정상 응답은 30분 캐시하지만 수동 갱신은 캐시를 우회하고, 소스 오류·timeout 응답은 1분만 캐시한다.
 - `lowEvidence=true`이면 점수보다 `근거 부족`을 우선 표시한다. 민심 데이터는 참고 근거이며 `OrderIntent`, `RiskCheck` 또는 broker 입력으로 사용하지 않는다.
 - Reddit은 뉴스·알림 화면에서 Client ID와 Secret을 입력하면 이 Mac의 Keychain에 저장하고 sidecar를 재시작해 공식 OAuth API로만 읽는다. 앱이 관리하는 sidecar는 부모 Reddit 환경변수를 상속하지 않으며, 환경변수 방식은 독립 실행한 개발용 sidecar에서만 유지한다. 설정이 없으면 `configuration-required`로 표시한다.
+- 일반 시작은 Toss·Upbit·Bithumb 비밀값을 읽지 않고 sidecar의 비민감 상태만 사용한다. Reddit은 연결된 경우 비대화식으로 최대 한 번 읽으며, 권한 확인 UI가 필요하면 값을 노출하지 않고 연결되지 않은 상태로 시작한다.
+- `Keychain 권한 재설정`은 사용자가 명시적으로 실행할 때만 상호작용 읽기를 허용하고, 현재 정식 서명 기준으로 항목을 재등록한다. 재등록 실패 시 메모리의 원본으로 복구를 시도하며 자동 삭제나 로그 노출을 하지 않는다.
 
 ## 로컬 빌드와 검증
 
@@ -142,7 +146,7 @@ yarn mac:verify:launch
 - `mac:verify`: Info.plist, 코드 서명, Node, sidecar endpoint와 안전 경계 검증
 - `mac:verify:launch`: 실제 앱 프로세스와 sidecar 자동 시작 검증
 
-`yarn mac:open`은 앱을 다시 빌드하고 `dist/macos/StockAnalysis.app`을 연다.
+`yarn mac:open`과 `dist/macos/StockAnalysis.app` 직접 실행은 개발 진단 전용이다. 사용자 credential이 있는 일반 실행·Keychain 권한 재설정은 Developer ID 서명·공증·stapling·Gatekeeper 검증을 통과해 `/Applications`에 설치된 앱에서만 수행한다.
 
 ## 릴리스 패키징
 
@@ -194,6 +198,8 @@ yarn mac:release-check:all --require-external
 Apple ID 방식을 사용할 때는 `APPLE_ID`, `APPLE_TEAM_ID`, `APPLE_APP_PASSWORD`를 로컬 환경에서만 제공한다. 이 값과 notary credential을 문서, Git, 로그와 리포트에 넣지 않는다.
 
 공개 준비 완료 판정에는 두 아키텍처의 checksum, `staplerValidated=true`, `gatekeeperAccepted=true`와 대상 Mac 설치 확인이 필요하다.
+
+Swift는 sidecar에 `--parent-pid`를 전달한다. 정상 종료는 관리 중인 자식 프로세스에 SIGTERM을 보내 최대 1초를 기다린 뒤 그 자식만 강제 종료하며, 앱 강제 종료 시 Node watchdog이 부모 PID 변경을 감지해 서버와 38771 포트를 닫는다.
 
 ## 안전 경계
 

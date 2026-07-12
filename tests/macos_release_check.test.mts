@@ -240,7 +240,7 @@ test("mac app plist uses the package version and a numeric build number", () => 
 });
 
 test("mac app build number accepts only positive integers", () => {
-  assert.equal(normalizeMacBuildNumber(undefined), "12001");
+  assert.equal(normalizeMacBuildNumber(undefined), "12002");
   assert.equal(normalizeMacBuildNumber(" 17 "), "17");
   for (const invalid of ["0", "-1", "1.2", "build-1"]) {
     assert.throws(() => normalizeMacBuildNumber(invalid), /positive integer/);
@@ -782,9 +782,7 @@ test("mac dmg install verification parses copied app UI smoke checks", () => {
     "    \"automationPaperOnly\": true,",
     "    \"killSwitchReachable\": true,",
     "    \"settingsApiReachable\": true,",
-    "    \"selfTestReachable\": true,",
-    "    \"sidecarLogReachable\": true,",
-    "    \"distributionReachable\": true,",
+    "    \"supportToolsSeparated\": true,",
     "    \"responsiveWindowSizes\": true",
     "  }",
     "}",
@@ -862,6 +860,24 @@ test("mac dmg install report preserves existing current-arch verification by che
   assert.equal(stale.checked, 2);
   assert.equal(stale.results.length, 1);
   assert.ok(stale.missingIssues.some((issue) => issue.includes("x64")));
+
+  const armOnly = mergeDmgInstallVerificationResults({
+    ...index,
+    entries: [
+      index.entries?.[0] ?? {},
+      {
+        files: [{
+          kind: "dmg",
+          fileName: "StockAnalysis-0.1.0-macos-x64.dmg",
+          path: "/tmp/StockAnalysis-0.1.0-macos-x64.dmg",
+          exists: false,
+        }],
+      },
+    ],
+  }, [installedAppVerificationResult("StockAnalysis-0.1.0-macos-arm64.dmg", "arm64-current")]);
+  assert.equal(armOnly.checked, 1);
+  assert.equal(armOnly.results.length, 1);
+  assert.deepEqual(armOnly.missingIssues, []);
 });
 
 test("mac release install guide covers cross-arch handoff and Toss setup", () => {
@@ -939,6 +955,22 @@ test("mac release install guide covers cross-arch handoff and Toss setup", () =>
   assert.match(guide, /RiskCheck/);
   assert.match(guide, /StockAnalysis-0.1.0-macos-arm64\.dmg/);
   assert.match(guide, /StockAnalysis-0.1.0-macos-x64\.dmg/);
+  assert.match(guide, /지인 1명 대상 비공개 베타/);
+  assert.match(guide, /재배포 금지/);
+  assert.match(guide, /확인 없이 열기/);
+  assert.match(guide, /Gatekeeper 전체 비활성화.*사용하지 않습니다/);
+  assert.match(guide, /읽기 전용 API 키/);
+  assert.match(guide, /조회 권한을 분리하지 못하면 해당 키를 연결하지 않습니다/);
+  assert.match(guide, /credential.*삭제하고 다시 등록/);
+  assert.match(guide, /로그·스크린샷에는 키, 토큰, 계좌번호를 포함하지 않습니다/);
+
+  const armOnlyGuide = buildMacReleaseInstallGuide({
+    version: "0.1.0",
+    generatedAt: "2026-07-09T00:00:00.000Z",
+    entries: [entries[0]],
+  });
+  assert.match(armOnlyGuide, /Apple Silicon Mac/);
+  assert.doesNotMatch(armOnlyGuide, /Intel Mac/);
 });
 
 test("mac dmg install readme guides drag install and live trading setup", () => {
@@ -956,6 +988,10 @@ test("mac dmg install readme guides drag install and live trading setup", () => 
   assert.match(readme, /OrderIntent/);
   assert.match(readme, /RiskCheck/);
   assert.match(readme, /Gatekeeper/);
+  assert.match(readme, /확인 없이 열기/);
+  assert.match(readme, /재배포 금지/);
+  assert.match(readme, /PAPER ONLY/);
+  assert.match(readme, /읽기 전용 API 키/);
 });
 
 test("mac dmg verifier accepts Finder drag-install layout", async () => {

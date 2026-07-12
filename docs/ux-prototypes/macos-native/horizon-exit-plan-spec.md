@@ -2,7 +2,7 @@
 
 ## 1. 목적과 경계
 
-이 문서는 현재가에 신규 매수한다고 가정했을 때 단타·스윙·장기 계획을 설명 가능한 방식으로 계산하기 위한 UI/엔진 계약이다.
+이 문서는 최근 확정 종가, 일치하는 보유 평단 또는 사용자가 입력한 가격에 진입했다고 가정할 때 단타·스윙·장기 계획을 설명 가능한 방식으로 계산하기 위한 UI/엔진 계약이다.
 
 - 결과는 분석 참고값이며 수익률이나 체결가를 보장하지 않는다.
 - 분석 생성만으로 주문 또는 자동화 설정을 변경하지 않는다.
@@ -14,6 +14,7 @@
 
 ```ts
 type HoldingHorizon = "day" | "swing" | "long";
+type HoldingPlanMode = "new-entry" | "position-management";
 type PlanStatus = "actionable" | "wait" | "unavailable";
 type ExitTrigger = "hourly-close" | "daily-close" | "monthly-close";
 
@@ -40,8 +41,18 @@ type AnalysisBasis = {
 
 type HorizonExitPlan = {
   horizon: HoldingHorizon;
+  planMode: HoldingPlanMode;
   status: PlanStatus;
   entryPrice: number;
+  currentPrice: number;
+  managementState: null | {
+    state: "active" | "invalidation-breached" | "recovery-watch";
+    currentPrice: number;
+    averagePrice: number;
+    invalidationPrice: number;
+    reentryConfirmationPrice: number;
+    actions: string[];
+  };
   stop: {
     price: number | null;
     trigger: ExitTrigger;
@@ -70,11 +81,16 @@ type HorizonExitPlan = {
 
 ## 3. 공통 규칙
 
-- `R = entryPrice - stopPrice`이며 `R <= 0`이면 `unavailable`이다.
+- 신규 진입은 `R = entryPrice - stopPrice`이며 `R <= 0`이면 `unavailable`이다.
+- 최근 종가와 직접 입력은 `new-entry`, 현재 종목·통화와 일치하는 실제 보유 평단은 `position-management`로 요청한다.
+- 보유관리에서 평단이 무효선 위면 평단 기준 기존 목표를 유지한다. 현재가가 무효선 아래면 `managementState.state=invalidation-breached`로 신규매수 금지, 축소·청산 검토와 회복 확인을 가격 목표보다 우선 표시한다.
+- 보유 평단도 무효선 이하라 양의 R을 만들 수 없으면 임의 익절 목표를 만들지 않는다. 이 경우에도 현재가, 무효선, 재진입 확인선과 관리 행동은 항상 반환한다.
 - 가격선은 기술 데이터로 결정하며 계좌 규모와 주문 수량으로 임의 조정하지 않는다.
 - 이 계산기는 가격 계획만 만든다. 계좌 위험 예산과 권장 수량 계산은 주문 서랍의 별도 RiskCheck가 담당한다.
 - 국내 주식은 표시와 주문 적용 직전에 `normalizeKrLimitPrice`를 사용한다. 손절은 `down`, 익절은 `up` 방향으로 정규화한다.
 - 필수 데이터가 없으면 고정 퍼센트로 대체하지 않고 `unavailable`과 누락 필드를 반환한다.
+- 구조선과 ATR 등 가격 계산 입력이 있으면 추세·거래량·신뢰도 조건이 실패해도 가격선을 반환하고 `wait`으로 신규 진입만 보류한다. UI는 `가격 계산 완료`와 `진입 대기`를 별도 상태로 표시한다.
+- 기준가 직접 입력은 0보다 큰 유한 숫자만 허용한다. 보유 평단은 현재 종목과 통화가 일치할 때만 선택할 수 있다.
 - `주문에 적용` 시 최신 데이터로 계획을 재계산한다. 이전 스냅샷과 가격선이 달라지면 변경 전후를 확인받는다.
 
 ## 4. 기간별 계산
@@ -122,7 +138,7 @@ trailingExit = max(SMA20, ChandelierLong)
 
 ### 장기 — 6개월 이상
 
-필수 데이터는 SMA200, 완료된 월만 사용하는 10개월 이동평균, 주봉 SMA20/60과 장기 종목 일봉 위험 게이트다.
+가격 계산 필수 데이터는 SMA200, 완료된 월만 사용하는 10개월 이동평균과 주봉 SMA20이다. 주봉 SMA60과 장기 종목 일봉 위험 게이트는 신규 진입 판단 입력이며, 표본이 부족해도 가격선은 계산하고 `wait`으로 표시한다.
 
 ```text
 stop = max(SMA200, tenMonthAverage)
@@ -135,13 +151,15 @@ trailingExit = weeklySMA20
 - 2R에서 20%, 4R에서 20%만 부분 익절하고 잔여 60%는 추세를 추적한다.
 - 주봉 SMA20이 SMA60 이하이거나 장기 종목 일봉 위험 게이트가 실패하면 `wait`다.
 - 무효선은 월말 종가 기준이며 `isBrokerStopEligible=false`다.
+- 보유관리의 재진입 확인선은 `max(무효선, 주봉 SMA20)`이다. 무효선 이탈 상태의 기존 목표는 즉시 매수 신호가 아니라 최초 평단 계획의 참고선으로 표시한다.
 
 ## 5. 데이터 공급자와 현재 구현
 
-- Toss: 공식 1분봉을 정규장 마감에 정렬한 1시간봉으로 집계하고 일봉·주봉을 함께 사용한다. 장 초반 30분 부분 봉은 snapshot에만 남기고 지표에서는 제외하며, 현재 market week 주봉은 다음 주가 시작되기 전까지 형성 중으로 둔다. 캐시, 동일 요청 single-flight, 페이지 중복 제거와 비진전 cursor 차단을 적용한다.
+- Toss: 공식 1분봉을 정규장 마감에 정렬한 1시간봉으로 집계하고 일봉·주봉을 함께 사용한다. 장 초반 30분 부분 봉은 snapshot에만 남기고 지표에서는 제외하며, 현재 market week 주봉은 다음 주가 시작되기 전까지 형성 중으로 둔다. 캐시, 동일 요청 single-flight, 페이지 중복 제거와 비진전 cursor 차단을 적용한다. `source=auto`에서 확정 1시간봉 20개 또는 ATR14·최근 저점이 부족하면 해당 시간봉만 Yahoo로 보완한다. 장기 필수 SMA200·10개월 평균·주봉 SMA20/60이 부족하면 일봉만 보완하고 혼합 출처를 표시한다.
 - Upbit: 현재는 `KRW-*` 시장만 허용하고 공개 REST의 60분·240분·일봉·주봉을 직접 사용한다. 시세 분석은 Upbit API 키가 없어도 가능하며 계좌 조회와 분리한다. 최근 캔들 간 무거래 공백이 있으면 시간 압축 왜곡을 경고하고 신규 진입을 대기한다.
 - Yahoo: Toss credential이 없는 첫 사용자와 예제 분석을 위한 주식 fallback이다. 화면에는 실제 `dataSource`를 명시한다.
-- 모든 응답은 `market`, `currency`, `dataSource`, `timeframe`, `quoteAt`, `generatedAt`과 데이터 부족 사유를 포함한다.
+- 장기 분석은 일봉 730일을 요청해 SMA200, 완료 월 기준 10개월 평균과 주봉 SMA20/60의 최소 표본을 확보한다.
+- 모든 응답은 `market`, `currency`, 기간별 실제 `dataSource`, `timeframe`, `quoteAt`, `generatedAt`과 데이터 부족 사유를 포함한다.
 - 형성 중인 봉과 주식의 부분 세션 봉은 지표 계산에서 제외한다. 부분 봉은 경고에 명시하며 4시간봉을 핵심 주식 신호로 쓰지 않는다.
 - 실시간 WebSocket 캔들은 이번 릴리스의 필수 조건이 아니다. 닫힌 봉 분석은 REST/polling으로 동작하고, 실시간 형성봉 갱신은 후속 기능이다.
 

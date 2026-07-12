@@ -44,7 +44,7 @@ export const assertMacNodeVersion = (actual: string, expected: string, label: st
 };
 
 export const normalizeMacBuildNumber = (value: string | undefined) => {
-  const buildNumber = value?.trim() || "12001";
+  const buildNumber = value?.trim() || "12002";
   if (!/^[1-9]\d*$/.test(buildNumber)) {
     throw new Error(`MACOS_BUILD_NUMBER must be a positive integer, got: ${value ?? "(unset)"}`);
   }

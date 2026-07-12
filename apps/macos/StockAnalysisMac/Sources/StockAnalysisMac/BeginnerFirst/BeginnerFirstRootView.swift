@@ -198,7 +198,9 @@ struct BeginnerFirstRootView: View {
                 resultPreview: $resultPreview,
                 isLoading: isLoading,
                 compact: compact,
-                onAnalyze: { Task { await runAnalysis() } },
+                onAnalyze: { entryPrice, planMode in
+                    Task { await runAnalysis(entryPrice: entryPrice, planMode: planMode) }
+                },
                 onChartTimeframeChanged: { timeframe in
                     Task { await refreshChartTimeframe(timeframe) }
                 },
@@ -318,7 +320,10 @@ struct BeginnerFirstRootView: View {
         await runAnalysis()
     }
 
-    private func runAnalysis() async {
+    private func runAnalysis(
+        entryPrice: Double? = nil,
+        planMode: AnalysisHoldingPlanMode = .newEntry
+    ) async {
         let normalized = selectedSymbol.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
         selectedSymbol = normalized.isEmpty
             ? (assetClass == .crypto ? "KRW-BTC" : stockMarket == .korea ? "005930.KS" : "AAPL")
@@ -343,7 +348,9 @@ struct BeginnerFirstRootView: View {
         let result = await model.refreshWorkspaceAnalysis(
             symbol: selectedSymbol,
             assetClass: assetClass == .crypto ? .crypto : .stock,
-            session: assetClass == .crypto ? "CRYPTO" : selectedSession
+            session: assetClass == .crypto ? "CRYPTO" : selectedSession,
+            entryPrice: entryPrice,
+            planMode: planMode
         )
         guard requestGeneration == analysisGeneration else { return }
         resultPreview = result
@@ -447,7 +454,7 @@ private struct BeginnerSidebar: View {
                         Text("시장 판단을 한눈에")
                             .font(.system(size: 10))
                             .foregroundStyle(BeginnerPalette.muted)
-                        Text("1.2.0-beta.1 · 실주문 잠금")
+                        Text("1.2.0-beta.2 · 실주문 잠금")
                             .font(.system(size: 9, weight: .semibold))
                             .foregroundStyle(BeginnerPalette.amber)
                     }

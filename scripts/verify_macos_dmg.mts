@@ -91,7 +91,7 @@ const dmgPathsFromIndex = (index: ReleaseIndex) => {
   const paths: string[] = [];
   for (const entry of index.entries ?? []) {
     for (const file of entry.files ?? []) {
-      if (file.kind !== "dmg") {
+      if (file.kind !== "dmg" || file.exists === false) {
         continue;
       }
       const path = file.path ?? (file.fileName ? join(releaseRoot, file.fileName) : "");

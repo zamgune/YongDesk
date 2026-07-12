@@ -219,6 +219,8 @@ public struct WorkspaceAnalysis: Codable, Equatable, Sendable {
     public let dataSource: AnalysisDataSource?
     public let quoteAt: String?
     public let generatedAt: String?
+    public let planMode: AnalysisHoldingPlanMode?
+    public let currentPrice: Double?
     public let stale: Bool?
     public let analyses: WorkspaceTimeframeAnalyses?
     public let horizonPlans: [AnalysisHorizonPlan]
@@ -233,6 +235,8 @@ public struct WorkspaceAnalysis: Codable, Equatable, Sendable {
         case dataSource
         case quoteAt
         case generatedAt
+        case planMode
+        case currentPrice
         case stale
         case analyses
         case horizonPlans
@@ -249,6 +253,8 @@ public struct WorkspaceAnalysis: Codable, Equatable, Sendable {
         dataSource = try container.decodeIfPresent(AnalysisDataSource.self, forKey: .dataSource)
         quoteAt = try container.decodeIfPresent(String.self, forKey: .quoteAt)
         generatedAt = try container.decodeIfPresent(String.self, forKey: .generatedAt)
+        planMode = try container.decodeIfPresent(AnalysisHoldingPlanMode.self, forKey: .planMode)
+        currentPrice = try container.decodeIfPresent(Double.self, forKey: .currentPrice)
         stale = try container.decodeIfPresent(Bool.self, forKey: .stale)
         analyses = try container.decodeIfPresent(WorkspaceTimeframeAnalyses.self, forKey: .analyses)
         horizonPlans = try container.decodeIfPresent([AnalysisHorizonPlan].self, forKey: .horizonPlans) ?? []
@@ -405,10 +411,33 @@ public enum AnalysisHorizonPlanStatus: Codable, Equatable, Hashable, Sendable {
     }
 }
 
+public enum AnalysisHoldingPlanMode: String, Codable, Equatable, Hashable, Sendable {
+    case newEntry = "new-entry"
+    case positionManagement = "position-management"
+}
+
+public enum AnalysisManagementStateKind: String, Codable, Equatable, Hashable, Sendable {
+    case active
+    case invalidationBreached = "invalidation-breached"
+    case recoveryWatch = "recovery-watch"
+}
+
+public struct AnalysisHorizonManagementState: Codable, Equatable, Sendable {
+    public let state: AnalysisManagementStateKind
+    public let currentPrice: Double
+    public let averagePrice: Double
+    public let invalidationPrice: Double
+    public let reentryConfirmationPrice: Double
+    public let actions: [String]
+}
+
 public struct AnalysisHorizonPlan: Codable, Equatable, Sendable {
     public let horizon: AnalysisHoldingHorizon
     public let status: AnalysisHorizonPlanStatus
+    public let planMode: AnalysisHoldingPlanMode
+    public let currentPrice: Double?
     public let entryPrice: Double?
+    public let managementState: AnalysisHorizonManagementState?
     public let stop: AnalysisHorizonStop?
     public let takeProfits: [AnalysisTakeProfit]
     public let trailingExit: AnalysisTrailingExit?
@@ -423,7 +452,10 @@ public struct AnalysisHorizonPlan: Codable, Equatable, Sendable {
     enum CodingKeys: String, CodingKey {
         case horizon
         case status
+        case planMode
+        case currentPrice
         case entryPrice
+        case managementState
         case stop
         case takeProfits
         case trailingExit
@@ -440,7 +472,10 @@ public struct AnalysisHorizonPlan: Codable, Equatable, Sendable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         horizon = try container.decode(AnalysisHoldingHorizon.self, forKey: .horizon)
         status = try container.decode(AnalysisHorizonPlanStatus.self, forKey: .status)
+        planMode = try container.decodeIfPresent(AnalysisHoldingPlanMode.self, forKey: .planMode) ?? .newEntry
+        currentPrice = try container.decodeIfPresent(Double.self, forKey: .currentPrice)
         entryPrice = try container.decodeIfPresent(Double.self, forKey: .entryPrice)
+        managementState = try container.decodeIfPresent(AnalysisHorizonManagementState.self, forKey: .managementState)
         stop = try container.decodeIfPresent(AnalysisHorizonStop.self, forKey: .stop)
         takeProfits = try container.decodeIfPresent([AnalysisTakeProfit].self, forKey: .takeProfits) ?? []
         trailingExit = try container.decodeIfPresent(AnalysisTrailingExit.self, forKey: .trailingExit)

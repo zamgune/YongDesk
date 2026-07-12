@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
+import { once } from "node:events";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
@@ -109,6 +111,36 @@ test("local engine health returns sidecar metadata", async () => {
   assert.equal(payload.tossOpenApi?.specVersion, "1.2.2");
   assert.equal(payload.tossOpenApi?.baseUrl, "https://openapi.tossinvest.com");
   assert.ok((payload.tossOpenApi?.requiredOperationCount ?? 0) >= 20);
+});
+
+test("local engine CLI exits when its declared parent is gone", async () => {
+  const childStorage = await mkdtemp(join(tmpdir(), "stock-analysis-parent-watchdog-"));
+  const loaderImport = 'data:text/javascript,import { register } from "node:module"; import { pathToFileURL } from "node:url"; register("./scripts/ts_path_loader.mjs", pathToFileURL("./"));';
+  const child = spawn(process.execPath, [
+    "--import",
+    loaderImport,
+    "--experimental-strip-types",
+    "scripts/local_engine.mts",
+    "--port=0",
+    `--parent-pid=${process.pid + 100_000}`,
+  ], {
+    cwd: process.cwd(),
+    env: {
+      ...process.env,
+      STOCK_ANALYSIS_STORAGE_ROOT: childStorage,
+      STOCK_ANALYSIS_RUNTIME: "macos-local",
+      STOCK_ANALYSIS_DISABLE_MARKET_SNAPSHOT: "1",
+      STOCK_ANALYSIS_SKIP_AUTO_READINESS: "1",
+      BROKER_CREDENTIAL_ENC_KEY: `test:${Buffer.alloc(32, 8).toString("base64")}`,
+    },
+    stdio: "ignore",
+  });
+  const timeout = setTimeout(() => child.kill("SIGKILL"), 5_000);
+  const [exitCode, signal] = await once(child, "exit") as [number | null, NodeJS.Signals | null];
+  clearTimeout(timeout);
+  await rm(childStorage, { recursive: true, force: true });
+  assert.equal(signal, null);
+  assert.equal(exitCode, 0);
 });
 
 test("local engine exposes Toss OpenAPI contract metadata", async () => {

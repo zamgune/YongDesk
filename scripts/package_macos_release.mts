@@ -221,19 +221,28 @@ export const buildMacReleaseInstallGuide = ({
   generatedAt: string;
   entries: MacReleaseHandoffEntry[];
 }) => {
-  const arm64 = entries.find((entry) => entry.arch === "arm64");
-  const x64 = entries.find((entry) => entry.arch === "x64");
+  const arm64 = entries.find((entry) => entry.arch === "arm64" && entry.files.some((file) => file.exists));
+  const x64 = entries.find((entry) => entry.arch === "x64" && entry.files.some((file) => file.exists));
   const minimumMacOSLabel = arm64?.minimumMacOS ?? x64?.minimumMacOS ?? minimumMacOS;
+  const deliveryFiles = [
+    arm64
+      ? `- Apple Silicon Mac(M1/M2/M3/M4 계열): \`${arm64.files.find((file) => file.kind === "dmg")?.fileName ?? `StockAnalysis-${version}-macos-arm64.dmg`}\``
+      : null,
+    x64
+      ? `- Intel Mac: \`${x64.files.find((file) => file.kind === "dmg")?.fileName ?? `StockAnalysis-${version}-macos-x64.dmg`}\``
+      : null,
+  ].filter((line): line is string => line !== null).join("\n");
   return `# StockAnalysis macOS 설치 안내
 
 - 버전: ${version}
 - 생성 시각: ${generatedAt}
 - 최소 macOS: ${minimumMacOSLabel} 이상
+- 배포 범위: 신뢰하는 지인 1명 대상 비공개 베타 · 재배포 금지
+- 안전 상태: 투자 참고용 · PAPER ONLY · 실제 주문/취소 HTTP 423 차단
 
 ## 어떤 파일을 전달할까
 
-- Apple Silicon Mac(M1/M2/M3/M4 계열): \`${arm64?.files.find((file) => file.kind === "dmg")?.fileName ?? `StockAnalysis-${version}-macos-arm64.dmg`}\`
-- Intel Mac: \`${x64?.files.find((file) => file.kind === "dmg")?.fileName ?? `StockAnalysis-${version}-macos-x64.dmg`}\`
+${deliveryFiles}
 - ZIP은 DMG가 막힐 때 쓰는 백업 파일입니다.
 - 같은 버전의 \`.manifest.json\`은 SHA-256, 서명, 공증, sidecar 검증 상태를 확인하는 명세입니다.
 - \`${releaseCheckFileName(version)}\`은 실제 DMG 파일의 stapler/Gatekeeper 평가와 SHA-256 검증 결과를 포함합니다.
@@ -244,12 +253,16 @@ export const buildMacReleaseInstallGuide = ({
 1. 대상 Mac CPU에 맞는 DMG를 전달합니다.
 2. DMG를 열고 \`StockAnalysis.app\`을 \`Applications\` 아이콘으로 드래그합니다.
 3. Finder의 Applications에서 \`StockAnalysis.app\`을 더블클릭합니다. 사용자는 별도 터미널이나 sidecar 명령을 실행하지 않습니다.
-4. 앱을 실행한 뒤 상단 \`배포\`를 열고 \`설치 후 점검\`을 실행합니다.
-5. \`첫 실행 설정\`에서 \`Toss API 키\`, \`자동매매 전략\`, \`앱 점검\`, \`앱 배포\` 시트를 순서대로 열어 기본 상태를 확인합니다.
-6. \`점검\`에서 Sidecar, 뉴스/RSS, 분석, 브리핑, 전략 저장/시뮬레이션, 자동화 dry-run 실패가 0인지 확인합니다.
-7. 실계좌 조회가 필요할 때만 \`Toss\`에서 API 키를 검증 후 sidecar 저장소와 macOS Keychain에 저장하고 사용할 BROKERAGE 계좌를 선택합니다.
-8. Toss 개발자 콘솔 허용 IP가 앱의 Toss 연결 진단 공인 IP와 같은지 확인합니다.
-9. 1.2.0-beta.1은 Toss·Upbit·Bithumb 실제 주문과 취소를 HTTP 423으로 차단하며 자동화는 paper 전용입니다.
+4. 미확인 개발자 경고가 나오면 앱 실행을 한 번 시도한 뒤 \`시스템 설정 → 개인정보 보호 및 보안 → 확인 없이 열기\`를 선택하고 Mac 로그인 암호로 승인합니다.
+5. Gatekeeper 전체 비활성화나 quarantine 제거 명령은 사용하지 않습니다.
+6. 앱을 실행한 뒤 상단 \`배포\`를 열고 \`설치 후 점검\`을 실행합니다.
+7. \`첫 실행 설정\`에서 \`Toss API 키\`, \`자동매매 전략\`, \`앱 점검\`, \`앱 배포\` 시트를 순서대로 열어 기본 상태를 확인합니다.
+8. \`점검\`에서 Sidecar, 뉴스/RSS, 분석, 브리핑, 전략 저장/시뮬레이션, 자동화 dry-run 실패가 0인지 확인합니다.
+9. 실계좌 조회가 필요할 때만 주문 권한과 분리된 읽기 전용 API 키를 등록합니다. 제공자가 조회 권한을 분리하지 못하면 해당 키를 연결하지 않습니다.
+10. Toss 개발자 콘솔 허용 IP가 앱의 Toss 연결 진단 공인 IP와 같은지 확인합니다.
+11. ad-hoc 베타 업데이트 후 macOS Keychain 권한이 달라지면 기존 credential을 앱에서 삭제하고 다시 등록합니다.
+12. 테스트가 끝나면 앱에서 credential을 삭제하고 필요하면 발급처에서도 키를 폐기합니다. 로그·스크린샷에는 키, 토큰, 계좌번호를 포함하지 않습니다.
+13. ${version}은 Toss·Upbit·Bithumb 실제 주문과 취소를 HTTP 423으로 차단하며 자동화는 paper 전용입니다.
 
 ## 패키징 검증 근거
 
@@ -271,7 +284,7 @@ export const buildMacReleaseInstallGuide = ({
 - SwiftUI 앱은 broker를 직접 호출하지 않습니다.
 - 모든 주문은 TypeScript sidecar의 \`OrderIntent\`와 \`RiskCheck\` 경계를 통과해야 합니다.
 - Upbit 수동 주문은 1회 10만원, KST 일일 30만원 한도이며, 실패 원인을 표시하고 timeout·429·5xx 결과는 자동 재시도하지 않고 잠급니다.
-- Developer ID 서명과 Apple 공증 전에는 다른 Mac에서 Gatekeeper 경고가 날 수 있습니다.
+- 이 빌드는 Developer ID 서명·Apple 공증이 없는 지인용 비공개 베타이며 일반 배포 준비 상태가 아닙니다.
 - \`IP address not allowed\`가 나오면 앱 문제가 아니라 Toss 허용 IP 불일치일 가능성이 높습니다. 앱의 연결 진단 공인 IP를 Toss Open API 콘솔에 등록한 뒤 다시 검증하세요.
 
 ## 파일 체크섬
@@ -292,15 +305,20 @@ export const buildDmgInstallReadme = ({
 
 1. StockAnalysis.app을 Applications 아이콘으로 드래그합니다.
 2. Applications에서 StockAnalysis.app을 더블클릭합니다. 별도 터미널 명령은 필요 없습니다.
-3. 앱 상단의 배포 > 설치 후 점검을 실행합니다.
-4. 첫 실행 설정에서 Toss API 키, 자동매매 전략, 앱 점검, 앱 배포 시트를 확인합니다.
-5. Toss 실계좌 조회가 필요하면 API 키를 이 Mac에서 다시 검증하고 사용할 계좌를 선택합니다.
-6. Toss 개발자 콘솔 허용 IP와 앱의 공인 IP 진단 결과가 일치해야 합니다.
-7. 1.2.0-beta.1은 Toss·Upbit·Bithumb 실제 주문과 취소를 HTTP 423으로 차단하며 자동화는 paper 전용입니다.
+3. 차단되면 앱 실행을 한 번 시도한 뒤 시스템 설정 > 개인정보 보호 및 보안 > 확인 없이 열기를 선택합니다.
+4. Gatekeeper 전체 비활성화나 quarantine 제거 명령은 사용하지 않습니다.
+5. 앱 상단의 배포 > 설치 후 점검을 실행합니다.
+6. 첫 실행 설정에서 Toss API 키, 자동매매 전략, 앱 점검, 앱 배포 시트를 확인합니다.
+7. 주문 권한과 분리된 읽기 전용 API 키만 등록합니다. 분리할 수 없다면 해당 키를 연결하지 않습니다.
+8. Toss 개발자 콘솔 허용 IP와 앱의 공인 IP 진단 결과가 일치해야 합니다.
+9. ad-hoc 업데이트 후에는 기존 credential을 삭제하고 다시 등록해야 할 수 있습니다.
+10. 테스트 종료 후 앱에서 credential을 삭제하고 필요하면 발급처에서도 폐기합니다.
+11. ${version}은 Toss·Upbit·Bithumb 실제 주문과 취소를 HTTP 423으로 차단하며 자동화는 paper 전용입니다.
 
-모든 실제 주문은 TypeScript sidecar의 OrderIntent와 RiskCheck 경계를 통과합니다. Upbit 수동 주문은 1회 10만원, KST 일일 30만원 한도이며 timeout·429·5xx 결과는 자동 재시도하지 않고 잠급니다.
+신뢰하는 지인 1명만 사용하는 재배포 금지 비공개 베타입니다. 투자 참고용이며 PAPER ONLY 상태입니다. 로그·스크린샷에 키, 토큰, 계좌번호를 포함하지 마세요.
+실제 주문과 취소는 HTTP 423으로 차단되며 OrderIntent와 RiskCheck 경계를 우회하지 않습니다.
 
-Developer ID 서명과 Apple 공증이 없는 로컬 테스트 빌드는 Gatekeeper 경고가 날 수 있습니다.
+Developer ID 서명과 Apple 공증이 없어 Gatekeeper 경고가 날 수 있으며 일반 배포 준비 상태가 아닙니다.
 `;
 
 const prepareDmgStage = async (version: string, arch: TargetArch) => {
@@ -343,7 +361,7 @@ const writeMacReleaseHandoffFiles = async (version: string, buildNumber: string)
       "StockAnalysis-<version>-macos-install-verification.json에서 sidecarEndpointChecks.strategyBackupImport/automationScheduler, appLaunchVerified/uiSmokeVerified, uiSmokeChecks.samsungFixtureAnalysis/horizonPlans/paperOrderDrawerNoSubmit/strategyWorkflowOrder/responsiveWindowSizes가 true인지 확인합니다.",
       "Toss API 키는 Mac마다 다시 검증해 sidecar 저장소와 macOS Keychain에 저장하고 자동거래 계좌를 다시 선택합니다.",
       "Toss 허용 IP와 앱 연결 진단 공인 IP가 일치해야 합니다.",
-      "1.2.0-beta.1은 Toss·Upbit·Bithumb 실제 주문과 취소를 HTTP 423으로 차단하며 자동화는 paper 전용입니다.",
+      `${version}은 Toss·Upbit·Bithumb 실제 주문과 취소를 HTTP 423으로 차단하며 자동화는 paper 전용입니다.`,
     ],
   }, null, 2)}\n`, "utf8");
   await writeFile(installGuidePath, buildMacReleaseInstallGuide({ version, generatedAt, entries }), "utf8");
@@ -383,7 +401,12 @@ const maybeNotarize = (dmgPath: string) => {
   };
 };
 
-const distributionReadiness = (options: { arch: string; signingIdentity: string; notarizationStapled: boolean }) => {
+const distributionReadiness = (options: {
+  arch: string;
+  signingIdentity: string;
+  notarizationStapled: boolean;
+  version: string;
+}) => {
   const developerIdSigned = options.signingIdentity.startsWith("Developer ID Application:");
   const readyForExternalDistribution = developerIdSigned && options.notarizationStapled;
   const warnings: string[] = [];
@@ -404,7 +427,7 @@ const distributionReadiness = (options: { arch: string; signingIdentity: string;
   if (options.arch === "x64") {
     warnings.push("Intel 하드웨어에서 Finder 실행을 직접 검증하지 않았습니다.");
   }
-  warnings.push("1.2.0-beta.1은 live submission disabled 정책의 내부 베타입니다.");
+  warnings.push(`${options.version}은 live submission disabled 정책의 내부 베타입니다.`);
 
   return {
     status: readyForExternalDistribution ? "external-ready" : "local-test",
@@ -422,7 +445,7 @@ const distributionReadiness = (options: { arch: string; signingIdentity: string;
       "install-verification 리포트에서 sidecarEndpointVerified/appLaunchVerified/uiSmokeVerified와 Beginner-first 핵심 UI checks가 true인지 확인하세요.",
       "새 Mac에서는 Toss API 키를 앱 설정에서 다시 검증해 sidecar 저장소와 macOS Keychain에 저장하고 자동거래 계좌를 선택해야 합니다.",
       "Toss 개발자 콘솔의 허용 IP와 앱의 연결 진단 공인 IP가 일치해야 합니다.",
-      "1.2.0-beta.1은 Toss·Upbit·Bithumb 실제 주문과 취소를 HTTP 423으로 차단하며 자동화는 paper 전용입니다.",
+      `${options.version}은 Toss·Upbit·Bithumb 실제 주문과 취소를 HTTP 423으로 차단하며 자동화는 paper 전용입니다.`,
     ],
   };
 };
@@ -444,6 +467,7 @@ const main = async () => {
     arch,
     signingIdentity,
     notarizationStapled: notarizationExpected,
+    version,
   });
   const releaseStatus = {
     app: "StockAnalysis",
@@ -489,6 +513,7 @@ const main = async () => {
     arch,
     signingIdentity,
     notarizationStapled: notarization.stapled,
+    version,
   });
   const files = [
     {

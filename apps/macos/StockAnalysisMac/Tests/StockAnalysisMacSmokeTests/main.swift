@@ -1,12 +1,82 @@
 import Foundation
 import StockAnalysisMacCore
 
+final class CountingCredentialStore: CredentialStoring, @unchecked Sendable {
+    var credentials: [String: BrokerCredential]
+    var secrets: [String: String]
+    private(set) var reads: [String] = []
+    private(set) var interactiveReads: [String] = []
+    private(set) var secretReads: [String] = []
+    private(set) var interactiveSecretReads: [String] = []
+    private(set) var saves: [String] = []
+    private(set) var reauthorizations: [String] = []
+    private(set) var deletes: [String] = []
+
+    init(credentials: [String: BrokerCredential] = [:], secrets: [String: String] = [:]) {
+        self.credentials = credentials
+        self.secrets = secrets
+    }
+
+    func save(_ credential: BrokerCredential) throws {
+        saves.append(credential.broker)
+        credentials[credential.broker] = credential
+    }
+
+    func reauthorize(_ credential: BrokerCredential) throws {
+        reauthorizations.append(credential.broker)
+        credentials[credential.broker] = credential
+    }
+
+    func saveSecret(_ value: String, account: String) throws {
+        saves.append(account)
+        secrets[account] = value
+    }
+
+    func readSecret(account: String) throws -> String? {
+        secretReads.append(account)
+        return secrets[account]
+    }
+
+    func readSecretInteractively(account: String) throws -> String? {
+        interactiveSecretReads.append(account)
+        return secrets[account]
+    }
+
+    func read(broker: String) throws -> BrokerCredential? {
+        reads.append(broker)
+        return credentials[broker]
+    }
+
+    func readInteractively(broker: String) throws -> BrokerCredential? {
+        interactiveReads.append(broker)
+        return credentials[broker]
+    }
+
+    func delete(broker: String) throws {
+        deletes.append(broker)
+        credentials.removeValue(forKey: broker)
+        secrets.removeValue(forKey: broker)
+    }
+}
+
 func assert(_ condition: @autoclosure () -> Bool, _ message: String) {
     if !condition() {
         fputs("Smoke test failed: \(message)\n", stderr)
         exit(1)
     }
 }
+
+func verifyManagedChildProcessTermination() throws {
+    let child = Process()
+    child.executableURL = URL(fileURLWithPath: "/bin/sleep")
+    child.arguments = ["30"]
+    try child.run()
+    assert(child.isRunning, "managed child fixture should start")
+    ManagedChildProcessTerminator.terminate(child, gracePeriod: 0.5, forcePeriod: 0.5)
+    assert(!child.isRunning, "normal shutdown should terminate the managed child within its deadline")
+}
+
+try verifyManagedChildProcessTermination()
 
 func verifyOneYearChartCandleRetentionContract() throws {
     let appSourceURL = URL(fileURLWithPath: #filePath)
@@ -98,6 +168,9 @@ func verifyInteractiveChartWorkbenchSource() throws {
     assert(workspace.contains("interactive-chart.show-ma5"), "chart indicator selections should persist on this Mac")
     assert(workspace.contains("beginner-chart-indicators"), "chart indicator controls need a stable accessibility identifier")
     assert(workspace.contains("beginner-chart-reset"), "chart reset needs a stable accessibility identifier")
+    assert(workspace.contains("beginner-entry-price-mode"), "horizon plans should expose a stable entry-price selector")
+    assert(workspace.contains("beginner-custom-entry-price"), "custom entry price should remain keyboard accessible")
+    assert(workspace.contains("가격 계산 완료") && workspace.contains("진입 대기"), "price availability and entry readiness must stay separate")
 }
 
 try verifyInteractiveChartWorkbenchSource()
@@ -477,6 +550,32 @@ let savedBithumbCredential = try keychain.read(broker: "bithumb")
 assert(savedUpbitCredential == cryptoCredential, "keychain should isolate Upbit credential")
 assert(savedBithumbCredential == nil, "keychain should keep exchanges isolated")
 try keychain.delete(broker: "upbit")
+
+let startupReddit = BrokerCredential(broker: "reddit", clientId: "reddit-client", clientSecret: "reddit-secret")
+let startupStore = CountingCredentialStore(credentials: [
+    "toss": dummyCredential,
+    "upbit": cryptoCredential,
+    "reddit": startupReddit,
+])
+let startupCredentials = try StartupCredentialLoader.load(using: startupStore)
+assert(startupCredentials.reddit == startupReddit, "startup should load a connected Reddit credential")
+assert(startupStore.reads == ["reddit"], "startup should read Reddit at most once and never read Toss or coin secrets")
+assert(startupStore.secretReads.isEmpty, "startup should not read legacy secret accounts")
+assert(startupStore.saves.isEmpty, "startup should not save credentials or the broker encryption key")
+assert(startupStore.reauthorizations.isEmpty, "startup should not rewrite Keychain authorization")
+
+let resetStore = CountingCredentialStore(credentials: [
+    "toss": dummyCredential,
+    "upbit": cryptoCredential,
+    "reddit": startupReddit,
+])
+let resetResult = try KeychainAccessResetter.reset(using: resetStore)
+assert(resetStore.reads.isEmpty, "explicit reset should not use silent startup reads")
+assert(resetStore.interactiveReads == ["toss", "upbit", "bithumb", "reddit"], "explicit reset should inspect supported credentials once with interaction allowed")
+assert(resetStore.secretReads.isEmpty && resetStore.interactiveSecretReads.isEmpty, "combined Reddit credential should avoid legacy secret reads")
+assert(Set(resetStore.reauthorizations) == Set(["toss", "upbit", "reddit"]), "explicit reset should reauthorize only stored credentials")
+assert(resetStore.saves.isEmpty, "explicit reset should not use ordinary credential saves")
+assert(resetResult.credentialCount == 3 && resetResult.hasToss && resetResult.hasReddit, "explicit reset should report migrated credentials")
 
 let selfTestJSON = """
 {
@@ -1460,6 +1559,8 @@ func verifyMarketAnalysisContracts() async throws {
     EngineClientMockURLProtocol.reset(responses: [
         mockResponse(#"{"symbol":"삼성 전자/005930.KS","latestClose":88000}"#),
         mockResponse(workspaceFixture),
+        mockResponse(workspaceFixture),
+        mockResponse(workspaceFixture),
     ])
 
     _ = try await client.analyze(symbol: "삼성 전자/005930.KS", timeframe: .fourHours, days: 90)
@@ -1467,6 +1568,19 @@ func verifyMarketAnalysisContracts() async throws {
         symbol: "005930.KS",
         assetClass: .stock,
         source: .auto
+    )
+    _ = try await client.workspaceAnalysisData(
+        symbol: "005930.KS",
+        assetClass: .stock,
+        source: .auto,
+        entryPrice: 75_000
+    )
+    _ = try await client.workspaceAnalysisData(
+        symbol: "005930.KS",
+        assetClass: .stock,
+        source: .auto,
+        entryPrice: 75_000,
+        planMode: .positionManagement
     )
 
     assert(workspace.assetClass == .stock, "workspace should decode stock asset class")
@@ -1514,7 +1628,7 @@ func verifyMarketAnalysisContracts() async throws {
     }
 
     let requests = EngineClientMockURLProtocol.captured()
-    assert(requests.count == 2, "market analysis contract should issue two requests")
+    assert(requests.count == 4, "market analysis contract should issue four requests")
     assert(
         requests[0].percentEncodedPath == "/api/market/%EC%82%BC%EC%84%B1%20%EC%A0%84%EC%9E%90%2F005930.KS",
         "analysis symbol must be encoded as one path segment, got \(requests[0].percentEncodedPath)"
@@ -1524,7 +1638,19 @@ func verifyMarketAnalysisContracts() async throws {
         requests,
         1,
         method: "GET",
-        path: "/api/local/analysis/workspace?symbol=005930.KS&assetClass=stock&source=auto"
+        path: "/api/local/analysis/workspace?symbol=005930.KS&assetClass=stock&source=auto&planMode=new-entry"
+    )
+    requireRequest(
+        requests,
+        2,
+        method: "GET",
+        path: "/api/local/analysis/workspace?symbol=005930.KS&assetClass=stock&source=auto&entryPrice=75000.0&planMode=new-entry"
+    )
+    requireRequest(
+        requests,
+        3,
+        method: "GET",
+        path: "/api/local/analysis/workspace?symbol=005930.KS&assetClass=stock&source=auto&entryPrice=75000.0&planMode=position-management"
     )
 }
 

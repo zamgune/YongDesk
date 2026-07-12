@@ -1435,6 +1435,8 @@ private struct BeginnerAPIConnectionWorkspace: View {
                             .foregroundStyle(BeginnerPalette.muted)
                             .fixedSize(horizontal: false, vertical: true)
                     }
+                    .accessibilityElement(children: .combine)
+                    .accessibilityIdentifier("beginner-api-connection-workspace")
                     Spacer()
                     BeginnerStatusBadge("PAPER ONLY", color: BeginnerPalette.green)
                 }
@@ -1543,6 +1545,13 @@ private struct BeginnerAPIConnectionWorkspace: View {
                             .foregroundStyle(BeginnerPalette.muted)
                             .padding(.top, 8)
                     }
+                    Divider()
+                    Button("Keychain 권한 재설정") {
+                        _ = model.resetKeychainAccess()
+                    }
+                    .buttonStyle(.bordered)
+                    .help("정식 서명 앱으로 교체한 뒤 한 번만 실행합니다. 일반 앱 시작에서는 Keychain 비밀값을 읽지 않습니다.")
+                    .accessibilityIdentifier("beginner-reset-keychain-access")
                 } label: {
                     HStack {
                         Text("고급 점검")
@@ -1580,7 +1589,6 @@ private struct BeginnerAPIConnectionWorkspace: View {
         } message: {
             Text("sidecar 저장소와 macOS Keychain에서 credential을 삭제합니다. 실제 주문은 이 작업 전후에도 차단된 상태입니다.")
         }
-        .accessibilityIdentifier("beginner-api-connection-workspace")
     }
 
     @ViewBuilder
@@ -1767,7 +1775,7 @@ private struct BeginnerAPIConnectionWorkspace: View {
                 }
             }
 
-            Text("1.2.0-beta.1에서는 실제 주문·취소·자동매매 제출이 전역에서 차단됩니다. 저장된 토글도 OFF로 초기화되며 자동화는 paper 경로만 사용합니다.")
+            Text("1.2.0-beta.2에서는 실제 주문·취소·자동매매 제출이 전역에서 차단됩니다. 저장된 토글도 OFF로 초기화되며 자동화는 paper 경로만 사용합니다.")
                 .font(.caption)
                 .foregroundStyle(BeginnerPalette.muted)
                 .fixedSize(horizontal: false, vertical: true)
@@ -1864,7 +1872,6 @@ private struct BeginnerAPIConnectionWorkspace: View {
         defer { isRefreshing = false }
         guard model.health?.ok == true else { return }
         if selectedProvider == .toss {
-            model.refreshKeychainCredentialStatus()
             await model.refreshBrokerCredential()
         } else {
             await model.refreshCryptoExchanges()
@@ -2138,7 +2145,7 @@ struct BeginnerLiveTradingSettingsCard: View {
                     VStack(alignment: .leading, spacing: 4) {
                         Text("Toss 읽기 전용 준비 상태")
                             .font(.headline)
-                        Text("계좌·보유·주문 가능 금액·미체결 주문만 조회합니다. 1.2.0-beta.1에서는 실제 주문·취소·자동매매 제출이 모두 잠겨 있습니다.")
+                        Text("계좌·보유·주문 가능 금액·미체결 주문만 조회합니다. 1.2.0-beta.2에서는 실제 주문·취소·자동매매 제출이 모두 잠겨 있습니다.")
                             .font(.caption)
                             .foregroundStyle(BeginnerPalette.muted)
                     }
@@ -2201,7 +2208,7 @@ struct BeginnerLiveOrderDrawer: View {
                     Text("Toss 주문 사전검증")
                         .font(.title2.weight(.bold))
                         .accessibilityAddTraits(.isHeader)
-                    Text("1.2.0-beta.1 · 실제 제출 잠금")
+                    Text("1.2.0-beta.2 · 실제 제출 잠금")
                         .font(.caption)
                         .foregroundStyle(BeginnerPalette.muted)
                 }

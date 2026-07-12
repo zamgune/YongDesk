@@ -46,18 +46,37 @@ type WorkspaceTestPayload = {
   analysisSymbol: string;
   requestedSymbol: string;
   dataSource: string;
+  planMode?: string;
+  currentPrice?: number;
   market: string;
   currency: string;
   analyses: {
-    oneHour: { timeframe: string; latestClose: number | null };
+    oneHour: { timeframe: string; latestClose: number | null; dataSource?: string };
     fourHour: { timeframe: string; latestClose: number | null } | null;
     daily: { timeframe: string; latestClose: number | null };
   };
   horizonPlans: Array<{
     entryPrice: number;
     status: string;
-    basis: { timeframeLabel: string; support: number | null; quoteAt: string };
-    stop: { isBrokerStopEligible: boolean };
+    planMode?: string;
+    currentPrice?: number;
+    managementState?: {
+      state: string;
+      currentPrice: number;
+      averagePrice: number;
+      invalidationPrice: number;
+      reentryConfirmationPrice: number;
+      actions: string[];
+    } | null;
+    basis: {
+      timeframeLabel: string;
+      support: number | null;
+      quoteAt: string;
+      dataSource?: string;
+      weeklySma60?: number | null;
+    };
+    stop: { isBrokerStopEligible: boolean; price?: number | null };
+    takeProfits?: Array<{ price: number }>;
   }>;
   warnings: string[];
   orderSubmissionAttempted: boolean;
@@ -290,6 +309,33 @@ test("stock auto source falls back to Yahoo and uses daily direction plus 1h ent
   assert.equal(payload.orderSubmissionAttempted, false);
 });
 
+test("stock position management separates holding average from current market price", async () => {
+  const yahoo = fixtureYahooProvider();
+  const response = await handleMarketWorkspaceRequest(new Request(
+    "http://127.0.0.1/api/local/analysis/workspace?symbol=005930.KS&assetClass=stock&source=yahoo&entryPrice=120&planMode=position-management",
+  ), {
+    userId: "fixture-user",
+    dependencies: {
+      now: () => NOW,
+      yahooProvider: yahoo.provider,
+      analyze: fixtureAnalyze,
+      loadTossCredentials: async () => null,
+    },
+  });
+  const payload = await response.json() as WorkspaceTestPayload;
+  const long = payload.horizonPlans[2];
+
+  assert.equal(response.status, 200);
+  assert.equal(payload.planMode, "position-management");
+  assert.equal(payload.currentPrice, 106);
+  assert.equal(long.entryPrice, 120);
+  assert.equal(long.currentPrice, 106);
+  assert.equal(long.planMode, "position-management");
+  assert.equal(long.managementState?.averagePrice, 120);
+  assert.equal(long.managementState?.currentPrice, 106);
+  assert.equal(payload.orderSubmissionAttempted, false);
+});
+
 test("stock auto retries with Yahoo when configured Toss market data fails", async () => {
   const yahoo = fixtureYahooProvider();
   const clientId = "fixture-client";
@@ -318,6 +364,190 @@ test("stock auto retries with Yahoo when configured Toss market data fails", asy
   assert.ok(payload.warnings.some((warning) => warning.includes("Toss 공식 시세 조회 실패")));
   assert.ok(payload.warnings.some((warning) => warning.includes("[REDACTED]")));
   assert.ok(payload.warnings.every((warning) => !warning.includes(clientId) && !warning.includes(clientSecret)));
+  assert.equal(payload.orderSubmissionAttempted, false);
+});
+
+test("stock auto supplements only an insufficient Toss hourly analysis with Yahoo", async () => {
+  const toss = fixtureOfficialProvider("toss");
+  const yahoo = fixtureYahooProvider();
+  const analyze = async (options: Parameters<typeof fixtureAnalyze>[0]) => {
+    const payload = await fixtureAnalyze(options);
+    if (options.metadata.dataSource === "toss" && options.timeframe === "1h") {
+      return {
+        ...payload,
+        analysisBasis: {
+          ...payload.analysisBasis,
+          atr14: null,
+          closedCandleCount: 10,
+        },
+      };
+    }
+    return payload;
+  };
+  const response = await handleMarketWorkspaceRequest(new Request(
+    "http://127.0.0.1/api/local/analysis/workspace?symbol=005930.KS&assetClass=stock&source=auto",
+  ), {
+    userId: "fixture-user",
+    dependencies: {
+      now: () => NOW,
+      createTossProvider: () => toss.provider,
+      yahooProvider: yahoo.provider,
+      analyze,
+      loadTossCredentials: async () => ({ clientId: "fixture-client", clientSecret: "fixture-secret" }),
+    },
+  });
+  const payload = await response.json() as WorkspaceTestPayload;
+
+  assert.equal(response.status, 200);
+  assert.equal(payload.dataSource, "toss");
+  assert.equal(payload.analyses.oneHour.dataSource, "yahoo");
+  assert.equal(payload.horizonPlans[0].basis.dataSource, "yahoo+toss");
+  assert.ok(payload.horizonPlans[0].stop);
+  assert.ok(payload.warnings.some((warning) => warning.includes("해당 시간봉만 Yahoo")));
+  assert.ok(yahoo.calls.includes("1h"));
+  assert.ok(!yahoo.calls.includes("1d"));
+  assert.equal(payload.orderSubmissionAttempted, false);
+});
+
+test("stock auto supplements insufficient Toss long-history inputs with Yahoo daily data", async () => {
+  const toss = fixtureOfficialProvider("toss");
+  const yahoo = fixtureYahooProvider();
+  const analyze = async (options: Parameters<typeof fixtureAnalyze>[0]) => {
+    const payload = await fixtureAnalyze(options);
+    if (options.metadata.dataSource === "toss" && options.timeframe === "1d") {
+      return {
+        ...payload,
+        analysisBasis: { ...payload.analysisBasis, weeklySma60: null },
+      };
+    }
+    return payload;
+  };
+  const response = await handleMarketWorkspaceRequest(new Request(
+    "http://127.0.0.1/api/local/analysis/workspace?symbol=005930.KS&assetClass=stock&source=auto",
+  ), {
+    userId: "fixture-user",
+    dependencies: {
+      now: () => NOW,
+      createTossProvider: () => toss.provider,
+      yahooProvider: yahoo.provider,
+      analyze,
+      loadTossCredentials: async () => ({ clientId: "fixture-client", clientSecret: "fixture-secret" }),
+    },
+  });
+  const payload = await response.json() as WorkspaceTestPayload;
+
+  assert.equal(response.status, 200);
+  assert.equal(payload.horizonPlans[2].basis.dataSource, "yahoo");
+  assert.ok((payload.horizonPlans[2].basis.weeklySma60 ?? 0) > 0);
+  assert.ok(payload.warnings.some((warning) => warning.includes("일봉만 Yahoo")));
+  assert.ok(yahoo.calls.includes("1d"));
+  assert.ok(!yahoo.calls.includes("1h"));
+  assert.equal(payload.orderSubmissionAttempted, false);
+});
+
+test("explicit Toss source keeps insufficient hourly inputs unavailable without Yahoo supplementation", async () => {
+  const toss = fixtureOfficialProvider("toss");
+  const yahoo = fixtureYahooProvider();
+  const analyze = async (options: Parameters<typeof fixtureAnalyze>[0]) => {
+    const payload = await fixtureAnalyze(options);
+    if (options.metadata.dataSource === "toss" && options.timeframe === "1h") {
+      return {
+        ...payload,
+        analysisBasis: { ...payload.analysisBasis, atr14: null, closedCandleCount: 10 },
+      };
+    }
+    if (options.metadata.dataSource === "toss" && options.timeframe === "1d") {
+      return {
+        ...payload,
+        analysisBasis: { ...payload.analysisBasis, weeklySma60: null },
+      };
+    }
+    return payload;
+  };
+  const response = await handleMarketWorkspaceRequest(new Request(
+    "http://127.0.0.1/api/local/analysis/workspace?symbol=005930.KS&assetClass=stock&source=toss",
+  ), {
+    userId: "fixture-user",
+    dependencies: {
+      now: () => NOW,
+      createTossProvider: () => toss.provider,
+      yahooProvider: yahoo.provider,
+      analyze,
+      loadTossCredentials: async () => ({ clientId: "fixture-client", clientSecret: "fixture-secret" }),
+    },
+  });
+  const payload = await response.json() as WorkspaceTestPayload;
+
+  assert.equal(response.status, 200);
+  assert.equal(payload.horizonPlans[0].status, "unavailable");
+  assert.equal(payload.horizonPlans[2].status, "wait");
+  assert.ok((payload.horizonPlans[2].stop.price ?? 0) > 0);
+  assert.deepEqual(yahoo.calls, []);
+  assert.equal(payload.orderSubmissionAttempted, false);
+});
+
+test("workspace requests 730 daily days for long-horizon indicators", async () => {
+  const yahoo = fixtureYahooProvider();
+  const requested: Array<{ timeframe: OfficialTimeframe; days: number }> = [];
+  const response = await handleMarketWorkspaceRequest(new Request(
+    "http://127.0.0.1/api/local/analysis/workspace?symbol=AAPL&assetClass=stock&source=yahoo",
+  ), {
+    userId: "fixture-user",
+    dependencies: {
+      now: () => NOW,
+      yahooProvider: yahoo.provider,
+      analyze: async (options) => {
+        requested.push({ timeframe: options.timeframe, days: options.days });
+        return fixtureAnalyze(options);
+      },
+      loadTossCredentials: async () => null,
+    },
+  });
+
+  assert.equal(response.status, 200);
+  assert.ok(requested.some((item) => item.timeframe === "1d" && item.days === 730));
+});
+
+test("a range-aware Yahoo fixture produces real 60-week inputs for the long plan", async () => {
+  const provider = {
+    getCandles: async (_symbol: string, options: GetCandlesOptions): Promise<MarketCandleResponse> => {
+      const intervalSeconds = options.interval === "1h" ? 3_600 : options.interval === "1wk" ? 604_800 : 86_400;
+      const count = options.interval === "1h" ? 160 : options.interval === "1wk" ? 104 : 730;
+      const end = Math.floor(NOW.getTime() / 1_000) - intervalSeconds * 2;
+      return {
+        timeZone: "America/New_York",
+        candles: Array.from({ length: count }, (_, index) => {
+          const close = 200 - (count - index) * 0.05;
+          return {
+            time: end - intervalSeconds * (count - index),
+            open: close - 0.4,
+            high: close + 0.8,
+            low: close - 0.8,
+            close,
+            volume: 100_000 + index * 100,
+          };
+        }),
+      };
+    },
+  };
+  const response = await handleMarketWorkspaceRequest(new Request(
+    "http://127.0.0.1/api/local/analysis/workspace?symbol=AAPL&assetClass=stock&source=yahoo",
+  ), {
+    userId: "fixture-user",
+    dependencies: {
+      now: () => NOW,
+      yahooProvider: provider,
+      loadTossCredentials: async () => null,
+    },
+  });
+  const payload = await response.json() as WorkspaceTestPayload;
+  const longPlan = payload.horizonPlans[2];
+
+  assert.equal(response.status, 200);
+  assert.notEqual(longPlan.status, "unavailable", JSON.stringify(longPlan));
+  assert.ok((longPlan.basis.weeklySma60 ?? 0) > 0);
+  assert.ok((longPlan.stop.price ?? 0) > 0);
+  assert.equal(longPlan.takeProfits?.length, 2);
   assert.equal(payload.orderSubmissionAttempted, false);
 });
 
