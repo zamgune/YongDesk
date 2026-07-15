@@ -15,18 +15,33 @@ import { selectCommunitySources } from "./sources.mts";
 import { mapWithConcurrency } from "./adapters/shared.mts";
 import type {
   CommunityPainResponse,
+  CommunityPainSourceResult,
   CommunitySourceId,
   NormalizedCommunityItem,
   SourceFetchContext,
 } from "./types.mts";
 
-type GetCommunityPainOptions = {
+export type GetCommunityPainOptions = {
   symbol: string;
   market?: string;
   includeBroad?: boolean;
   includeSpikeSources?: boolean;
   requestedSources?: CommunitySourceId[];
   limit?: number;
+  queryTerms?: string[];
+  summaryOnly?: boolean;
+  nowTimestamp?: number;
+};
+
+export type CommunityPainCollection = {
+  symbol: string;
+  canonicalSymbol: string;
+  market: string;
+  queryTerms: string[];
+  sources: CommunityPainSourceResult[];
+  allItems: NormalizedCommunityItem[];
+  sourceLabels: Map<string, string>;
+  nowTimestamp: number;
 };
 
 const pickSnippets = (
@@ -46,17 +61,20 @@ const pickSnippets = (
       kind: item.kind ?? "post",
     }));
 
-export const getCommunityPain = async ({
+export const collectCommunityPain = async ({
   symbol,
   market = "US",
   includeBroad = false,
   includeSpikeSources = false,
   requestedSources,
   limit = DEFAULT_ITEM_LIMIT,
-}: GetCommunityPainOptions): Promise<CommunityPainResponse> => {
+  queryTerms: requestedQueryTerms,
+  summaryOnly = false,
+  nowTimestamp = Date.now(),
+}: GetCommunityPainOptions): Promise<CommunityPainCollection> => {
   const canonicalSymbol = normalizeCommunitySymbol(symbol, market);
-  const queryTerms = buildQueryTerms(symbol, market);
-  const nowTimestamp = Date.now();
+  const queryTerms = requestedQueryTerms?.map((term) => term.trim()).filter(Boolean) ??
+    buildQueryTerms(symbol, market);
   const context: SourceFetchContext = {
     symbol,
     canonicalSymbol,
@@ -70,6 +88,7 @@ export const getCommunityPain = async ({
     nowTimestamp,
     sinceTimestamp: nowTimestamp - COMMUNITY_FALLBACK_LOOKBACK_HOURS * 60 * 60 * 1000,
     primarySinceTimestamp: nowTimestamp - COMMUNITY_LOOKBACK_HOURS * 60 * 60 * 1000,
+    summaryOnly,
   };
   const adapters = selectCommunitySources({
     requestedSources,
@@ -83,6 +102,33 @@ export const getCommunityPain = async ({
   );
   const sourceLabels = new Map(sources.map((source) => [source.id, source.label]));
   const allItems = sources.flatMap((source) => source.items);
+
+  return {
+    symbol,
+    canonicalSymbol,
+    market,
+    queryTerms,
+    sources,
+    allItems,
+    sourceLabels,
+    nowTimestamp,
+  };
+};
+
+export const getCommunityPain = async (
+  options: GetCommunityPainOptions,
+): Promise<CommunityPainResponse> => {
+  const collection = await collectCommunityPain(options);
+  const {
+    symbol,
+    canonicalSymbol,
+    market,
+    queryTerms,
+    sources,
+    allItems,
+    sourceLabels,
+    nowTimestamp,
+  } = collection;
   const scored = scoreCommunityPain(sources);
 
   return {
@@ -106,6 +152,12 @@ export const getCommunityPain = async ({
     signalItemCount: scored.signalItemCount,
     collectionWindowHours: COMMUNITY_FALLBACK_LOOKBACK_HOURS,
     lowEvidence: scored.lowEvidence,
+    qualityReasons: [
+      ...(scored.lowEvidence ? ["표본 부족"] : []),
+      ...(sources.filter((source) => source.status === "ok" && source.itemCount > 0).length === 1
+        ? ["단일 소스"]
+        : []),
+    ],
     factors: scored.factors,
     gajuaFactors: scored.gajuaFactors,
     sourceStats: sources.map((source) => ({
@@ -129,7 +181,7 @@ export const getCommunityPain = async ({
     snippets: pickSnippets(allItems, sourceLabels),
     painSnippets: pickSnippets(allItems.filter(itemHasPainSignal), sourceLabels),
     gajuaSnippets: pickSnippets(allItems.filter(itemHasGajuaSignal), sourceLabels),
-    generatedAt: new Date().toISOString(),
+    generatedAt: new Date(nowTimestamp).toISOString(),
     cacheTtlSeconds: COMMUNITY_CACHE_TTL_SECONDS,
   };
 };

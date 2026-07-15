@@ -15,13 +15,19 @@ process.env.STOCK_ANALYSIS_SIDECAR_BUILD_ID = "test-sidecar-build";
 process.env.STOCK_ANALYSIS_SKIP_AUTO_READINESS = "1";
 process.env.BROKER_CREDENTIAL_ENC_KEY = `test:${Buffer.alloc(32, 7).toString("base64")}`;
 
-const { handleLocalEngineRequest, startLocalEngineServer } = await import("../scripts/local_engine.mts");
+const {
+  handleLocalEngineRequest,
+  resetLocalSentimentMarketStateForTests,
+  SENTIMENT_MARKET_RANKING_REQUESTS,
+  startLocalEngineServer,
+} = await import("../scripts/local_engine.mts");
 const {
   DEFAULT_OFFICIAL_NEWS_SOURCES,
   fetchOfficialNewsEvents,
   parseOfficialRss,
 } = await import("../src/lib/local-engine/news.ts");
 const { clearTossTokenCache } = await import("../src/lib/toss/client.ts");
+const { saveBrokerCredentials } = await import("../src/lib/broker/credential-store.ts");
 const { LocalAutomationScheduler } = await import("../src/lib/automation/local-scheduler.ts");
 const {
   beginLocalCryptoOrderSubmission,
@@ -221,6 +227,272 @@ test("local engine rejects invalid community sentiment inputs", async () => {
     "http://127.0.0.1:38771/api/community-pain/NVDA?market=%40%40&sources=blind",
   ));
   assert.equal(invalidMarket.status, 400);
+});
+
+test("sentiment overview validates inputs and fixture ratios", async () => {
+  const invalidSymbol = await handleLocalEngineRequest(new Request(
+    "http://127.0.0.1:38771/api/local/sentiment-overview?symbol=%20&market=KR",
+  ));
+  const invalidMarket = await handleLocalEngineRequest(new Request(
+    "http://127.0.0.1:38771/api/local/sentiment-overview?symbol=AAPL&market=CRYPTO",
+  ));
+  assert.equal(invalidSymbol.status, 400);
+  assert.equal(invalidMarket.status, 400);
+
+  const previousFixtureMode = process.env.STOCK_ANALYSIS_MARKET_FIXTURE_MODE;
+  process.env.STOCK_ANALYSIS_MARKET_FIXTURE_MODE = "1";
+  try {
+    for (const [symbol, market] of [["005930.KS", "KR"], ["AAPL", "US"]] as const) {
+      const response = await handleLocalEngineRequest(new Request(
+        `http://127.0.0.1:38771/api/local/sentiment-overview?symbol=${symbol}&market=${market}`,
+      ));
+      assert.equal(response.status, 200);
+      const payload = await response.json() as {
+        symbol?: string;
+        instrument?: {
+          krCommunity?: { status?: string; reason?: string; ratios?: Record<string, number> | null };
+          globalCommunity?: { ratios?: Record<string, number> | null };
+        };
+        marketComparison?: {
+          status?: string;
+          kr?: { ratios?: Record<string, number> | null };
+          us?: { ratios?: Record<string, number> | null };
+        };
+      };
+      assert.equal(payload.symbol, symbol);
+      assert.equal(payload.marketComparison?.status, "ready");
+      const availableRatios = [
+        payload.instrument?.krCommunity?.ratios,
+        payload.instrument?.globalCommunity?.ratios,
+        payload.marketComparison?.kr?.ratios,
+        payload.marketComparison?.us?.ratios,
+      ].filter((value): value is Record<string, number> => value !== null && value !== undefined);
+      assert(availableRatios.every((value) =>
+        Object.values(value).reduce((sum, ratio) => sum + ratio, 0) === 100
+      ));
+      if (market === "US") {
+        assert.equal(payload.instrument?.krCommunity?.status, "unavailable");
+        assert.equal(payload.instrument?.krCommunity?.reason, "unsupported_source_coverage");
+      }
+    }
+  } finally {
+    if (previousFixtureMode === undefined) delete process.env.STOCK_ANALYSIS_MARKET_FIXTURE_MODE;
+    else process.env.STOCK_ANALYSIS_MARKET_FIXTURE_MODE = previousFixtureMode;
+  }
+});
+
+test("sentiment market rankings use Toss trading amount top 30 without fallback options", () => {
+  assert.deepEqual(SENTIMENT_MARKET_RANKING_REQUESTS, [
+    {
+      type: "MARKET_TRADING_AMOUNT",
+      marketCountry: "KR",
+      duration: "1d",
+      count: 30,
+      excludeInvestmentCaution: false,
+    },
+    {
+      type: "MARKET_TRADING_AMOUNT",
+      marketCountry: "US",
+      duration: "1d",
+      count: 30,
+      excludeInvestmentCaution: false,
+    },
+  ]);
+});
+
+test("sentiment overview hides market comparison with no source credentials and does not fetch a fallback", async () => {
+  const previousUserId = process.env.STOCK_ANALYSIS_LOCAL_USER_ID;
+  const previousRedditClientId = process.env.REDDIT_CLIENT_ID;
+  const previousRedditSecret = process.env.REDDIT_CLIENT_SECRET;
+  const originalFetch = globalThis.fetch;
+  let fetchCount = 0;
+  process.env.STOCK_ANALYSIS_LOCAL_USER_ID = `sentiment-no-source-${Date.now()}`;
+  delete process.env.REDDIT_CLIENT_ID;
+  delete process.env.REDDIT_CLIENT_SECRET;
+  globalThis.fetch = (async () => {
+    fetchCount += 1;
+    throw new Error("sentiment source fallback must not run");
+  }) as typeof fetch;
+  try {
+    const response = await handleLocalEngineRequest(new Request(
+      "http://127.0.0.1:38771/api/local/sentiment-overview?symbol=NOFETCH&market=US",
+    ));
+    assert.equal(response.status, 200);
+    const payload = await response.json() as {
+      instrument?: { krCommunity?: { status?: string; reason?: string } };
+      marketComparison?: { status?: string; kr?: unknown; us?: unknown };
+    };
+    assert.equal(payload.instrument?.krCommunity?.status, "unavailable");
+    assert.equal(payload.instrument?.krCommunity?.reason, "unsupported_source_coverage");
+    assert.equal(payload.marketComparison?.status, "configuration_required");
+    assert.equal(payload.marketComparison?.kr, null);
+    assert.equal(payload.marketComparison?.us, null);
+    assert.equal(fetchCount, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (previousUserId === undefined) delete process.env.STOCK_ANALYSIS_LOCAL_USER_ID;
+    else process.env.STOCK_ANALYSIS_LOCAL_USER_ID = previousUserId;
+    if (previousRedditClientId === undefined) delete process.env.REDDIT_CLIENT_ID;
+    else process.env.REDDIT_CLIENT_ID = previousRedditClientId;
+    if (previousRedditSecret === undefined) delete process.env.REDDIT_CLIENT_SECRET;
+    else process.env.REDDIT_CLIENT_SECRET = previousRedditSecret;
+  }
+});
+
+test("sentiment instrument cache is single-flight and throttles repeated forced refresh", async () => {
+  const previousUserId = process.env.STOCK_ANALYSIS_LOCAL_USER_ID;
+  const previousRedditClientId = process.env.REDDIT_CLIENT_ID;
+  const previousRedditSecret = process.env.REDDIT_CLIENT_SECRET;
+  process.env.STOCK_ANALYSIS_LOCAL_USER_ID = `sentiment-cache-${Date.now()}`;
+  delete process.env.REDDIT_CLIENT_ID;
+  delete process.env.REDDIT_CLIENT_SECRET;
+  const endpoint = "http://127.0.0.1:38771/api/local/sentiment-overview?symbol=654321.KS&market=KR";
+  try {
+    await withMockFetch([
+      new Response("<html><body>empty</body></html>"),
+      new Response("<html><body>empty</body></html>"),
+    ], async (calls) => {
+      const [first, shared] = await Promise.all([
+        handleLocalEngineRequest(new Request(endpoint)),
+        handleLocalEngineRequest(new Request(endpoint)),
+      ]);
+      assert.equal(first.status, 200);
+      assert.equal(shared.status, 200);
+      await handleLocalEngineRequest(new Request(endpoint));
+      await handleLocalEngineRequest(new Request(`${endpoint}&refresh=1`));
+      await handleLocalEngineRequest(new Request(`${endpoint}&refresh=1`));
+      // Paxnet reads two list pages per collection. One shared request plus one
+      // accepted forced refresh therefore produces two collections, not five.
+      assert.equal(calls.length, 4);
+      assert(calls.every((call) => call.url.includes("paxnet.co.kr")));
+    });
+  } finally {
+    if (previousUserId === undefined) delete process.env.STOCK_ANALYSIS_LOCAL_USER_ID;
+    else process.env.STOCK_ANALYSIS_LOCAL_USER_ID = previousUserId;
+    if (previousRedditClientId === undefined) delete process.env.REDDIT_CLIENT_ID;
+    else process.env.REDDIT_CLIENT_ID = previousRedditClientId;
+    if (previousRedditSecret === undefined) delete process.env.REDDIT_CLIENT_SECRET;
+    else process.env.REDDIT_CLIENT_SECRET = previousRedditSecret;
+  }
+});
+
+test("sentiment instrument failures use the one-minute transient cache", async () => {
+  const previousUserId = process.env.STOCK_ANALYSIS_LOCAL_USER_ID;
+  const previousRedditClientId = process.env.REDDIT_CLIENT_ID;
+  const previousRedditSecret = process.env.REDDIT_CLIENT_SECRET;
+  process.env.STOCK_ANALYSIS_LOCAL_USER_ID = `sentiment-failure-cache-${Date.now()}`;
+  delete process.env.REDDIT_CLIENT_ID;
+  delete process.env.REDDIT_CLIENT_SECRET;
+  const endpoint = "http://127.0.0.1:38771/api/local/sentiment-overview?symbol=654322.KS&market=KR";
+  try {
+    await withMockFetch([], async (calls) => {
+      const first = await handleLocalEngineRequest(new Request(endpoint));
+      const second = await handleLocalEngineRequest(new Request(endpoint));
+      assert.equal(first.status, 200);
+      assert.equal(second.status, 200);
+      assert.equal(calls.length, 1);
+      const payload = await first.json() as {
+        instrument?: { krCommunity?: { status?: string } };
+      };
+      assert.equal(payload.instrument?.krCommunity?.status, "error");
+    });
+  } finally {
+    if (previousUserId === undefined) delete process.env.STOCK_ANALYSIS_LOCAL_USER_ID;
+    else process.env.STOCK_ANALYSIS_LOCAL_USER_ID = previousUserId;
+    if (previousRedditClientId === undefined) delete process.env.REDDIT_CLIENT_ID;
+    else process.env.REDDIT_CLIENT_ID = previousRedditClientId;
+    if (previousRedditSecret === undefined) delete process.env.REDDIT_CLIENT_SECRET;
+    else process.env.REDDIT_CLIENT_SECRET = previousRedditSecret;
+  }
+});
+
+test("sentiment market cache returns warming first and a persisted stale aggregate without raw evidence", async () => {
+  const previousUserId = process.env.STOCK_ANALYSIS_LOCAL_USER_ID;
+  const previousRedditClientId = process.env.REDDIT_CLIENT_ID;
+  const previousRedditSecret = process.env.REDDIT_CLIENT_SECRET;
+  const userId = `sentiment-market-cache-${Date.now()}`;
+  process.env.STOCK_ANALYSIS_LOCAL_USER_ID = userId;
+  process.env.REDDIT_CLIENT_ID = "sentiment-test-client";
+  process.env.REDDIT_CLIENT_SECRET = "sentiment-test-secret";
+  try {
+    await saveBrokerCredentials({
+      userId,
+      clientId: "sentiment-toss-client",
+      clientSecret: "sentiment-toss-secret",
+      status: "verified",
+    });
+
+    await withMockFetch([
+      jsonResponse({ error: "invalid_client", error_description: "fixture failure" }, { status: 401 }),
+    ], async (calls) => {
+      const response = await handleLocalEngineRequest(new Request(
+        "http://127.0.0.1:38771/api/local/sentiment-overview?symbol=NOFETCH&market=US",
+      ));
+      assert.equal(response.status, 200);
+      const payload = await response.json() as { marketComparison?: { status?: string } };
+      assert.equal(payload.marketComparison?.status, "warming");
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      assert.equal(calls.length, 1);
+      assert(calls[0].url.includes("/oauth2/token"));
+    });
+
+    resetLocalSentimentMarketStateForTests();
+    const generatedAt = new Date(Date.now() - 60 * 60 * 1_000).toISOString();
+    const storedBucket = {
+      status: "ready",
+      ratios: { bullishHype: 40, bearishCriticism: 30, mixed: 10, neutral: 20 },
+      sampleCount: 120,
+      effectiveWindowHours: 24,
+      coverageCount: 22,
+      universeCount: 30,
+      evidence: [],
+      sourceStats: [],
+      stale: false,
+    };
+    await writeFile(join(process.env.STOCK_ANALYSIS_STORAGE_ROOT!, "sentiment-market-overview.json"), JSON.stringify({
+      version: 1,
+      savedAt: generatedAt,
+      comparison: {
+        status: "ready",
+        kr: { ...storedBucket, id: "market-kr" },
+        us: { ...storedBucket, id: "market-us" },
+        generatedAt,
+        stale: false,
+      },
+    }), "utf8");
+
+    await withMockFetch([
+      jsonResponse({ error: "invalid_client", error_description: "fixture failure" }, { status: 401 }),
+    ], async (calls) => {
+      const response = await handleLocalEngineRequest(new Request(
+        "http://127.0.0.1:38771/api/local/sentiment-overview?symbol=NOFETCH&market=US",
+      ));
+      const payload = await response.json() as {
+        stale?: boolean;
+        marketComparison?: {
+          status?: string;
+          stale?: boolean;
+          kr?: { stale?: boolean; ratios?: Record<string, number>; evidence?: unknown[] };
+        };
+      };
+      assert.equal(payload.stale, true);
+      assert.equal(payload.marketComparison?.status, "ready");
+      assert.equal(payload.marketComparison?.stale, true);
+      assert.equal(payload.marketComparison?.kr?.stale, true);
+      assert.equal(payload.marketComparison?.kr?.ratios?.bullishHype, 40);
+      assert.deepEqual(payload.marketComparison?.kr?.evidence, []);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      assert.equal(calls.length, 1);
+    });
+  } finally {
+    resetLocalSentimentMarketStateForTests();
+    if (previousUserId === undefined) delete process.env.STOCK_ANALYSIS_LOCAL_USER_ID;
+    else process.env.STOCK_ANALYSIS_LOCAL_USER_ID = previousUserId;
+    if (previousRedditClientId === undefined) delete process.env.REDDIT_CLIENT_ID;
+    else process.env.REDDIT_CLIENT_ID = previousRedditClientId;
+    if (previousRedditSecret === undefined) delete process.env.REDDIT_CLIENT_SECRET;
+    else process.env.REDDIT_CLIENT_SECRET = previousRedditSecret;
+  }
 });
 
 test("local engine community refresh bypasses a completed cache entry", async () => {

@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { readFileSync } from "node:fs";
+import { dirname } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import type { AutomationStrategyConfig } from "../src/domain/automation.ts";
@@ -173,6 +175,7 @@ import {
   COMMUNITY_CACHE_MAX_ENTRIES,
   COMMUNITY_CACHE_TTL_SECONDS,
 } from "../src/lib/community-pain/config.mts";
+import { normalizeCommunitySymbol } from "../src/lib/community-pain/normalize.mts";
 import { getCommunityPain } from "../src/lib/community-pain/service.mts";
 import type {
   CommunityPainResponse,
@@ -194,6 +197,19 @@ import {
   getStoredWatchlistSignals,
   scanWatchlistSignals,
 } from "../src/lib/local-engine/watchlist-signals.ts";
+import { stockAnalysisStoragePath } from "../src/lib/local-storage.ts";
+import {
+  buildInstrumentSentiment,
+  buildMarketSentimentBucket,
+  configurationRequiredMarketComparison,
+  warmingMarketComparison,
+  type SentimentMarketBucket,
+  type SentimentMarketComparison,
+  type SentimentOverviewBucket,
+  type SentimentOverviewMarket,
+  type SentimentOverviewResponse,
+  type SentimentOverviewStatus,
+} from "../src/use-cases/market/get-sentiment-overview.ts";
 import { buildPaperTradingCandidates } from "../src/use-cases/trading/build-paper-trading-candidates.ts";
 import {
   PAPER_STRATEGY_VERSION,
@@ -280,6 +296,55 @@ const COMMUNITY_SOURCE_IDS = new Set<CommunitySourceId>([
 const COMMUNITY_TRANSIENT_FAILURE_CACHE_TTL_SECONDS = 60;
 const localCommunityCache = new Map<string, { expiresAt: number; payload: CommunityPainResponse }>();
 const localCommunityInFlight = new Map<string, Promise<CommunityPainResponse>>();
+const SENTIMENT_INSTRUMENT_CACHE_TTL_MS = 30 * 60 * 1_000;
+const SENTIMENT_INSTRUMENT_FAILURE_CACHE_TTL_MS = 60 * 1_000;
+const SENTIMENT_INSTRUMENT_REFRESH_THROTTLE_MS = 30 * 1_000;
+const SENTIMENT_MARKET_CACHE_TTL_MS = 30 * 60 * 1_000;
+const SENTIMENT_MARKET_STALE_MAX_AGE_MS = 24 * 60 * 60 * 1_000;
+const SENTIMENT_MARKET_FAILURE_BACKOFF_MS = 5 * 60 * 1_000;
+const SENTIMENT_MARKET_CACHE_PATH = stockAnalysisStoragePath("sentiment-market-overview.json");
+type SentimentInstrument = SentimentOverviewResponse["instrument"];
+type SentimentInstrumentCacheEntry = {
+  expiresAt: number;
+  payload?: SentimentInstrument;
+  error?: string;
+};
+type SentimentMarketCacheEntry = {
+  cachedAt: number;
+  payload: SentimentMarketComparison;
+};
+const localSentimentInstrumentCache = new Map<string, SentimentInstrumentCacheEntry>();
+const localSentimentInstrumentInFlight = new Map<string, Promise<SentimentInstrument>>();
+const localSentimentInstrumentRefreshAt = new Map<string, number>();
+let localSentimentMarketCache: SentimentMarketCacheEntry | null = null;
+let localSentimentMarketCacheLoad: Promise<void> | null = null;
+let localSentimentMarketInFlight: Promise<void> | null = null;
+let localSentimentMarketFailureUntil = 0;
+let localSentimentMarketFailureReason: string | null = null;
+export const SENTIMENT_MARKET_RANKING_REQUESTS = [
+  {
+    type: "MARKET_TRADING_AMOUNT",
+    marketCountry: "KR",
+    duration: "1d",
+    count: 30,
+    excludeInvestmentCaution: false,
+  },
+  {
+    type: "MARKET_TRADING_AMOUNT",
+    marketCountry: "US",
+    duration: "1d",
+    count: 30,
+    excludeInvestmentCaution: false,
+  },
+] as const;
+
+export const resetLocalSentimentMarketStateForTests = () => {
+  localSentimentMarketCache = null;
+  localSentimentMarketCacheLoad = null;
+  localSentimentMarketInFlight = null;
+  localSentimentMarketFailureUntil = 0;
+  localSentimentMarketFailureReason = null;
+};
 const localUserId = () => process.env.STOCK_ANALYSIS_LOCAL_USER_ID?.trim() || "local-macos-user";
 const developerModeEnabled = () => process.env.STOCK_ANALYSIS_DEVELOPER_MODE === "1" || process.env.NODE_ENV === "test";
 let localAutomationScheduler: LocalAutomationScheduler | null = null;
@@ -6109,6 +6174,413 @@ const localCommunityPainResponse = async (url: URL, encodedSymbol: string) => {
   }
 };
 
+const sentimentInstrumentCacheKey = (symbol: string, market: SentimentOverviewMarket) =>
+  `${market}:${symbol.trim().toUpperCase()}`;
+
+const readSentimentInstrumentCache = (
+  cacheKey: string,
+  now: number,
+  allowExpired: boolean,
+): SentimentInstrument | null => {
+  const cached = localSentimentInstrumentCache.get(cacheKey);
+  if (!cached || (!allowExpired && cached.expiresAt <= now)) {
+    return null;
+  }
+  if (cached.error) {
+    throw new Error(cached.error);
+  }
+  return cached.payload ?? null;
+};
+
+const getLocalSentimentInstrument = async ({
+  symbol,
+  market,
+  forceRefresh,
+}: {
+  symbol: string;
+  market: SentimentOverviewMarket;
+  forceRefresh: boolean;
+}): Promise<SentimentInstrument> => {
+  const cacheKey = sentimentInstrumentCacheKey(symbol, market);
+  const now = Date.now();
+  const lastRefreshAt = localSentimentInstrumentRefreshAt.get(cacheKey) ?? 0;
+  const refreshThrottled = forceRefresh && now - lastRefreshAt < SENTIMENT_INSTRUMENT_REFRESH_THROTTLE_MS;
+  const cached = readSentimentInstrumentCache(cacheKey, now, refreshThrottled);
+  if ((!forceRefresh || refreshThrottled) && cached) {
+    return cached;
+  }
+  const active = localSentimentInstrumentInFlight.get(cacheKey);
+  if (active) {
+    return active;
+  }
+  if (forceRefresh) {
+    localSentimentInstrumentRefreshAt.set(cacheKey, now);
+  }
+  const pending = buildInstrumentSentiment({ symbol, market })
+    .then((payload) => {
+      const transientFailure = payload.krCommunity.status === "error" || payload.globalCommunity.status === "error";
+      localSentimentInstrumentCache.set(cacheKey, {
+        expiresAt: Date.now() + (transientFailure
+          ? SENTIMENT_INSTRUMENT_FAILURE_CACHE_TTL_MS
+          : SENTIMENT_INSTRUMENT_CACHE_TTL_MS),
+        payload,
+      });
+      return payload;
+    })
+    .catch((error: unknown) => {
+      const message = errorMessage(error);
+      localSentimentInstrumentCache.set(cacheKey, {
+        expiresAt: Date.now() + SENTIMENT_INSTRUMENT_FAILURE_CACHE_TTL_MS,
+        error: message,
+      });
+      throw error;
+    })
+    .finally(() => {
+      localSentimentInstrumentInFlight.delete(cacheKey);
+    });
+  localSentimentInstrumentInFlight.set(cacheKey, pending);
+  return pending;
+};
+
+const markSentimentMarketStale = (
+  comparison: SentimentMarketComparison,
+): SentimentMarketComparison => ({
+  ...comparison,
+  stale: true,
+  kr: comparison.kr ? { ...comparison.kr, stale: true } : null,
+  us: comparison.us ? { ...comparison.us, stale: true } : null,
+});
+
+const sanitizeSentimentMarketBucket = (
+  bucket: SentimentMarketBucket | null,
+): SentimentMarketBucket | null => bucket
+  ? {
+    ...bucket,
+    sourceStats: [],
+    evidence: [],
+  }
+  : null;
+
+const sanitizeSentimentMarketComparison = (
+  comparison: SentimentMarketComparison,
+): SentimentMarketComparison => ({
+  ...comparison,
+  kr: sanitizeSentimentMarketBucket(comparison.kr),
+  us: sanitizeSentimentMarketBucket(comparison.us),
+});
+
+const parseStoredSentimentMarketComparison = (value: unknown): SentimentMarketComparison | null => {
+  if (!value || typeof value !== "object") return null;
+  const candidate = value as Partial<SentimentMarketComparison>;
+  if (
+    typeof candidate.status !== "string" ||
+    typeof candidate.generatedAt !== "string" ||
+    typeof candidate.stale !== "boolean"
+  ) {
+    return null;
+  }
+  return candidate as SentimentMarketComparison;
+};
+
+const loadStoredSentimentMarketComparison = async () => {
+  if (localSentimentMarketCacheLoad) {
+    return localSentimentMarketCacheLoad;
+  }
+  localSentimentMarketCacheLoad = (async () => {
+    try {
+      const parsed = JSON.parse(await readFile(SENTIMENT_MARKET_CACHE_PATH, "utf8")) as {
+        savedAt?: unknown;
+        comparison?: unknown;
+      };
+      const comparison = parseStoredSentimentMarketComparison(parsed.comparison);
+      const cachedAt = typeof parsed.savedAt === "string" ? Date.parse(parsed.savedAt) : Number.NaN;
+      if (comparison && Number.isFinite(cachedAt)) {
+        localSentimentMarketCache = { cachedAt, payload: comparison };
+      }
+    } catch {
+      // The aggregate cache is optional and is rebuilt from the configured read-only sources.
+    }
+  })();
+  return localSentimentMarketCacheLoad;
+};
+
+const persistSentimentMarketComparison = async (
+  cachedAt: number,
+  comparison: SentimentMarketComparison,
+) => {
+  await mkdir(dirname(SENTIMENT_MARKET_CACHE_PATH), { recursive: true });
+  await writeFile(SENTIMENT_MARKET_CACHE_PATH, JSON.stringify({
+    version: 1,
+    savedAt: new Date(cachedAt).toISOString(),
+    comparison: sanitizeSentimentMarketComparison(comparison),
+  }, null, 2), "utf8");
+};
+
+const sentimentMarketComparisonStatus = (
+  kr: SentimentMarketBucket,
+  us: SentimentMarketBucket,
+): SentimentOverviewStatus => kr.status === "unavailable" || us.status === "unavailable"
+  ? "unavailable"
+  : kr.status === "low_evidence" || us.status === "low_evidence"
+    ? "low_evidence"
+    : "ready";
+
+const sentimentMarketComparisonReason = (status: SentimentOverviewStatus) => status === "unavailable"
+  ? "한국·미국 시장 표본이 모두 준비돼야 시장 비교를 표시합니다."
+  : status === "low_evidence"
+    ? "일부 시장 표본이 적어 참고용으로만 표시합니다."
+    : undefined;
+
+type StoredTossCredentials = NonNullable<Awaited<ReturnType<typeof loadDecryptedCredentials>>>;
+
+const refreshSentimentMarketComparison = (
+  credentials: StoredTossCredentials,
+): Promise<void> => {
+  if (localSentimentMarketInFlight) {
+    return localSentimentMarketInFlight;
+  }
+  const pending = (async () => {
+    try {
+      const client = createTossClient(credentials);
+      const [krRanking, usRanking] = await Promise.all(
+        SENTIMENT_MARKET_RANKING_REQUESTS.map((options) => client.getRankings(options)),
+      );
+      const krSymbols = [...new Set(krRanking.rankings.map((item) => item.symbol.trim()).filter(Boolean))]
+        .slice(0, 30);
+      const usSymbols = [...new Set(usRanking.rankings.map((item) => item.symbol.trim()).filter(Boolean))]
+        .slice(0, 30);
+      const now = Date.now();
+      const [kr, us] = await Promise.all([
+        buildMarketSentimentBucket({
+          id: "market-kr",
+          market: "KR",
+          symbols: krSymbols,
+          rankedAt: krRanking.rankedAt,
+          nowTimestamp: now,
+        }),
+        buildMarketSentimentBucket({
+          id: "market-us",
+          market: "US",
+          symbols: usSymbols,
+          rankedAt: usRanking.rankedAt,
+          nowTimestamp: now,
+        }),
+      ]);
+      const status = sentimentMarketComparisonStatus(kr, us);
+      const comparison: SentimentMarketComparison = {
+        status,
+        reason: sentimentMarketComparisonReason(status),
+        kr,
+        us,
+        generatedAt: new Date(now).toISOString(),
+        stale: false,
+      };
+      localSentimentMarketCache = { cachedAt: now, payload: comparison };
+      localSentimentMarketFailureUntil = 0;
+      localSentimentMarketFailureReason = null;
+      await persistSentimentMarketComparison(now, comparison).catch(() => undefined);
+    } catch (error) {
+      localSentimentMarketFailureUntil = Date.now() + SENTIMENT_MARKET_FAILURE_BACKOFF_MS;
+      localSentimentMarketFailureReason = errorMessage(error);
+    } finally {
+      localSentimentMarketInFlight = null;
+    }
+  })();
+  localSentimentMarketInFlight = pending;
+  return pending;
+};
+
+const sentimentMarketFailureComparison = (reason: string): SentimentMarketComparison => ({
+  status: "error",
+  reason,
+  kr: null,
+  us: null,
+  generatedAt: new Date().toISOString(),
+  stale: false,
+});
+
+const getLocalSentimentMarketComparison = async (): Promise<SentimentMarketComparison> => {
+  const [credentials] = await Promise.all([
+    loadDecryptedCredentials(localUserId(), "toss").catch(() => null),
+  ]);
+  const redditConfigured = Boolean(
+    process.env.REDDIT_CLIENT_ID?.trim() && process.env.REDDIT_CLIENT_SECRET?.trim(),
+  );
+  if (!credentials || !redditConfigured) {
+    const missing = [
+      !credentials ? "Toss OpenAPI" : null,
+      !redditConfigured ? "Reddit OAuth" : null,
+    ].filter((item): item is string => Boolean(item));
+    return configurationRequiredMarketComparison(
+      `${missing.join(" · ")} 연결 후 한국·미국 거래대금 상위 30종목 시장 비교를 표시합니다.`,
+    );
+  }
+  await loadStoredSentimentMarketComparison();
+  const now = Date.now();
+  const cached = localSentimentMarketCache;
+  if (cached && now - cached.cachedAt <= SENTIMENT_MARKET_CACHE_TTL_MS) {
+    return cached.payload;
+  }
+  const withinFailureBackoff = now < localSentimentMarketFailureUntil;
+  if (cached && now - cached.cachedAt <= SENTIMENT_MARKET_STALE_MAX_AGE_MS) {
+    if (!withinFailureBackoff) {
+      void refreshSentimentMarketComparison(credentials);
+    }
+    return markSentimentMarketStale(cached.payload);
+  }
+  if (withinFailureBackoff) {
+    return sentimentMarketFailureComparison(
+      `시장 민심 집계를 다시 시도하기 전 대기 중입니다. ${localSentimentMarketFailureReason ?? "외부 소스를 확인해 주세요."}`,
+    );
+  }
+  void refreshSentimentMarketComparison(credentials);
+  return warmingMarketComparison();
+};
+
+const fixtureSentimentBucket = ({
+  id,
+  sourceId,
+  sourceLabel,
+  ratios,
+}: {
+  id: string;
+  sourceId: string;
+  sourceLabel: string;
+  ratios: NonNullable<SentimentOverviewBucket["ratios"]>;
+}): SentimentOverviewBucket => ({
+  id,
+  status: "ready",
+  ratios,
+  sampleCount: 24,
+  uniqueAuthorCount: 18,
+  effectiveWindowHours: 24,
+  pain: 32,
+  fomo: 68,
+  toxicity: 14,
+  sourceStats: [{ id: sourceId, label: sourceLabel, status: "ok", itemCount: 24 }],
+  evidence: [],
+  generatedAt: "2026-07-15T00:00:00.000Z",
+  stale: false,
+});
+
+const fixtureSentimentMarketBucket = (
+  id: "market-kr" | "market-us",
+  ratios: NonNullable<SentimentOverviewBucket["ratios"]>,
+): SentimentMarketBucket => ({
+  ...fixtureSentimentBucket({
+    id,
+    sourceId: id === "market-kr" ? "paxnet" : "reddit",
+    sourceLabel: id === "market-kr" ? "팍스넷" : "Reddit",
+    ratios,
+  }),
+  sampleCount: 180,
+  uniqueAuthorCount: 140,
+  basis: "toss_market_trading_amount_1d",
+  universeCount: 30,
+  coverageCount: 30,
+  bullishBreadth: id === "market-kr" ? 19 : 17,
+  bearishBreadth: id === "market-kr" ? 8 : 10,
+  rankedAt: "2026-07-15T00:00:00.000Z",
+});
+
+const fixtureUnsupportedSentimentBucket = (): SentimentOverviewBucket => ({
+  id: "instrument-kr",
+  status: "unavailable",
+  ratios: null,
+  sampleCount: 0,
+  uniqueAuthorCount: null,
+  effectiveWindowHours: 24,
+  pain: 0,
+  fomo: 0,
+  toxicity: 0,
+  sourceStats: [{
+    id: "unsupported_source_coverage",
+    label: "한국 커뮤니티",
+    status: "unsupported_source_coverage",
+    reason: "현재 미국 종목의 한국 커뮤니티 수집 소스를 지원하지 않습니다.",
+    itemCount: 0,
+  }],
+  evidence: [],
+  reason: "unsupported_source_coverage",
+  generatedAt: "2026-07-15T00:00:00.000Z",
+  stale: false,
+});
+
+const fixtureSentimentOverview = (
+  symbol: string,
+  market: SentimentOverviewMarket,
+): SentimentOverviewResponse => {
+  const generatedAt = "2026-07-15T00:00:00.000Z";
+  return {
+    symbol,
+    canonicalSymbol: normalizeCommunitySymbol(symbol, market === "KR" ? "KOSPI" : "US"),
+    symbolMarket: market,
+    generatedAt,
+    stale: false,
+    instrument: {
+      krCommunity: market === "US"
+        ? fixtureUnsupportedSentimentBucket()
+        : fixtureSentimentBucket({
+          id: "instrument-kr",
+          sourceId: "paxnet",
+          sourceLabel: "팍스넷",
+          ratios: { bullishHype: 52, bearishCriticism: 21, mixed: 12, neutral: 15 },
+        }),
+      globalCommunity: fixtureSentimentBucket({
+        id: "instrument-global",
+        sourceId: "reddit",
+        sourceLabel: "Reddit",
+        ratios: { bullishHype: 44, bearishCriticism: 25, mixed: 13, neutral: 18 },
+      }),
+    },
+    marketComparison: {
+      status: "ready",
+      kr: fixtureSentimentMarketBucket(
+        "market-kr",
+        { bullishHype: 39, bearishCriticism: 28, mixed: 12, neutral: 21 },
+      ),
+      us: fixtureSentimentMarketBucket(
+        "market-us",
+        { bullishHype: 42, bearishCriticism: 27, mixed: 11, neutral: 20 },
+      ),
+      generatedAt,
+      stale: false,
+    },
+  };
+};
+
+const localSentimentOverviewResponse = async (url: URL) => {
+  const symbol = url.searchParams.get("symbol")?.trim().toUpperCase() ?? "";
+  if (!symbol || symbol.length > 32 || !/^[A-Z0-9._^-]+$/.test(symbol)) {
+    return jsonResponse({ error: "유효한 종목 코드가 필요합니다." }, { status: 400 });
+  }
+  const requestedMarket = url.searchParams.get("market")?.trim().toUpperCase();
+  if (requestedMarket !== "KR" && requestedMarket !== "US") {
+    return jsonResponse({ error: "market은 KR 또는 US여야 합니다." }, { status: 400 });
+  }
+  const market: SentimentOverviewMarket = requestedMarket;
+  if (process.env.STOCK_ANALYSIS_MARKET_FIXTURE_MODE === "1") {
+    return jsonResponse({ ...fixtureSentimentOverview(symbol, market) });
+  }
+  const forceRefresh = parseCommunityBoolean(url.searchParams.get("refresh"));
+  const [instrument, marketComparison] = await Promise.all([
+    getLocalSentimentInstrument({ symbol, market, forceRefresh }),
+    getLocalSentimentMarketComparison(),
+  ]);
+  const generatedAt = [instrument.krCommunity.generatedAt, instrument.globalCommunity.generatedAt]
+    .toSorted((left, right) => Date.parse(right) - Date.parse(left))[0] ?? new Date().toISOString();
+  const payload: SentimentOverviewResponse = {
+    symbol,
+    canonicalSymbol: normalizeCommunitySymbol(symbol, market === "KR" ? "KOSPI" : "US"),
+    symbolMarket: market,
+    generatedAt,
+    stale: marketComparison.stale,
+    instrument,
+    marketComparison,
+  };
+  return jsonResponse({ ...payload });
+};
+
 export const handleLocalEngineRequest = async (request: Request): Promise<Response> => {
   const url = new URL(request.url);
   try {
@@ -6162,6 +6634,9 @@ export const handleLocalEngineRequest = async (request: Request): Promise<Respon
     }
     if (request.method === "GET" && url.pathname === "/api/local/chart") {
       return localChartResponse(request, url);
+    }
+    if (request.method === "GET" && url.pathname === "/api/local/sentiment-overview") {
+      return localSentimentOverviewResponse(url);
     }
     if (request.method === "GET" && url.pathname === "/api/paper-trading/state") {
       return getPaperTradingStateResponse();

@@ -111,6 +111,7 @@ type SidecarEndpointChecks = {
   workerControl: true;
   automationScheduler: true;
   symbolSearch: true;
+  sentimentOverviewNoCredential: true;
   cryptoExchangeSafety: true;
   cryptoStrategyLifecycle: true;
   automationDryRun: true;
@@ -634,6 +635,9 @@ const verifySidecar = async (expectedVersion: string) => {
     const credentialState = await fetchJson(`${baseUrl}/api/local/broker/credentials`);
     const strategyState = await fetchJson(`${baseUrl}/api/local/strategy-configs`);
     const symbolSearchState = await fetchJson(`${baseUrl}/api/local/symbol-search?q=${encodeURIComponent("삼성")}&markets=KOSPI,KOSDAQ`);
+    const sentimentOverviewState = await fetchJson(
+      `${baseUrl}/api/local/sentiment-overview?symbol=AAPL&market=US`,
+    );
     const cryptoExchangeState = await fetchJson(`${baseUrl}/api/local/crypto-exchanges`);
     const cryptoReadinessState = await fetchJsonResponse(`${baseUrl}/api/local/crypto-exchanges/upbit/readiness?market=KRW-BTC`);
     const cryptoLiveTradingState = await fetchJson(`${baseUrl}/api/local/crypto-exchanges/upbit/live-trading`);
@@ -710,6 +714,19 @@ const verifySidecar = async (expectedVersion: string) => {
       : null;
     if (samsung?.symbol !== "005930.KS" || samsung.nameKo !== "삼성전자" || samsung.nameEn !== "Samsung Electronics") {
       throw new Error("Symbol search endpoint did not return the expected bilingual Korean result");
+    }
+    const sentimentInstrument = jsonObjectField(sentimentOverviewState, "instrument");
+    const sentimentKrCommunity = jsonObjectField(sentimentInstrument, "krCommunity");
+    const sentimentMarketComparison = jsonObjectField(sentimentOverviewState, "marketComparison");
+    if (
+      sentimentOverviewState.symbol !== "AAPL" ||
+      sentimentKrCommunity.status !== "unavailable" ||
+      sentimentKrCommunity.reason !== "unsupported_source_coverage" ||
+      sentimentMarketComparison.status !== "configuration_required" ||
+      sentimentMarketComparison.kr !== null ||
+      sentimentMarketComparison.us !== null
+    ) {
+      throw new Error("Sentiment overview did not preserve no-credential and unsupported-source boundaries");
     }
     const cryptoExchanges = Array.isArray(cryptoExchangeState.exchanges) ? cryptoExchangeState.exchanges : [];
     if (
@@ -795,6 +812,7 @@ const verifySidecar = async (expectedVersion: string) => {
       workerControl: true,
       automationScheduler: true,
       symbolSearch: true,
+      sentimentOverviewNoCredential: true,
       cryptoExchangeSafety: true,
       cryptoStrategyLifecycle: true,
       automationDryRun: true,
