@@ -137,11 +137,17 @@ export const redditAdapter: CommunitySourceAdapter = {
       );
     }
     const items: RawCommunityItem[] = [];
-    const query = context.queryTerms[0] || context.canonicalSymbol;
+    const query = context.queryTerms
+      .map((term) => term.trim())
+      .filter(Boolean)
+      .slice(0, 3)
+      .map((term) => (/\s/.test(term) ? `\"${term.replaceAll("\"", "")}\"` : term))
+      .join(" OR ") || context.canonicalSymbol;
     const subredditQuery = subreddits.map((subreddit) => `subreddit:${subreddit}`).join(" OR ");
+    const postLimit = Math.min(REDDIT_MAX_POSTS, Math.max(1, context.limit));
     const url = `https://oauth.reddit.com/search?q=${encodeURIComponent(
       `(${query}) (${subredditQuery})`,
-    )}&sort=new&t=week&limit=${REDDIT_MAX_POSTS}&raw_json=1`;
+    )}&sort=new&t=week&limit=${postLimit}&raw_json=1`;
 
     try {
       const accessToken = await getRedditAccessToken(clientId, clientSecret);
@@ -151,6 +157,9 @@ export const redditAdapter: CommunitySourceAdapter = {
         const data = child?.data;
         const post = parseSubmission(data);
         if (post) items.push(post);
+      }
+      if (context.summaryOnly) {
+        return buildOkResult({ config, context, url, items });
       }
       const commentTargets = items
         .filter((item) => (item.commentCount ?? 0) > 0)

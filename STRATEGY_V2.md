@@ -157,11 +157,11 @@ Effective risk management is enforced via specific Stop Levels displayed on the 
 - 급락 저점을 다시 이탈하면 후보를 무효화한다. KOSPI가 `-1.5%` 이하이고 장중 저점 회복률이 35% 미만이면 신호를 차단하지 않고 신뢰도를 한 단계 낮춘다.
 - 손절은 `min(급락 저점, 최근 20개 5분봉 저점) - 0.2 ATR5m` 구조선을 그대로 유지한다. 손실 거리가 `0.8~1.8 ATR5m` 밖이면 손절선을 이동하지 않고 신규 진입을 보류한다.
 - 1차 익절은 가까운 저항이 `0.8R~1.5R`이면 그 저항, 아니면 `1R`에서 50%다. 2차는 `2R`에서 50%다. 가까운 저항이 `0.8R` 미만이면 `보상 부족`으로 표시한다.
-- 손절·익절은 분석 기준가 기준의 설명 가능한 가격선이며 broker stop, OrderIntent 또는 주문 제출로 변환하지 않는다.
+- 손절·익절은 분석 기준가 기준의 설명 가능한 가격선이다. `분석값 채우기`는 이를 주문 초안에만 복사하며 토글 활성화·`OrderIntent` 생성·`RiskCheck`·제출은 사용자의 별도 동작으로 분리한다.
 
 ## 8. Beginner-first 자동화 계약 (macOS 1.0)
 
-전략 설정은 `초안 저장 → 조건 확인 → paper 시뮬레이션 → 활성화` 순서를 지킨다. 데스크톱 앱은 실제 broker 제출을 하지 않으며, 자동화 탭은 `status == enabled` 전략만 단일 원본으로 표시한다.
+전략 설정은 `초안 저장 → 조건 확인 → paper 시뮬레이션 → 활성화` 순서를 지킨다. 분석·차트·신호는 broker를 직접 호출하지 않는다. 데스크톱에는 Toss 조건주문 제출 코드가 포함되지만 공개·일반·임시 서명 빌드는 `liveSubmissionMode=disabled`로 닫고, 자동화 탭은 `status == enabled` 전략만 단일 원본으로 표시한다.
 
 - 주식은 `orderSizing: { mode: "quantity", quantity }`로 고정 주식 수를 사용한다.
 - 코인은 `orderSizing: { mode: "notional", notional }`로 고정 원화 주문금액을 사용하고, 실행가격 기준 수량을 최대 8자리까지 계산한다. 거래소 최소금액·정밀도는 precheck에서 확인한다.

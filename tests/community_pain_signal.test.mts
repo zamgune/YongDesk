@@ -18,9 +18,14 @@ import {
   normalizeCommunitySymbol,
   normalizeItems,
 } from "../src/lib/community-pain/normalize.mts";
+import {
+  buildCommunitySentimentDistribution,
+  classifyCommunityPost,
+} from "../src/lib/community-pain/distribution.mts";
 import { scoreCommunityPain } from "../src/lib/community-pain/scoring.mts";
 import type {
   CommunityPainSourceResult,
+  RawCommunityItem,
   SourceFetchContext,
 } from "../src/lib/community-pain/types.mts";
 
@@ -255,6 +260,15 @@ test("low evidence caps confidence and score", () => {
   assert.ok(result.confidence < 70);
 });
 
+test("a healthy single source is usable with a bounded confidence", () => {
+  const result = scoreCommunityPain([
+    createSource(["반등 기대", "상승 기대", "회복 기대", "신고가 기대", "일반 의견"]),
+  ]);
+
+  assert.equal(result.lowEvidence, false);
+  assert.ok(result.confidence <= 70);
+});
+
 test("gajua score rises with pump and fomo language", () => {
   const result = scoreCommunityPain([
     createSource([
@@ -322,4 +336,178 @@ test("strong comment signals are not diluted by neutral posts", () => {
 
   assert.ok(result.signalItemCount >= 10);
   assert.ok(result.painScore >= 25);
+});
+
+const distributionNow = Date.parse("2026-07-15T12:00:00.000Z");
+
+type DistributionEntry = {
+  id?: string;
+  kind?: RawCommunityItem["kind"];
+  title: string;
+  author?: string;
+  ageHours?: number;
+  createdAt?: string;
+  engagement?: number;
+};
+
+const createDistributionItems = (entries: DistributionEntry[]) => normalizeItems(
+  entries.map((entry, index) => ({
+    sourceId: "paxnet" as const,
+    id: entry.id ?? `distribution-${index}`,
+    kind: entry.kind ?? "post",
+    title: entry.title,
+    url: `https://example.com/${entry.id ?? index}`,
+    author: entry.author,
+    createdAt: entry.ageHours === undefined
+      ? entry.createdAt
+      : new Date(distributionNow - entry.ageHours * 3_600_000).toISOString(),
+    commentCount: entry.engagement ?? 0,
+  })),
+  ["005930", "삼성전자", "삼전"],
+);
+
+test("community distribution classifies Korean and English direction with word boundaries", () => {
+  const cases = [
+    ["삼전 가즈아 상한가 간다", "bullish_hype"],
+    ["NVDA is bullish and going to the moon", "bullish_hype"],
+    ["삼성전자 폭락으로 손절했다", "bearish_criticism"],
+    ["this is a scam stock headed for a crash", "bearish_criticism"],
+    ["삼전 가즈아 하지만 폭락도 걱정", "mixed"],
+    ["실적 발표 자료를 읽어 봤다", "neutral"],
+    ["moonlight software update", "neutral"],
+  ];
+
+  for (const [title, expected] of cases) {
+    const [item] = createDistributionItems([{ title, ageHours: 1 }]);
+    assert.equal(classifyCommunityPost(item, ["삼전", "삼성전자", "NVDA"]).category, expected);
+  }
+});
+
+test("profanity is independent while target-specific criticism is bearish", () => {
+  const [generic, bullish, targeted] = createDistributionItems([
+    { title: "씨발 진짜 미쳤다", ageHours: 1 },
+    { title: "미쳤다 삼전 가즈아", ageHours: 1 },
+    { title: "삼성전자 경영진은 무능한 쓰레기", ageHours: 1 },
+  ]);
+
+  const genericResult = classifyCommunityPost(generic, ["삼성전자", "삼전"]);
+  const bullishResult = classifyCommunityPost(bullish, ["삼성전자", "삼전"]);
+  const targetedResult = classifyCommunityPost(targeted, ["삼성전자", "삼전"]);
+
+  assert.equal(genericResult.category, "neutral");
+  assert.ok(genericResult.toxicity > 0);
+  assert.equal(bullishResult.category, "bullish_hype");
+  assert.ok(bullishResult.toxicity > 0);
+  assert.equal(targetedResult.category, "bearish_criticism");
+});
+
+test("explicit negation does not reverse-match the negated direction", () => {
+  const [notRising, notBearish] = createDistributionItems([
+    { title: "삼전 상승 아니다", ageHours: 1 },
+    { title: "NVDA is not bearish", ageHours: 1 },
+  ]);
+
+  assert.equal(classifyCommunityPost(notRising, ["삼전"]).category, "bearish_criticism");
+  assert.equal(classifyCommunityPost(notBearish, ["NVDA"]).category, "neutral");
+});
+
+test("distribution uses dated top-level deduped posts and caps each author at three", () => {
+  const entries: DistributionEntry[] = [
+    ...Array.from({ length: 4 }, (_, index) => ({
+      title: `최근 중립 의견 ${index}`,
+      ageHours: index + 1,
+      author: `recent-${index}`,
+    })),
+    { title: "최근 중립 의견 0", ageHours: 30, author: "duplicate-author" },
+    ...Array.from({ length: 5 }, (_, index) => ({
+      title: `과거 가즈아 의견 ${index}`,
+      ageHours: 30 + index,
+      author: "burst-author",
+    })),
+    { title: "과거 폭락 의견", ageHours: 40, author: "older-author" },
+    { title: "댓글 폭락", ageHours: 2, author: "commenter", kind: "comment" },
+    { title: "날짜 없는 가즈아", author: "unknown-date" },
+  ];
+  const result = buildCommunitySentimentDistribution(createDistributionItems(entries), {
+    nowTimestamp: distributionNow,
+    queryTerms: ["삼전", "삼성전자"],
+  });
+
+  assert.equal(result.effectiveWindowHours, 72);
+  assert.equal(result.sampleCount, 8);
+  assert.equal(result.status, "low_evidence");
+  assert.equal(result.uniqueAuthorCount, 6);
+  assert.equal(result.counts.bullish_hype, 3);
+  assert.equal(result.counts.bearish_criticism, 1);
+  assert.equal(result.counts.neutral, 4);
+  assert.equal(Object.values(result.ratios ?? {}).reduce((sum, value) => sum + value, 0), 100);
+});
+
+test("distribution keeps the 24-hour bucket once five usable posts exist", () => {
+  const items = createDistributionItems([
+    ...Array.from({ length: 5 }, (_, index) => ({
+      title: `최근 가즈아 ${index}`,
+      ageHours: index + 1,
+      author: `recent-${index}`,
+    })),
+    ...Array.from({ length: 5 }, (_, index) => ({
+      title: `과거 폭락 ${index}`,
+      ageHours: 30 + index,
+      author: `older-${index}`,
+    })),
+  ]);
+  const result = buildCommunitySentimentDistribution(items, { nowTimestamp: distributionNow });
+
+  assert.equal(result.effectiveWindowHours, 24);
+  assert.equal(result.sampleCount, 5);
+  assert.equal(result.counts.bullish_hype, 5);
+  assert.equal(result.counts.bearish_criticism, 0);
+});
+
+test("available ratios always total 100 and evidence is capped by category", () => {
+  const items = createDistributionItems([
+    ...Array.from({ length: 7 }, (_, index) => ({
+      title: `가즈아 상한가 ${index}`,
+      ageHours: index + 1,
+      author: `bull-${index}`,
+      engagement: index,
+    })),
+    ...Array.from({ length: 5 }, (_, index) => ({
+      title: `폭락 손절 ${index}`,
+      ageHours: index + 1,
+      author: `bear-${index}`,
+    })),
+    ...Array.from({ length: 4 }, (_, index) => ({
+      title: `가즈아 폭락 혼재 ${index}`,
+      ageHours: index + 1,
+      author: `mixed-${index}`,
+    })),
+    ...Array.from({ length: 4 }, (_, index) => ({
+      title: `일반 의견 ${index}`,
+      ageHours: index + 1,
+      author: `neutral-${index}`,
+    })),
+  ]);
+  const result = buildCommunitySentimentDistribution(items, { nowTimestamp: distributionNow });
+
+  assert.equal(result.status, "ready");
+  assert.equal(result.sampleCount, 20);
+  assert.equal(Object.values(result.ratios ?? {}).reduce((sum, value) => sum + value, 0), 100);
+  for (const category of ["bullish_hype", "bearish_criticism", "mixed", "neutral"]) {
+    assert.ok(result.evidence.filter((entry) => entry.category === category).length <= 3);
+  }
+});
+
+test("unavailable distribution does not present zero-percent ratios", () => {
+  const result = buildCommunitySentimentDistribution(createDistributionItems([
+    { title: "가즈아", ageHours: 1 },
+    { title: "폭락", ageHours: 2 },
+    { title: "날짜 없는 글" },
+    { title: "댓글", ageHours: 3, kind: "comment" },
+  ]), { nowTimestamp: distributionNow });
+
+  assert.equal(result.status, "unavailable");
+  assert.equal(result.sampleCount, 2);
+  assert.equal(result.ratios, null);
+  assert.equal(result.uniqueAuthorCount, null);
 });

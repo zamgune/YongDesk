@@ -88,6 +88,11 @@ final class AppModel: ObservableObject {
     @Published var sectorStrength: SectorStrengthResponseView?
     @Published var sectorStrengthMessage = "한국 또는 미국 시장을 선택하면 섹터 강도를 비교합니다."
     @Published private(set) var isSectorStrengthLoading = false
+    @Published var sentimentOverview: SentimentOverviewResponseView?
+    @Published var sentimentOverviewMessage = "종목을 선택하면 한국·해외 커뮤니티 반응을 비교합니다."
+    @Published var sentimentOverviewErrorMessage: String?
+    @Published var sentimentOverviewUsingPreviousData = false
+    @Published private(set) var isSentimentOverviewLoading = false
     @Published var brokerCredential: BrokerCredentialView?
     @Published var brokerAccounts: [BrokerAccountView] = []
     @Published var brokerAccountPreference: BrokerAccountPreferenceView?
@@ -124,6 +129,9 @@ final class AppModel: ObservableObject {
     @Published var latestHolding: LocalHoldingResponse?
     @Published var latestOrderPrecheck: LocalOrderPrecheckResponse?
     @Published var latestLiveOrderSubmission: LocalLiveOrderSubmissionResponse?
+    @Published var managedTradePlans: [ManagedTradePlanRecordView] = []
+    @Published var latestManagedTradePrecheck: ManagedTradePlanPrecheckResponse?
+    @Published var managedTradePlanMessage = "익절·손절을 선택하면 주문 초안으로 검증합니다."
     @Published var appSelfTest: LocalSelfTestResponse?
     @Published var appSelfTestMessage = "점검을 실행하면 앱 핵심 동작 경로를 한 번에 확인합니다."
     @Published var sidecarLogText = "로그를 아직 불러오지 않았습니다."
@@ -150,6 +158,7 @@ final class AppModel: ObservableObject {
     private var watchlistSignalRefreshTask: Task<Void, Never>?
     private var bootstrapStarted = false
     private var communityRefreshGeneration = 0
+    private var sentimentRefreshGeneration = 0
     private var workspaceAnalysisGeneration = 0
 
     var menuBarIcon: String {
@@ -2127,6 +2136,74 @@ final class AppModel: ObservableObject {
         }
     }
 
+    @discardableResult
+    func refreshSentimentOverview(
+        symbol: String,
+        market: String,
+        forceRefresh: Bool = false
+    ) async -> SentimentOverviewResponseView? {
+        let normalizedSymbol = symbol.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        let normalizedMarket = market == "US" ? "US" : "KR"
+        guard !normalizedSymbol.isEmpty else {
+            sentimentOverviewMessage = "민심을 조회할 종목을 먼저 선택하세요."
+            return nil
+        }
+
+        sentimentRefreshGeneration += 1
+        let requestGeneration = sentimentRefreshGeneration
+        isSentimentOverviewLoading = true
+        sentimentOverviewErrorMessage = nil
+        sentimentOverviewUsingPreviousData = false
+        sentimentOverviewMessage = "\(normalizedSymbol) 수집된 반응을 확인 중입니다."
+        defer {
+            if requestGeneration == sentimentRefreshGeneration {
+                isSentimentOverviewLoading = false
+            }
+        }
+
+        do {
+            let response = try await client.sentimentOverview(
+                symbol: normalizedSymbol,
+                market: normalizedMarket,
+                forceRefresh: forceRefresh
+            )
+            guard requestGeneration == sentimentRefreshGeneration else {
+                return nil
+            }
+            guard canonicalCommunitySymbol(response.canonicalSymbol) == canonicalCommunitySymbol(normalizedSymbol),
+                  response.symbolMarket == normalizedMarket else {
+                throw NSError(
+                    domain: "YongStockDesk.SentimentOverview",
+                    code: 1,
+                    userInfo: [NSLocalizedDescriptionKey: "민심 응답의 종목 또는 시장이 현재 선택과 다릅니다."]
+                )
+            }
+
+            sentimentOverview = response
+            let stale = response.stale ? " · 이전 데이터" : ""
+            sentimentOverviewMessage = "\(normalizedSymbol) 민심 갱신\(stale)"
+            statusLine = "\(normalizedSymbol) sentiment overview loaded"
+            lastUpdated = Self.timeFormatter.string(from: Date())
+            return response
+        } catch {
+            guard requestGeneration == sentimentRefreshGeneration else {
+                return nil
+            }
+            let message = Self.errorMessage(error)
+            let hasMatchingPrevious = sentimentOverview.map {
+                canonicalCommunitySymbol($0.canonicalSymbol) == canonicalCommunitySymbol(normalizedSymbol) &&
+                    $0.symbolMarket == normalizedMarket
+            } ?? false
+            sentimentOverviewUsingPreviousData = hasMatchingPrevious
+            sentimentOverviewErrorMessage = hasMatchingPrevious
+                ? "민심 갱신 실패 · 이전 데이터를 유지합니다: \(message)"
+                : "민심 조회 실패: \(message)"
+            sentimentOverviewMessage = sentimentOverviewErrorMessage ?? "민심 조회 실패"
+            statusLine = message
+            return hasMatchingPrevious ? sentimentOverview : nil
+        }
+    }
+
     func searchSymbols(query: String, session: String) async throws -> [LocalSymbolSearchItem] {
         let markets = session == "KR" ? ["KOSPI", "KOSDAQ"] : ["US", "CRYPTO"]
         return try await client.searchSymbols(query: query, markets: markets).matches
@@ -2361,6 +2438,71 @@ final class AppModel: ObservableObject {
             let message = Self.errorMessage(error)
             statusLine = message
             return "선택 OrderIntent 모의 주문 실패: \(message)"
+        }
+    }
+
+    func precheckManagedTradePlan(_ input: ManagedTradePlanInput) async -> String {
+        do {
+            let response = try await client.precheckManagedTradePlan(input)
+            latestManagedTradePrecheck = response
+            managedTradePlans = [response.record] + managedTradePlans.filter { $0.id != response.record.id }
+            managedTradePlanMessage = response.submitReady
+                ? "사전검증을 통과했습니다. 주문 요약을 확인하세요."
+                : response.record.riskCheck.blockers.first ?? "사전검증을 통과하지 못했습니다."
+            return managedTradePlanMessage
+        } catch {
+            latestManagedTradePrecheck = nil
+            managedTradePlanMessage = "매매 계획 검증 실패: \(Self.errorMessage(error))"
+            return managedTradePlanMessage
+        }
+    }
+
+    func submitManagedTradePlan(live: Bool, confirmation: String = "") async -> String {
+        guard !executionBlocked else { return "긴급 중지 상태라 제출을 차단했습니다." }
+        guard let precheck = latestManagedTradePrecheck else { return "사전검증을 먼저 실행하세요." }
+        do {
+            let response = live
+                ? try await client.submitManagedLivePlan(planId: precheck.record.id, confirmation: confirmation)
+                : try await client.submitManagedPaperPlan(planId: precheck.record.id)
+            managedTradePlanMessage = response.error
+                ?? (live ? "Toss 계획 제출 요청을 처리했습니다." : "모의 매수와 자동 청산 감시를 시작했습니다.")
+            await refreshManagedTradePlans()
+            await refreshPaperTradingState()
+            return managedTradePlanMessage
+        } catch {
+            managedTradePlanMessage = "매매 계획 제출 실패: \(Self.errorMessage(error))"
+            return managedTradePlanMessage
+        }
+    }
+
+    func refreshManagedTradePlans() async {
+        do {
+            managedTradePlans = try await client.managedTradePlans().records
+        } catch {
+            managedTradePlanMessage = "매매 계획 조회 실패: \(Self.errorMessage(error))"
+        }
+    }
+
+    func tickManagedTradePlans() async {
+        guard health?.ok == true else { return }
+        do {
+            let response = try await client.tickManagedTradePlans()
+            if (response.evaluated ?? 0) > 0 {
+                await refreshManagedTradePlans()
+                await refreshPaperTradingState()
+            }
+        } catch {
+            managedTradePlanMessage = "자동 청산 감시 지연: \(Self.errorMessage(error))"
+        }
+    }
+
+    func cancelManagedTradePlan(_ id: String) async {
+        do {
+            _ = try await client.cancelManagedTradePlan(planId: id)
+            await refreshManagedTradePlans()
+            managedTradePlanMessage = "매매 계획을 취소했습니다."
+        } catch {
+            managedTradePlanMessage = "매매 계획 취소 실패: \(Self.errorMessage(error))"
         }
     }
 

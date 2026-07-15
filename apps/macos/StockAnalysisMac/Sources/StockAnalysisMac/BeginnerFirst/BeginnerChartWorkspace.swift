@@ -1,6 +1,24 @@
 import SwiftUI
 import StockAnalysisMacCore
 
+private enum BeginnerOrderPurpose: String, CaseIterable, Identifiable {
+    case newPosition
+    case managePosition
+
+    var id: String { rawValue }
+    var title: String { self == .newPosition ? "신규 매수" : "보유분 관리" }
+    var contractValue: String { self == .newPosition ? "new-position" : "manage-position" }
+}
+
+private enum BeginnerOrderMode: String, CaseIterable, Identifiable {
+    case paper
+    case tossLive
+
+    var id: String { rawValue }
+    var title: String { self == .paper ? "모의" : "Toss 실계좌" }
+    var contractValue: String { self == .paper ? "paper" : "toss-live" }
+}
+
 struct BeginnerChartWorkspace: View {
     @EnvironmentObject private var model: AppModel
     let selectedSymbol: String
@@ -30,6 +48,19 @@ struct BeginnerChartWorkspace: View {
     @State private var entryPriceMode: BeginnerEntryPriceMode = .latestClose
     @State private var customEntryPrice = ""
     @State private var customEntryPriceError: String?
+    @State private var inspectorCollapsed = false
+    @State private var orderPurpose: BeginnerOrderPurpose = .newPosition
+    @State private var orderMode: BeginnerOrderMode = .paper
+    @State private var orderQuantity = "1"
+    @State private var orderEntryPrice = ""
+    @State private var takeProfitEnabled = false
+    @State private var takeProfitPrice = ""
+    @State private var stopLossEnabled = false
+    @State private var stopLossPrice = ""
+    @State private var stopLossOrderPrice = ""
+    @State private var orderExpiryDate = BeginnerChartWorkspace.defaultExpiryDate(days: 1)
+    @State private var liveConfirmation = ""
+    @State private var orderError: String?
 
     private var workspaceAnalysis: WorkspaceAnalysis? {
         guard let latest = model.latestWorkspaceAnalysis,
@@ -49,18 +80,30 @@ struct BeginnerChartWorkspace: View {
     }
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 14) {
-                marketSummary
-                crashSignalCard
-                instrumentHeader
-                chartCard
-                analysisTabs
-                tabContent
+        GeometryReader { proxy in
+            let forceCollapsed = proxy.size.width < 850
+            VStack(spacing: 0) {
+                workspaceToolbar(forceCollapsed: forceCollapsed)
+                Divider().overlay(BeginnerPalette.line)
+
+                if forceCollapsed {
+                    if inspectorCollapsed { inspector } else { chartColumn }
+                } else if inspectorCollapsed {
+                    chartColumn
+                } else {
+                    HSplitView {
+                        chartColumn
+                            .frame(minWidth: 500)
+                        inspector
+                            .frame(minWidth: 330, idealWidth: 370, maxWidth: 430)
+                    }
+                    .accessibilityElement(children: .contain)
+                    .accessibilityIdentifier("beginner-chart-split-workbench")
+                }
             }
-            .padding(compact ? 14 : 20)
         }
         .background(BeginnerPalette.background)
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("beginner-chart-workspace")
         .onChange(of: selectedChartTimeframe) { _, timeframe in
             chartResetToken += 1
@@ -70,7 +113,137 @@ struct BeginnerChartWorkspace: View {
             entryPriceMode = .latestClose
             customEntryPrice = ""
             customEntryPriceError = nil
+            orderEntryPrice = ""
+            takeProfitPrice = ""
+            stopLossPrice = ""
+            stopLossOrderPrice = ""
+            liveConfirmation = ""
+            orderError = nil
+            Task { await model.refreshManagedTradePlans() }
         }
+        .onChange(of: selectedHorizon) { _, horizon in
+            orderExpiryDate = Self.defaultExpiryDate(days: horizon == .day ? 1 : 30)
+        }
+        .onChange(of: assetClass) { _, next in
+            if next == .crypto { orderMode = .paper }
+        }
+        .task { await model.refreshManagedTradePlans() }
+    }
+
+    private var chartColumn: some View {
+        VStack(spacing: 10) {
+            chartCard
+        }
+        .padding(compact ? 10 : 14)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("beginner-chart-column")
+    }
+
+    private var inspector: some View {
+        VStack(spacing: 0) {
+            analysisTabs
+                .padding(10)
+            ScrollView {
+                tabContent
+                    .padding(.horizontal, 12)
+                    .padding(.bottom, 16)
+            }
+        }
+        .frame(maxHeight: .infinity)
+        .background(BeginnerPalette.backgroundDeep.opacity(0.72))
+        .overlay(alignment: .leading) { Rectangle().fill(BeginnerPalette.line).frame(width: 1) }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("beginner-chart-inspector")
+    }
+
+    private func workspaceToolbar(forceCollapsed: Bool) -> some View {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 7) {
+                    Text(displayName)
+                        .font(.system(size: 17, weight: .bold))
+                    Text(selectedSymbol.uppercased())
+                        .font(.caption2.monospaced().weight(.semibold))
+                        .foregroundStyle(BeginnerPalette.muted)
+                }
+                Text(beginnerPrice(
+                    workspaceAnalysis?.analyses?.oneHour?.latestClose ?? analysis?.latestClose,
+                    currency: planCurrency
+                ))
+                .font(.system(size: 20, weight: .bold, design: .rounded))
+                .contentTransition(.numericText())
+            }
+
+            BeginnerStatusBadge(assetClass == .crypto ? "가상자산" : selectedSession == "KR" ? "한국 주식" : "미국 주식", color: BeginnerPalette.blue)
+            if !compact {
+                BeginnerStatusBadge(toolbarSourceLabel, color: BeginnerPalette.muted)
+            }
+            BeginnerStatusBadge(workspaceAnalysis?.stale == true ? "시세 지연" : "시세 정상", color: workspaceAnalysis?.stale == true ? BeginnerPalette.amber : BeginnerPalette.green)
+            BeginnerStatusBadge(model.liveGateLabel, color: model.killSwitchEngaged ? BeginnerPalette.red : BeginnerPalette.green)
+            if let signal = model.watchlistSignal(for: selectedSymbol) {
+                Button {
+                    selectedTab = .analysis
+                } label: {
+                    BeginnerStatusBadge("급락 \(signal.signal.label)", color: crashSignalColor(signal.signal.stage))
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("beginner-crash-signal-toolbar")
+            }
+
+            Spacer(minLength: 8)
+
+            Picker("차트 주기", selection: $selectedChartTimeframe) {
+                ForEach(BeginnerChartTimeframe.allCases) { timeframe in
+                    Text(timeframe.title).tag(timeframe)
+                }
+            }
+            .labelsHidden()
+            .pickerStyle(.menu)
+            .frame(width: 90)
+            .accessibilityIdentifier("beginner-chart-timeframe-toolbar")
+
+            Button("관심종목", action: onAddToWatchlist)
+                .buttonStyle(.bordered)
+                .accessibilityIdentifier("beginner-add-watchlist")
+            Button("재분석") { onAnalyze(selectedEntryPrice, selectedPlanMode) }
+                .buttonStyle(.bordered)
+                .disabled(isLoading)
+                .accessibilityIdentifier("beginner-refresh-analysis")
+            Button {
+                if forceCollapsed {
+                    inspectorCollapsed.toggle()
+                    if inspectorCollapsed { selectedTab = .order }
+                } else if inspectorCollapsed {
+                    inspectorCollapsed = false
+                    selectedTab = .order
+                } else {
+                    selectedTab = .order
+                }
+            } label: {
+                Label(forceCollapsed ? (inspectorCollapsed ? "차트" : "인스펙터") : inspectorCollapsed ? "인스펙터" : "주문", systemImage: forceCollapsed && inspectorCollapsed ? "chart.xyaxis.line" : "sidebar.right")
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(BeginnerPalette.green)
+            .foregroundStyle(BeginnerPalette.backgroundDeep)
+            .accessibilityIdentifier("beginner-open-order-inspector")
+
+            if !forceCollapsed {
+                Button {
+                    inspectorCollapsed.toggle()
+                } label: {
+                    Image(systemName: inspectorCollapsed ? "sidebar.right" : "sidebar.right")
+                }
+                .buttonStyle(.bordered)
+                .help(inspectorCollapsed ? "인스펙터 열기" : "인스펙터 접기")
+                .accessibilityIdentifier("beginner-toggle-chart-inspector")
+            }
+        }
+        .padding(.horizontal, compact ? 12 : 16)
+        .frame(minHeight: 64)
+        .background(BeginnerPalette.surfaceRaised.opacity(0.82))
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("beginner-chart-toolbar")
     }
 
     private var marketSummary: some View {
@@ -243,7 +416,7 @@ struct BeginnerChartWorkspace: View {
                     VStack(alignment: .leading, spacing: 3) {
                         Text("가격 흐름")
                             .font(.headline)
-                        Text("선택한 봉 주기의 확정 캔들과 최근 종가를 사용합니다.")
+                        Text(metadataLine)
                             .font(.caption)
                             .foregroundStyle(BeginnerPalette.muted)
                     }
@@ -281,12 +454,16 @@ struct BeginnerChartWorkspace: View {
                             showMA20: showMA20,
                             showMA60: showMA60,
                             showRSI: showRSI,
+                            entryGuide: parsedOrderNumber(orderEntryPrice),
+                            takeProfitGuide: takeProfitEnabled ? parsedOrderNumber(takeProfitPrice) : nil,
+                            stopLossGuide: stopLossEnabled ? parsedOrderNumber(stopLossPrice) : nil,
                             resetToken: chartResetToken,
                             reloadToken: chartReloadToken
                         ),
                         selectedSignalText: $selectedChartSignal,
                         chartError: $chartError
                     )
+                    .accessibilityHidden(true)
                     if let chartError {
                         VStack(spacing: 8) {
                             Label("인터랙티브 차트를 불러오지 못했습니다.", systemImage: "exclamationmark.triangle.fill")
@@ -305,11 +482,12 @@ struct BeginnerChartWorkspace: View {
                         .background(BeginnerPalette.surfaceRaised, in: RoundedRectangle(cornerRadius: 10))
                     }
                 }
-                .frame(height: showRSI ? 430 : 360)
+                .frame(minHeight: showRSI ? 400 : 340, maxHeight: .infinity)
                 .clipShape(RoundedRectangle(cornerRadius: 10))
                 .overlay {
                     RoundedRectangle(cornerRadius: 10).stroke(BeginnerPalette.line)
                 }
+                .accessibilityLabel("\(selectedChartTimeframe.title) 가격 차트. \(metadataLine)")
                 .accessibilityIdentifier("beginner-price-chart")
 
                 if let selectedChartSignal, !selectedChartSignal.isEmpty {
@@ -358,11 +536,8 @@ struct BeginnerChartWorkspace: View {
         switch selectedTab {
         case .analysis:
             analysisContent
-        case .signals:
-            BeginnerSurface {
-                SignalStackPanel(analysis: analysis)
-            }
-            .accessibilityIdentifier("beginner-signal-panel")
+        case .order:
+            orderContent
         case .newsSentiment:
             VStack(spacing: 12) {
                 HStack {
@@ -387,6 +562,378 @@ struct BeginnerChartWorkspace: View {
             }
             .accessibilityIdentifier("beginner-news-sentiment-panel")
         }
+    }
+
+    private var selectedHorizonPlan: AnalysisHorizonPlan? {
+        workspaceAnalysis?.horizonPlans.first { plan in
+            switch (selectedHorizon, plan.horizon) {
+            case (.day, .day), (.swing, .swing): return true
+            default: return false
+            }
+        }
+    }
+
+    private var orderContent: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            BeginnerSurface {
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text("매수·청산 계획")
+                                .font(.headline)
+                            Text("토글을 끄면 일반 매수만 실행합니다.")
+                                .font(.caption2)
+                                .foregroundStyle(BeginnerPalette.muted)
+                        }
+                        Spacer()
+                        BeginnerStatusBadge("\(selectedHorizon.title) 지정가", color: BeginnerPalette.blue)
+                    }
+
+                    Picker("주문 목적", selection: $orderPurpose) {
+                        ForEach(BeginnerOrderPurpose.allCases) { item in
+                            Text(item.title).tag(item)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .accessibilityIdentifier("beginner-order-purpose")
+
+                    Picker("실행 계좌", selection: $orderMode) {
+                        Text(BeginnerOrderMode.paper.title).tag(BeginnerOrderMode.paper)
+                        Text(BeginnerOrderMode.tossLive.title)
+                            .tag(BeginnerOrderMode.tossLive)
+                            .disabled(assetClass == .crypto)
+                    }
+                    .pickerStyle(.segmented)
+                    .accessibilityIdentifier("beginner-order-mode")
+
+                    if assetClass == .crypto {
+                        Label("코인은 이번 버전에서 모의 자동 청산만 제공합니다.", systemImage: "lock.shield")
+                            .font(.caption2)
+                            .foregroundStyle(BeginnerPalette.amber)
+                    } else if orderMode == .tossLive {
+                        Label("현재 설치본은 서명 identity가 없어 실제 제출이 잠겨 있습니다.", systemImage: "lock.fill")
+                            .font(.caption2)
+                            .foregroundStyle(BeginnerPalette.red)
+                    }
+
+                    LabeledContent("수량") {
+                        TextField("1", text: $orderQuantity)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 128)
+                            .accessibilityIdentifier("beginner-order-quantity")
+                    }
+                    if orderPurpose == .newPosition {
+                        LabeledContent("진입 지정가") {
+                            TextField(planCurrency, text: $orderEntryPrice)
+                                .textFieldStyle(.roundedBorder)
+                                .frame(width: 128)
+                                .accessibilityIdentifier("beginner-order-entry-price")
+                        }
+                        if orderMode == .tossLive && (takeProfitEnabled != stopLossEnabled) {
+                            Text("OTO는 진입가 도달 시 매수하고, 체결 후 선택한 청산 1개를 감시합니다.")
+                                .font(.caption2)
+                                .foregroundStyle(BeginnerPalette.muted)
+                        }
+                    }
+
+                    Divider().overlay(BeginnerPalette.line)
+                    exitToggle(
+                        title: "익절",
+                        subtitle: "목표가 이상에서 매도",
+                        isOn: $takeProfitEnabled,
+                        price: $takeProfitPrice,
+                        identifier: "take-profit",
+                        color: BeginnerPalette.green
+                    )
+                    Divider().overlay(BeginnerPalette.line)
+                    exitToggle(
+                        title: "손절",
+                        subtitle: "무효화가 이하에서 매도",
+                        isOn: $stopLossEnabled,
+                        price: $stopLossPrice,
+                        identifier: "stop-loss",
+                        color: BeginnerPalette.red
+                    )
+                    if stopLossEnabled {
+                        LabeledContent("손절 지정가") {
+                            TextField("트리거 한 호가 아래", text: $stopLossOrderPrice)
+                                .textFieldStyle(.roundedBorder)
+                                .frame(width: 160)
+                                .accessibilityIdentifier("beginner-stop-loss-order-price")
+                        }
+                        Text("지정가 손절은 급락 시 미체결될 수 있습니다.")
+                            .font(.caption2)
+                            .foregroundStyle(BeginnerPalette.amber)
+                    }
+
+                    LabeledContent("만료일") {
+                        TextField("YYYY-MM-DD", text: $orderExpiryDate)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 128)
+                            .accessibilityIdentifier("beginner-order-expiry")
+                    }
+
+                    HStack {
+                        Button("분석값 채우기", action: applyAnalysisValuesToOrder)
+                            .buttonStyle(.bordered)
+                            .disabled(selectedHorizonPlan == nil)
+                            .accessibilityIdentifier("beginner-apply-analysis-to-order")
+                        Spacer()
+                        Button("사전검증") { precheckOrder() }
+                            .buttonStyle(.borderedProminent)
+                            .tint(BeginnerPalette.blue)
+                            .accessibilityIdentifier("beginner-managed-order-precheck")
+                    }
+
+                    if let orderError {
+                        Text(orderError)
+                            .font(.caption2)
+                            .foregroundStyle(BeginnerPalette.red)
+                    }
+                }
+            }
+
+            if let precheck = matchingManagedPrecheck {
+                BeginnerSurface {
+                    VStack(alignment: .leading, spacing: 9) {
+                        HStack {
+                            Text("주문 미리보기")
+                                .font(.headline)
+                            Spacer()
+                            BeginnerStatusBadge(precheck.submitReady ? "RiskCheck 통과" : "차단", color: precheck.submitReady ? BeginnerPalette.green : BeginnerPalette.red)
+                        }
+                        Text(precheck.confirmationText)
+                            .font(.system(.caption, design: .monospaced).weight(.semibold))
+                            .textSelection(.enabled)
+                        ForEach(precheck.record.riskCheck.blockers, id: \.self) { blocker in
+                            Label(blocker, systemImage: "xmark.octagon.fill")
+                                .font(.caption2)
+                                .foregroundStyle(BeginnerPalette.red)
+                        }
+                        ForEach(precheck.record.riskCheck.warnings, id: \.self) { warning in
+                            Label(warning, systemImage: "exclamationmark.triangle.fill")
+                                .font(.caption2)
+                                .foregroundStyle(BeginnerPalette.amber)
+                        }
+                        if orderMode == .tossLive {
+                            TextField("주문 요약 입력", text: $liveConfirmation)
+                                .textFieldStyle(.roundedBorder)
+                                .accessibilityIdentifier("beginner-managed-live-confirmation")
+                        }
+                        Button(submitButtonTitle(precheck)) { submitOrder(precheck) }
+                            .buttonStyle(.borderedProminent)
+                            .tint(orderMode == .tossLive ? BeginnerPalette.red : BeginnerPalette.green)
+                            .foregroundStyle(BeginnerPalette.backgroundDeep)
+                            .frame(maxWidth: .infinity)
+                            .disabled(!canSubmit(precheck))
+                            .accessibilityIdentifier("beginner-managed-order-submit")
+                    }
+                }
+            }
+
+            if !matchingManagedPlans.isEmpty {
+                BeginnerSurface {
+                    VStack(alignment: .leading, spacing: 9) {
+                        Text("진행 중·최근 계획")
+                            .font(.headline)
+                        ForEach(matchingManagedPlans.prefix(4)) { record in
+                            HStack(alignment: .top, spacing: 8) {
+                                Circle()
+                                    .fill(managedPlanColor(record.status))
+                                    .frame(width: 7, height: 7)
+                                    .padding(.top, 5)
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text(managedPlanTitle(record))
+                                        .font(.caption.weight(.semibold))
+                                    Text(record.error ?? "\(record.plan.mode) · \(record.status)")
+                                        .font(.caption2)
+                                        .foregroundStyle(BeginnerPalette.muted)
+                                }
+                                Spacer()
+                                if record.status == "watching-exit" || record.status == "risk_checked" {
+                                    Button("취소") { Task { await model.cancelManagedTradePlan(record.id) } }
+                                        .buttonStyle(.borderless)
+                                }
+                            }
+                        }
+                    }
+                }
+                .accessibilityIdentifier("beginner-managed-plan-list")
+            }
+
+            Text(model.managedTradePlanMessage)
+                .font(.caption2)
+                .foregroundStyle(BeginnerPalette.muted)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("beginner-order-inspector")
+    }
+
+    private func exitToggle(
+        title: String,
+        subtitle: String,
+        isOn: Binding<Bool>,
+        price: Binding<String>,
+        identifier: String,
+        color: Color
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Toggle(isOn: isOn) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title).font(.subheadline.weight(.semibold))
+                    Text(subtitle).font(.caption2).foregroundStyle(BeginnerPalette.muted)
+                }
+            }
+            .tint(color)
+            .accessibilityIdentifier("beginner-\(identifier)-toggle")
+            if isOn.wrappedValue {
+                TextField(planCurrency, text: price)
+                    .textFieldStyle(.roundedBorder)
+                    .accessibilityIdentifier("beginner-\(identifier)-price")
+            }
+        }
+    }
+
+    private var matchingManagedPrecheck: ManagedTradePlanPrecheckResponse? {
+        guard let value = model.latestManagedTradePrecheck,
+              beginnerCanonicalSymbol(value.record.plan.symbol) == beginnerCanonicalSymbol(selectedSymbol),
+              value.record.plan.purpose == orderPurpose.contractValue,
+              value.record.plan.mode == orderMode.contractValue,
+              value.record.plan.horizon == selectedHorizon.rawValue,
+              value.record.plan.expiryDate == orderExpiryDate,
+              sameOrderValue(value.record.plan.quantity, parsedOrderNumber(orderQuantity)),
+              sameOrderValue(
+                value.record.plan.referencePrice,
+                orderPurpose == .newPosition
+                    ? parsedOrderNumber(orderEntryPrice)
+                    : selectedHorizonPlan?.entryPrice ?? selectedHorizonPlan?.currentPrice
+              ),
+              sameOrderValue(value.record.plan.entry?.limitPrice, orderPurpose == .newPosition ? parsedOrderNumber(orderEntryPrice) : nil),
+              value.record.plan.exits.takeProfit.enabled == takeProfitEnabled,
+              value.record.plan.exits.stopLoss.enabled == stopLossEnabled,
+              sameOrderValue(value.record.plan.exits.takeProfit.triggerPrice, takeProfitEnabled ? parsedOrderNumber(takeProfitPrice) : nil),
+              sameOrderValue(value.record.plan.exits.stopLoss.triggerPrice, stopLossEnabled ? parsedOrderNumber(stopLossPrice) : nil) else {
+            return nil
+        }
+        return value
+    }
+
+    private func sameOrderValue(_ lhs: Double?, _ rhs: Double?) -> Bool {
+        switch (lhs, rhs) {
+        case (nil, nil): return true
+        case let (left?, right?): return abs(left - right) < 0.000_001
+        default: return false
+        }
+    }
+
+    private var matchingManagedPlans: [ManagedTradePlanRecordView] {
+        model.managedTradePlans.filter {
+            beginnerCanonicalSymbol($0.plan.symbol) == beginnerCanonicalSymbol(selectedSymbol)
+        }
+    }
+
+    private func parsedOrderNumber(_ text: String) -> Double? {
+        let normalized = text.replacingOccurrences(of: ",", with: "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let value = Double(normalized), value.isFinite, value > 0 else { return nil }
+        return value
+    }
+
+    private func applyAnalysisValuesToOrder() {
+        guard let plan = selectedHorizonPlan else { return }
+        if let value = plan.entryPrice ?? plan.currentPrice ?? analysis?.latestClose {
+            orderEntryPrice = value.formatted(.number.precision(.fractionLength(0...4)))
+        }
+        if let value = plan.takeProfits.first?.price {
+            takeProfitPrice = value.formatted(.number.precision(.fractionLength(0...4)))
+        }
+        if let value = plan.stop?.price {
+            stopLossPrice = value.formatted(.number.precision(.fractionLength(0...4)))
+            stopLossOrderPrice = ""
+        }
+        orderError = nil
+        selectedTab = .order
+    }
+
+    private func precheckOrder() {
+        guard let quantity = parsedOrderNumber(orderQuantity) else {
+            orderError = "0보다 큰 수량을 입력하세요."
+            return
+        }
+        let entryPrice = parsedOrderNumber(orderEntryPrice)
+        if orderPurpose == .newPosition && entryPrice == nil {
+            orderError = "진입 지정가를 입력하세요."
+            return
+        }
+        orderError = nil
+        liveConfirmation = ""
+        let input = ManagedTradePlanInput(
+            symbol: selectedSymbol,
+            assetClass: assetClass.rawValue,
+            currency: planCurrency,
+            purpose: orderPurpose.contractValue,
+            mode: orderMode.contractValue,
+            horizon: selectedHorizon.rawValue,
+            quantity: quantity,
+            entryPrice: entryPrice ?? selectedHorizonPlan?.entryPrice ?? selectedHorizonPlan?.currentPrice,
+            takeProfitEnabled: takeProfitEnabled,
+            takeProfitPrice: parsedOrderNumber(takeProfitPrice),
+            stopLossEnabled: stopLossEnabled,
+            stopLossPrice: parsedOrderNumber(stopLossPrice),
+            stopLossOrderPrice: parsedOrderNumber(stopLossOrderPrice),
+            expiryDate: orderExpiryDate,
+            accountSeq: model.brokerAccountPreference?.accountSeq,
+            sourceAnalysisId: workspaceAnalysis?.generatedAt,
+            session: selectedSession,
+            market: assetClass == .crypto ? "CRYPTO" : selectedSession == "KR" ? "KOSPI" : "US"
+        )
+        Task { resultPreview = await model.precheckManagedTradePlan(input) }
+    }
+
+    private func canSubmit(_ precheck: ManagedTradePlanPrecheckResponse) -> Bool {
+        guard precheck.submitReady else { return false }
+        if precheck.record.plan.mode == BeginnerOrderMode.tossLive.contractValue {
+            return precheck.liveSubmissionMode != "disabled" && liveConfirmation == precheck.confirmationText
+        }
+        return true
+    }
+
+    private func submitButtonTitle(_ precheck: ManagedTradePlanPrecheckResponse) -> String {
+        if precheck.record.plan.mode == BeginnerOrderMode.tossLive.contractValue && precheck.liveSubmissionMode == "disabled" {
+            return "실주문 잠금 · 제출 불가"
+        }
+        return precheck.record.plan.mode == BeginnerOrderMode.paper.contractValue ? "모의 매수·감시 시작" : "Toss 주문 제출"
+    }
+
+    private func submitOrder(_ precheck: ManagedTradePlanPrecheckResponse) {
+        Task {
+            resultPreview = await model.submitManagedTradePlan(
+                live: precheck.record.plan.mode == BeginnerOrderMode.tossLive.contractValue,
+                confirmation: liveConfirmation
+            )
+        }
+    }
+
+    private func managedPlanTitle(_ record: ManagedTradePlanRecordView) -> String {
+        let exits = [
+            record.plan.exits.takeProfit.enabled ? "익절" : nil,
+            record.plan.exits.stopLoss.enabled ? "손절" : nil,
+        ].compactMap { $0 }.joined(separator: "+")
+        return "\(record.plan.purpose == "new-position" ? "매수" : "보유분") · \(exits.isEmpty ? "청산 없음" : exits)"
+    }
+
+    private func managedPlanColor(_ status: String) -> Color {
+        switch status {
+        case "completed": return BeginnerPalette.green
+        case "rejected", "unknown": return BeginnerPalette.red
+        case "watching-entry", "watching-exit": return BeginnerPalette.blue
+        default: return BeginnerPalette.muted
+        }
+    }
+
+    private static func defaultExpiryDate(days: Int) -> String {
+        let date = Calendar.current.date(byAdding: .day, value: days, to: Date()) ?? Date()
+        return date.formatted(.iso8601.year().month().day().dateSeparator(.dash))
     }
 
     private var analysisContent: some View {
@@ -421,6 +968,15 @@ struct BeginnerChartWorkspace: View {
                         workspaceAnalysis: workspaceAnalysis,
                         assetClass: assetClass
                     )
+
+                    Button("분석값을 주문에 채우기") {
+                        applyAnalysisValuesToOrder()
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(BeginnerPalette.blue)
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+                    .disabled(selectedHorizonPlan == nil)
+                    .accessibilityIdentifier("beginner-analysis-apply-order")
                 }
             }
 
@@ -459,6 +1015,11 @@ struct BeginnerChartWorkspace: View {
                     .accessibilityIdentifier("beginner-analysis-details")
                 }
             }
+
+            BeginnerSurface {
+                SignalStackPanel(analysis: analysis)
+            }
+            .accessibilityIdentifier("beginner-signal-panel")
         }
     }
 
@@ -617,6 +1178,18 @@ struct BeginnerChartWorkspace: View {
         return "\(selectedChartTimeframe.title) 차트 · \(source) · \(workspaceAnalysis.currency ?? chartAnalysis?.currency ?? analysis?.currency ?? "-") · \(quoteAt)\(stale)"
     }
 
+    private var toolbarSourceLabel: String {
+        switch workspaceAnalysis?.dataSource {
+        case .toss: return "Toss"
+        case .upbit: return "Upbit"
+        case .yahoo: return "Yahoo"
+        case .fixture: return "FIXTURE"
+        case .auto: return "AUTO"
+        case let .unknown(value): return value.uppercased()
+        case nil: return "출처 확인"
+        }
+    }
+
     private var displayName: String {
         switch selectedSymbol.uppercased() {
         case "005930", "005930.KS": return "삼성전자"
@@ -642,7 +1215,7 @@ private struct BeginnerHorizonPlan: View {
     private var plan: AnalysisHorizonPlan? {
         workspaceAnalysis?.horizonPlans.first { item in
             switch (horizon, item.horizon) {
-            case (.day, .day), (.swing, .swing), (.longTerm, .long): return true
+            case (.day, .day), (.swing, .swing): return true
             default: return false
             }
         }
@@ -915,8 +1488,6 @@ private struct BeginnerHorizonPlan: View {
             return assetClass == .crypto
                 ? "코인 스윙은 일봉 추세를 기준으로 4시간 진입과 1시간 재확인을 결합합니다. 부분 봉은 확정 신호에서 제외합니다."
                 : "주식 스윙은 일봉 방향을 기준으로 확정 1시간봉 진입 조건을 결합합니다. 4시간봉은 정규장 길이 때문에 필수 조건으로 사용하지 않습니다."
-        case .longTerm:
-            return "현재 일봉 분석은 참고할 수 있지만, 장기 손절·익절 수치는 주봉 구조와 장기 이동평균 계약이 연결된 뒤 계산합니다."
         }
     }
 
@@ -929,7 +1500,6 @@ private struct BeginnerHorizonPlan: View {
             switch horizon {
             case .day: return index == 0 ? "1R와 가까운 저항 비교" : "2R 기준"
             case .swing: return index == 0 ? "1R와 일봉 저항 비교" : "2R 기준"
-            case .longTerm: return index == 0 ? "2R 비중 조절" : "4R 비중 조절"
             }
         }
         let target = targets[index]
@@ -968,7 +1538,6 @@ private struct BeginnerHorizonPlan: View {
         switch horizon {
         case .day: return "1시간 종가 기준"
         case .swing: return "일봉 SMA20·Chandelier 기준"
-        case .longTerm: return "월봉·주봉 종가 기준"
         }
     }
 
@@ -993,7 +1562,6 @@ private struct BeginnerHorizonPlan: View {
             return assetClass == .crypto
                 ? "확정 일봉·4시간봉·1시간봉, ATR, 저항선"
                 : "확정 일봉·1시간봉, ATR, 일봉 저항선"
-        case .longTerm: return "확정 일봉·주봉, SMA200, 장기 구조선"
         }
     }
 
@@ -1095,7 +1663,6 @@ private struct BeginnerHorizonPlan: View {
         case (.stock, .swing): return "일봉 방향 · 1시간 진입"
         case (.crypto, .day): return "4시간 위험 필터 · 1시간 진입"
         case (.crypto, .swing): return "일봉 방향 · 4시간 진입 · 1시간 확인"
-        case (_, .longTerm): return "일봉 · 주봉 구조"
         }
     }
 }

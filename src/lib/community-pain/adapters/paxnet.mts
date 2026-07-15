@@ -202,6 +202,9 @@ export const paxnetAdapter: CommunitySourceAdapter = {
           break;
         }
       }
+      if (context.summaryOnly) {
+        return buildOkResult({ config, context, url: lastUrl, items });
+      }
       const detailCandidates = items
         .filter((item) => !item.createdAt || !isOlderThanWindow(item.createdAt, context))
         .sort((left, right) => (right.commentCount ?? 0) - (left.commentCount ?? 0))

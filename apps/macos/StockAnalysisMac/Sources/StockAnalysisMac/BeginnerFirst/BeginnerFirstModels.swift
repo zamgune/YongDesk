@@ -10,6 +10,7 @@ extension Notification.Name {
 enum BeginnerDestination: String, CaseIterable, Identifiable {
     case chart
     case sector
+    case sentiment
     case watchlist
     case assets
     case strategy
@@ -22,6 +23,7 @@ enum BeginnerDestination: String, CaseIterable, Identifiable {
         switch self {
         case .chart: return "차트"
         case .sector: return "섹터"
+        case .sentiment: return "민심"
         case .watchlist: return "관심종목"
         case .assets: return "내 자산"
         case .strategy: return "전략"
@@ -34,6 +36,7 @@ enum BeginnerDestination: String, CaseIterable, Identifiable {
         switch self {
         case .chart: return "chart.xyaxis.line"
         case .sector: return "square.grid.3x3.fill"
+        case .sentiment: return "bubble.left.and.text.bubble.right.fill"
         case .watchlist: return "star"
         case .assets: return "wallet.bifold"
         case .strategy: return "slider.horizontal.3"
@@ -129,7 +132,7 @@ enum BeginnerStockMarket: String, CaseIterable, Identifiable {
 
 enum BeginnerAnalysisTab: String, CaseIterable, Identifiable {
     case analysis
-    case signals
+    case order
     case newsSentiment
 
     var id: String { rawValue }
@@ -137,8 +140,8 @@ enum BeginnerAnalysisTab: String, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .analysis: return "분석"
-        case .signals: return "신호"
-        case .newsSentiment: return "뉴스·민심"
+        case .order: return "주문"
+        case .newsSentiment: return "뉴스"
         }
     }
 
@@ -195,7 +198,6 @@ enum BeginnerChartTimeframe: String, CaseIterable, Identifiable {
 enum BeginnerTradeHorizon: String, CaseIterable, Identifiable {
     case day
     case swing
-    case longTerm
 
     var id: String { rawValue }
 
@@ -203,7 +205,6 @@ enum BeginnerTradeHorizon: String, CaseIterable, Identifiable {
         switch self {
         case .day: return "1~3일 단기"
         case .swing: return "스윙"
-        case .longTerm: return "장투"
         }
     }
 
@@ -211,7 +212,6 @@ enum BeginnerTradeHorizon: String, CaseIterable, Identifiable {
         switch self {
         case .day: return "위험 필터 · 1시간 진입"
         case .swing: return "상위 방향 · 1시간 진입"
-        case .longTerm: return "일봉 · 주봉 구조"
         }
     }
 

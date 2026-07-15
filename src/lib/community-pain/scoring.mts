@@ -143,7 +143,11 @@ export const scoreCommunityPain = (sources: CommunityPainSourceResult[]) => {
   const dateParseCoverage =
     okSources.reduce((sum, source) => sum + source.dateParseCoverage, 0) /
     Math.max(1, okSources.length);
-  const lowEvidence = evidenceCount < 5 || sourceWeight < 0.8;
+  // Source weight contributes to confidence, but it must not make a healthy
+  // single-source sample permanently unusable (Reddit's configured weight is
+  // intentionally below 0.8). Evidence volume is the fail-closed boundary;
+  // source breadth remains visible through the capped confidence value.
+  const lowEvidence = evidenceCount < 5;
 
   if (!items.length) {
     return {
@@ -265,7 +269,7 @@ export const scoreCommunityPain = (sources: CommunityPainSourceResult[]) => {
     clamp(Math.min(score, gajuaScore) * 0.7 + (100 - Math.abs(score - gajuaScore)) * 0.3),
   );
   const sentimentRegime = getCommunitySentimentRegime(score, gajuaScore, lowEvidence);
-  const confidence = Math.round(
+  const calculatedConfidence = Math.round(
     clamp(
       (Math.min(evidenceCount, 90) / 90) * 32 +
         Math.min(sourceWeight, 2.6) * 15 +
@@ -276,6 +280,7 @@ export const scoreCommunityPain = (sources: CommunityPainSourceResult[]) => {
         dateParseCoverage * 8,
     ),
   );
+  const confidence = Math.min(calculatedConfidence, sourceCount === 1 ? 70 : 100);
   const factors: CommunityPainFactor[] = [
     {
       key: "painKeywordDensity",

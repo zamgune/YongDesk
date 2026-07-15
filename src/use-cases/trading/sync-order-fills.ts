@@ -13,7 +13,7 @@ import {
  *
  *  1) OPEN 목록을 한 번 조회해 진행 중 주문 상태/부분체결을 갱신하고,
  *  2) 목록에서 찾지 못한 추적 주문은 개별 상세조회로 상태를 확정합니다.
- * Toss OpenAPI 1.2.2는 CLOSED 목록 조회를 받지만 closed-not-supported로 거절하므로
+ * Toss OpenAPI 1.2.4는 CLOSED 목록 조회를 받지만 closed-not-supported로 거절하므로
  * 종결 주문 동기화에는 주문 상세조회를 사용합니다.
  * 체결 수량이 직전 동기화보다 늘었으면 그 델타를 체결 기록으로 남깁니다.
  */

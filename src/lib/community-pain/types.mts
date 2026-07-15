@@ -81,6 +81,56 @@ export type CommunityPainLevel = "평온" | "한숨" | "비명 전조" | "곡소
 
 export type CommunitySentimentRegime = "calm" | "panic" | "hype" | "divided" | "low_evidence";
 
+export type CommunitySentimentCategory =
+  | "bullish_hype"
+  | "bearish_criticism"
+  | "mixed"
+  | "neutral";
+
+export type CommunitySentimentDistributionStatus = "ready" | "low_evidence" | "unavailable";
+
+export type CommunitySentimentRatios = Record<CommunitySentimentCategory, number>;
+
+export type CommunitySentimentCounts = Record<CommunitySentimentCategory, number>;
+
+export type CommunitySentimentPostClassification = {
+  category: CommunitySentimentCategory;
+  bullishTerms: string[];
+  bearishTerms: string[];
+  toxicityTerms: string[];
+  toxicity: number;
+};
+
+export type CommunitySentimentEvidence = {
+  category: CommunitySentimentCategory;
+  sourceId: CommunitySourceId;
+  title: string;
+  url: string;
+  createdAt: string;
+  engagement: number;
+  matchedTerms: string[];
+};
+
+export type CommunitySentimentDistribution = {
+  status: CommunitySentimentDistributionStatus;
+  ratios: CommunitySentimentRatios | null;
+  sampleCount: number;
+  uniqueAuthorCount: number | null;
+  effectiveWindowHours: 24 | 72;
+  pain: number;
+  fomo: number;
+  toxicity: number;
+  counts: CommunitySentimentCounts;
+  evidence: CommunitySentimentEvidence[];
+  reason?: string;
+  generatedAt: string;
+};
+
+export type CommunitySentimentDistributionOptions = {
+  nowTimestamp?: number;
+  queryTerms?: string[];
+};
+
 export type CommunityPainSourceResult = {
   id: CommunitySourceId;
   label: string;
@@ -142,6 +192,7 @@ export type CommunityPainResponse = {
   signalItemCount: number;
   collectionWindowHours: number;
   lowEvidence: boolean;
+  qualityReasons: string[];
   factors: CommunityPainFactor[];
   gajuaFactors: CommunityGajuaFactor[];
   sourceStats: CommunityPainSourceStats[];
@@ -189,6 +240,7 @@ export type SourceFetchContext = {
   nowTimestamp: number;
   sinceTimestamp: number;
   primarySinceTimestamp: number;
+  summaryOnly?: boolean;
 };
 
 export type CommunitySourceAdapter = {

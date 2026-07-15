@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { readFileSync } from "node:fs";
+import { dirname } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import type { AutomationStrategyConfig } from "../src/domain/automation.ts";
@@ -14,10 +16,11 @@ import type {
   PaperTradingSession,
 } from "../src/domain/paper-trading.ts";
 import type { Currency } from "../src/domain/portfolio.ts";
-import type { BrokerOrderRequest, OrderSide, OrderType } from "../src/domain/trading.ts";
+import type { BrokerOrderRequest, ManagedTradePlan, OrderSide, OrderType } from "../src/domain/trading.ts";
 import type { UserContext } from "../src/domain/user.ts";
 import type { BrokerPort } from "../src/ports/broker.ts";
 import { createTossBroker, LiveTradingDisabledError } from "../src/adapters/toss/toss-broker.ts";
+import { buildTossConditionalOrderPayload } from "../src/adapters/toss/toss-conditional-order.ts";
 import { createCryptoBroker } from "../src/adapters/crypto/crypto-broker.ts";
 import { parseStrategyConfigPayload } from "../src/lib/automation/http.ts";
 import {
@@ -172,6 +175,7 @@ import {
   COMMUNITY_CACHE_MAX_ENTRIES,
   COMMUNITY_CACHE_TTL_SECONDS,
 } from "../src/lib/community-pain/config.mts";
+import { normalizeCommunitySymbol } from "../src/lib/community-pain/normalize.mts";
 import { getCommunityPain } from "../src/lib/community-pain/service.mts";
 import type {
   CommunityPainResponse,
@@ -193,6 +197,19 @@ import {
   getStoredWatchlistSignals,
   scanWatchlistSignals,
 } from "../src/lib/local-engine/watchlist-signals.ts";
+import { stockAnalysisStoragePath } from "../src/lib/local-storage.ts";
+import {
+  buildInstrumentSentiment,
+  buildMarketSentimentBucket,
+  configurationRequiredMarketComparison,
+  warmingMarketComparison,
+  type SentimentMarketBucket,
+  type SentimentMarketComparison,
+  type SentimentOverviewBucket,
+  type SentimentOverviewMarket,
+  type SentimentOverviewResponse,
+  type SentimentOverviewStatus,
+} from "../src/use-cases/market/get-sentiment-overview.ts";
 import { buildPaperTradingCandidates } from "../src/use-cases/trading/build-paper-trading-candidates.ts";
 import {
   PAPER_STRATEGY_VERSION,
@@ -208,9 +225,18 @@ import { getWorkerState, recordExecutedStep, saveWorkerState } from "../src/lib/
 import { checkTossLiveReadiness } from "./check_toss_live_readiness.mts";
 import { createTossClient, formatTossApiError, TossApiError } from "../src/lib/toss/client.ts";
 import { TOSS_OPENAPI_CONTRACT } from "../src/lib/toss/contract.ts";
-import type { Account, TossCurrency } from "../src/lib/toss/types.ts";
+import type { Account, Order, TossCurrency } from "../src/lib/toss/types.ts";
 import { createOrderIntent } from "../src/use-cases/trading/create-order-intent.ts";
+import { createManagedTradePlan } from "../src/use-cases/trading/create-managed-trade-plan.ts";
 import { createOrderPrecheck, inferCurrency } from "../src/use-cases/trading/precheck-order.ts";
+import { getMarketDataProvider } from "../src/lib/market-data/index.ts";
+import {
+  getManagedTradePlan,
+  listManagedTradePlans,
+  saveManagedTradePlan,
+  updateManagedTradePlan,
+  type ManagedTradePlanRecord,
+} from "../src/lib/trading/managed-trade-plan-store.ts";
 
 type JsonValue = Record<string, unknown> | unknown[] | string | number | boolean | null;
 type LocalSelfTestStatus = "pass" | "warn" | "fail";
@@ -248,11 +274,15 @@ const ENGINE_VERSION = (() => {
   }
 })();
 const DEFAULT_PORT = 38771;
-const LIVE_SUBMISSION_MODE = "disabled" as const;
+type LiveSubmissionMode = "disabled" | "local-qa";
+const LIVE_SUBMISSION_MODE: LiveSubmissionMode = "disabled";
 const RELEASE_CHANNEL = "beta" as const;
-const liveSubmissionEnabled = (): boolean => false;
+const liveSubmissionEnabled = (
+  mode: LiveSubmissionMode = LIVE_SUBMISSION_MODE,
+): boolean => mode === "local-qa";
 const CRYPTO_LIVE_AUTOMATION_SUPPORTED = true;
 const CRYPTO_TICKER_MAX_AGE_MS = 60_000;
+const MANAGED_TRADE_QUOTE_MAX_AGE_MS = 60_000;
 const DEFAULT_SYMBOL_MARKETS: SymbolSearchMarket[] = ["US", "KOSPI", "KOSDAQ", "CRYPTO"];
 const COMMUNITY_SOURCE_IDS = new Set<CommunitySourceId>([
   "paxnet",
@@ -266,6 +296,55 @@ const COMMUNITY_SOURCE_IDS = new Set<CommunitySourceId>([
 const COMMUNITY_TRANSIENT_FAILURE_CACHE_TTL_SECONDS = 60;
 const localCommunityCache = new Map<string, { expiresAt: number; payload: CommunityPainResponse }>();
 const localCommunityInFlight = new Map<string, Promise<CommunityPainResponse>>();
+const SENTIMENT_INSTRUMENT_CACHE_TTL_MS = 30 * 60 * 1_000;
+const SENTIMENT_INSTRUMENT_FAILURE_CACHE_TTL_MS = 60 * 1_000;
+const SENTIMENT_INSTRUMENT_REFRESH_THROTTLE_MS = 30 * 1_000;
+const SENTIMENT_MARKET_CACHE_TTL_MS = 30 * 60 * 1_000;
+const SENTIMENT_MARKET_STALE_MAX_AGE_MS = 24 * 60 * 60 * 1_000;
+const SENTIMENT_MARKET_FAILURE_BACKOFF_MS = 5 * 60 * 1_000;
+const SENTIMENT_MARKET_CACHE_PATH = stockAnalysisStoragePath("sentiment-market-overview.json");
+type SentimentInstrument = SentimentOverviewResponse["instrument"];
+type SentimentInstrumentCacheEntry = {
+  expiresAt: number;
+  payload?: SentimentInstrument;
+  error?: string;
+};
+type SentimentMarketCacheEntry = {
+  cachedAt: number;
+  payload: SentimentMarketComparison;
+};
+const localSentimentInstrumentCache = new Map<string, SentimentInstrumentCacheEntry>();
+const localSentimentInstrumentInFlight = new Map<string, Promise<SentimentInstrument>>();
+const localSentimentInstrumentRefreshAt = new Map<string, number>();
+let localSentimentMarketCache: SentimentMarketCacheEntry | null = null;
+let localSentimentMarketCacheLoad: Promise<void> | null = null;
+let localSentimentMarketInFlight: Promise<void> | null = null;
+let localSentimentMarketFailureUntil = 0;
+let localSentimentMarketFailureReason: string | null = null;
+export const SENTIMENT_MARKET_RANKING_REQUESTS = [
+  {
+    type: "MARKET_TRADING_AMOUNT",
+    marketCountry: "KR",
+    duration: "1d",
+    count: 30,
+    excludeInvestmentCaution: false,
+  },
+  {
+    type: "MARKET_TRADING_AMOUNT",
+    marketCountry: "US",
+    duration: "1d",
+    count: 30,
+    excludeInvestmentCaution: false,
+  },
+] as const;
+
+export const resetLocalSentimentMarketStateForTests = () => {
+  localSentimentMarketCache = null;
+  localSentimentMarketCacheLoad = null;
+  localSentimentMarketInFlight = null;
+  localSentimentMarketFailureUntil = 0;
+  localSentimentMarketFailureReason = null;
+};
 const localUserId = () => process.env.STOCK_ANALYSIS_LOCAL_USER_ID?.trim() || "local-macos-user";
 const developerModeEnabled = () => process.env.STOCK_ANALYSIS_DEVELOPER_MODE === "1" || process.env.NODE_ENV === "test";
 let localAutomationScheduler: LocalAutomationScheduler | null = null;
@@ -378,7 +457,7 @@ const jsonResponse = (payload: JsonValue, init?: ResponseInit) => {
   });
 };
 
-const preReleaseLiveLockResponse = (message = "1.2.0-beta.2 무실주문 베타에서는 실제 주문과 취소가 잠겨 있습니다.") =>
+const preReleaseLiveLockResponse = (message = "1.3.0-beta.1 설치본에서는 실제 주문과 취소가 잠겨 있습니다.") =>
   jsonResponse({
     code: "PRE_RELEASE_LIVE_LOCK",
     error: message,
@@ -873,6 +952,560 @@ const submitPaperOrderIntent = async (request: Request) => {
     snapshotPath,
     auditEntry,
   });
+};
+
+type ManagedTradePlanPayload = {
+  symbol?: unknown;
+  assetClass?: unknown;
+  currency?: unknown;
+  purpose?: unknown;
+  mode?: unknown;
+  horizon?: unknown;
+  quantity?: unknown;
+  entryPrice?: unknown;
+  takeProfitEnabled?: unknown;
+  takeProfitPrice?: unknown;
+  stopLossEnabled?: unknown;
+  stopLossPrice?: unknown;
+  stopLossOrderPrice?: unknown;
+  expiryDate?: unknown;
+  accountSeq?: unknown;
+  sourceAnalysisId?: unknown;
+  session?: unknown;
+  market?: unknown;
+};
+
+const managedTradeConfirmationText = (plan: ManagedTradePlan) => {
+  const parts = [
+    plan.symbol,
+    plan.purpose === "new-position" ? "신규 매수" : "보유분 관리",
+    `${plan.quantity}주`,
+  ];
+  if (plan.entry?.limitPrice) parts.push(`진입 ${plan.entry.limitPrice} ${plan.currency}`);
+  else if (plan.referencePrice) parts.push(`기준 ${plan.referencePrice} ${plan.currency}`);
+  if (plan.exits.takeProfit.enabled) parts.push(`익절 ${plan.exits.takeProfit.triggerPrice}`);
+  if (plan.exits.stopLoss.enabled) parts.push(`손절 ${plan.exits.stopLoss.triggerPrice}`);
+  parts.push(`만료 ${plan.expiryDate}`);
+  return parts.join(" · ");
+};
+
+const managedTradePreviewHash = (plan: ManagedTradePlan) => createHash("sha256")
+  .update(JSON.stringify({
+    symbol: plan.symbol,
+    assetClass: plan.assetClass,
+    currency: plan.currency,
+    purpose: plan.purpose,
+    mode: plan.mode,
+    horizon: plan.horizon,
+    quantity: plan.quantity,
+    referencePrice: plan.referencePrice,
+    entryPrice: plan.entry?.limitPrice ?? null,
+    exits: plan.exits,
+    expiryDate: plan.expiryDate,
+    accountSeq: plan.accountSeq ?? null,
+  }), "utf8")
+  .digest("hex");
+
+const managedTradeSession = (payload: ManagedTradePlanPayload): PaperTradingSession =>
+  payload.session === "KR" ? "KR" : "US";
+
+const managedTradeMarket = (
+  payload: ManagedTradePlanPayload,
+  session: PaperTradingSession,
+): PaperTradingMarket => {
+  if (payload.market === "CRYPTO" || payload.market === "KOSDAQ" || payload.market === "KOSPI" || payload.market === "US") {
+    return payload.market;
+  }
+  return payload.assetClass === "crypto" ? "CRYPTO" : session === "KR" ? "KOSPI" : "US";
+};
+
+const managedTradePlanPrecheck = async (request: Request) => {
+  await ensureLocalAutomationAccess();
+  const payload = await readJsonBody(request) as ManagedTradePlanPayload;
+  const userId = localUserId();
+  const symbol = normalizePaperOrderSymbol(payload.symbol) ?? "";
+  const assetClass = payload.assetClass === "crypto" ? "crypto" as const : "stock" as const;
+  const mode = payload.mode === "toss-live" ? "toss-live" as const : "paper" as const;
+  const purpose = payload.purpose === "manage-position" ? "manage-position" as const : "new-position" as const;
+  const horizon = payload.horizon === "swing" ? "swing" as const : "day" as const;
+  const currency: Currency = payload.currency === "USD" ? "USD" : "KRW";
+  const quantity = positiveMoneyValue(payload.quantity) ?? 0;
+  const entryPrice = positiveMoneyValue(payload.entryPrice);
+  const takeProfitEnabled = payload.takeProfitEnabled === true;
+  const stopLossEnabled = payload.stopLossEnabled === true;
+  const session = managedTradeSession(payload);
+  const market = managedTradeMarket(payload, session);
+  const preference = mode === "toss-live" ? await getBrokerAccountPreference(userId, "toss") : null;
+  const explicitAccountSeq = accountSeqFromValue(payload.accountSeq);
+  const build = createManagedTradePlan({
+    userId,
+    symbol,
+    assetClass,
+    currency,
+    purpose,
+    mode,
+    horizon,
+    quantity,
+    entryPrice,
+    takeProfit: { enabled: takeProfitEnabled, triggerPrice: positiveMoneyValue(payload.takeProfitPrice) },
+    stopLoss: {
+      enabled: stopLossEnabled,
+      triggerPrice: positiveMoneyValue(payload.stopLossPrice),
+      orderPrice: positiveMoneyValue(payload.stopLossOrderPrice),
+    },
+    expiryDate: typeof payload.expiryDate === "string" ? payload.expiryDate : "",
+    accountSeq: explicitAccountSeq ?? preference?.accountSeq,
+    sourceAnalysisId: typeof payload.sourceAnalysisId === "string" ? payload.sourceAnalysisId.slice(0, 120) : undefined,
+  });
+  const blockers = [...build.riskCheck.blockers];
+
+  if (purpose === "manage-position" && build.riskCheck.passed) {
+    if (mode === "paper") {
+      const { state } = await readPaperTradingState(getPaperTradingStorageRootForUser(userId));
+      const position = state.positions.find((item) => item.session === session && item.symbol.toUpperCase() === symbol);
+      if (!position || position.quantity < quantity) blockers.push("모의 보유 수량이 청산 수량보다 적습니다.");
+    } else if (!build.plan.accountSeq) {
+      blockers.push("Toss 선택 계좌가 필요합니다.");
+    } else {
+      const credentials = await loadDecryptedCredentials(userId, "toss").catch(() => null);
+      if (!credentials) {
+        blockers.push("검증된 Toss API 키가 필요합니다.");
+      } else {
+        const available = Number((await createTossClient(credentials).getSellableQuantity(build.plan.accountSeq, symbol.replace(/\.KS$/i, ""))).sellableQuantity);
+        if (!Number.isFinite(available) || available < quantity) blockers.push("Toss 매도 가능 수량이 청산 수량보다 적습니다.");
+      }
+    }
+  }
+
+  const riskCheck = { ...build.riskCheck, passed: blockers.length === 0, blockers: [...new Set(blockers)] };
+  const now = new Date();
+  const plan = {
+    ...build.plan,
+    status: riskCheck.passed ? "risk_checked" as const : "draft" as const,
+    updatedAt: now.toISOString(),
+  };
+  const record: ManagedTradePlanRecord = {
+    plan,
+    session,
+    market,
+    status: plan.status,
+    riskCheck,
+    previewHash: managedTradePreviewHash(plan),
+    previewExpiresAt: new Date(now.getTime() + 10 * 60_000).toISOString(),
+    submittedAt: null,
+    lastPrice: null,
+    lastQuoteAt: null,
+    executedExit: null,
+    conditionalOrderId: null,
+    liveAttemptId: null,
+    trackedBrokerOrderIds: [],
+    clientOrderId: plan.id.replace(/-/g, "").slice(0, 32),
+    error: null,
+  };
+  await saveManagedTradePlan(record);
+  return jsonResponse({
+    generatedAt: now.toISOString(),
+    record,
+    confirmationText: managedTradeConfirmationText(plan),
+    submitReady: riskCheck.passed,
+    liveSubmissionMode: LIVE_SUBMISSION_MODE,
+    orderSubmissionAttempted: false,
+  });
+};
+
+const managedTradePlanList = async () => jsonResponse({
+  generatedAt: new Date().toISOString(),
+  records: await listManagedTradePlans(localUserId()),
+  liveSubmissionMode: LIVE_SUBMISSION_MODE,
+});
+
+const managedTradePaperSubmit = async (request: Request) => {
+  const payload = await readJsonBody(request);
+  const planId = typeof payload.planId === "string" ? payload.planId : "";
+  const userId = localUserId();
+  const stored = await getManagedTradePlan(userId, planId);
+  if (!stored) return jsonResponse({ error: "매매 계획 미리보기가 필요합니다." }, { status: 428 });
+  if (stored.plan.mode !== "paper") return jsonResponse({ error: "모의주문 계획이 아닙니다." }, { status: 422 });
+  if (!stored.riskCheck.passed) return jsonResponse({ error: stored.riskCheck.blockers[0] ?? "RiskCheck에서 차단됐습니다." }, { status: 422 });
+  if (stored.submittedAt) return jsonResponse({ error: "이미 제출된 계획입니다." }, { status: 409 });
+  if (Date.parse(stored.previewExpiresAt) <= Date.now()) return jsonResponse({ error: "미리보기가 만료됐습니다." }, { status: 428 });
+
+  if (stored.plan.purpose === "manage-position") {
+    const { state } = await readPaperTradingState(getPaperTradingStorageRootForUser(userId));
+    const position = state.positions.find((item) =>
+      item.session === stored.session && item.symbol.toUpperCase() === stored.plan.symbol.toUpperCase(),
+    );
+    if (!position || position.quantity < stored.plan.quantity) {
+      return jsonResponse({ error: "제출 직전 모의 보유 수량이 청산 수량보다 적습니다." }, { status: 422 });
+    }
+  }
+
+  if (stored.plan.entry) {
+    const response = await submitPaperOrderIntent(new Request("http://127.0.0.1/api/paper-trading/order-intent", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ session: stored.session, orderIntent: stored.plan.entry }),
+    }));
+    if (!response.ok) return response;
+  }
+
+  const hasExit = stored.plan.exits.takeProfit.enabled || stored.plan.exits.stopLoss.enabled;
+  const now = new Date().toISOString();
+  const updated = await updateManagedTradePlan(userId, planId, (record) => ({
+    ...record,
+    status: hasExit ? "watching-exit" : "completed",
+    submittedAt: now,
+    plan: { ...record.plan, status: hasExit ? "watching-exit" : "completed", updatedAt: now },
+  }));
+  return jsonResponse({ generatedAt: now, record: updated, orderSubmissionAttempted: false });
+};
+
+type ManagedTradeQuote = { symbol: string; price: number; quoteAt: string; stale: boolean };
+
+const managedTradeQuote = async (
+  record: ManagedTradePlanRecord,
+  provided: Map<string, ManagedTradeQuote>,
+): Promise<ManagedTradeQuote | null> => {
+  const direct = provided.get(record.plan.symbol);
+  if (direct) return direct;
+  if (record.plan.assetClass === "crypto") {
+    const ticker = await getCryptoTicker("upbit", record.plan.symbol);
+    const quoteAt = new Date(ticker.timestamp).toISOString();
+    return {
+      symbol: record.plan.symbol,
+      price: ticker.tradePrice,
+      quoteAt,
+      stale: Date.now() - ticker.timestamp > CRYPTO_TICKER_MAX_AGE_MS,
+    };
+  }
+  const tossCredentials = await loadDecryptedCredentials(record.plan.userId, "toss").catch(() => null);
+  if (tossCredentials) {
+    const tossSymbol = record.plan.symbol.replace(/\.KS$/i, "");
+    const quote = (await createTossClient(tossCredentials).getPrices([tossSymbol]))[0];
+    const price = Number(quote?.lastPrice);
+    if (Number.isFinite(price) && price > 0) {
+      return { symbol: record.plan.symbol, price, quoteAt: quote?.timestamp ?? new Date().toISOString(), stale: false };
+    }
+  }
+  const yahooSymbol = /^\d{6}$/.test(record.plan.symbol) ? `${record.plan.symbol}.KS` : record.plan.symbol;
+  const quote = await getMarketDataProvider().getQuote(yahooSymbol);
+  return quote ? { symbol: record.plan.symbol, price: quote.price, quoteAt: new Date().toISOString(), stale: false } : null;
+};
+
+const syncManagedLiveTradePlans = async (userId: string): Promise<ManagedTradePlanRecord[]> => {
+  const records = (await listManagedTradePlans(userId)).filter((record) =>
+    record.plan.mode === "toss-live"
+    && Boolean(record.conditionalOrderId)
+    && Boolean(record.plan.accountSeq)
+    && !["completed", "canceled", "rejected"].includes(record.status),
+  );
+  if (records.length === 0) return [];
+  const credentials = await loadDecryptedCredentials(userId, "toss").catch(() => null);
+  if (!credentials) return [];
+  const client = createTossClient(credentials);
+  const results: ManagedTradePlanRecord[] = [];
+
+  for (const record of records) {
+    try {
+      const accountSeq = record.plan.accountSeq!;
+      const detail = await client.getConditionalOrder(accountSeq, record.conditionalOrderId!);
+      const triggered = [detail.first.triggeredOrderId, detail.second?.triggeredOrderId ?? null]
+        .filter((orderId): orderId is string => Boolean(orderId));
+      const tracked = new Set(record.trackedBrokerOrderIds ?? []);
+      const orders: Order[] = [];
+      for (const [index, orderId] of triggered.entries()) {
+        const order = await client.getOrder(accountSeq, orderId);
+        orders.push(order);
+        if (!tracked.has(orderId)) {
+          await recordSubmittedOrder({
+            userId,
+            brokerOrderId: orderId,
+            clientOrderId: `${record.clientOrderId.slice(0, 26)}-c${index + 1}`,
+            accountSeq,
+            strategyId: "managed-conditional-order",
+            stepId: `${record.plan.id}-${index + 1}`,
+            symbol: record.plan.symbol,
+            side: order.side === "SELL" ? "sell" : "buy",
+            quantity: Number(order.quantity),
+            limitPrice: positiveMoneyValue(order.price ?? order.execution.averageFilledPrice),
+            submittedAt: order.orderedAt,
+          });
+          tracked.add(orderId);
+        }
+      }
+
+      const filledSell = orders.find((order) => order.side === "SELL" && order.status === "FILLED");
+      const filledBuy = orders.find((order) => order.side === "BUY" && order.status === "FILLED");
+      const rejected = orders.some((order) => order.status === "REJECTED");
+      const nextStatus = filledSell
+        ? "completed" as const
+        : rejected
+          ? "rejected" as const
+          : filledBuy
+            ? "watching-exit" as const
+            : detail.status === "EXPIRED"
+              ? "canceled" as const
+              : record.status;
+      const exitOrderId = filledSell?.orderId ?? null;
+      const executedExit = exitOrderId === detail.first.triggeredOrderId
+        ? (record.plan.exits.takeProfit.enabled ? "take-profit" as const : "stop-loss" as const)
+        : exitOrderId === detail.second?.triggeredOrderId
+          ? (record.plan.exits.stopLoss.enabled ? "stop-loss" as const : "take-profit" as const)
+          : record.executedExit;
+      const now = new Date().toISOString();
+      const updated = await updateManagedTradePlan(userId, record.plan.id, (item) => ({
+        ...item,
+        status: nextStatus,
+        trackedBrokerOrderIds: [...tracked],
+        executedExit,
+        error: rejected ? "조건 발동 후 일반 주문이 거절됐습니다." : null,
+        plan: { ...item.plan, status: nextStatus, updatedAt: now },
+      }));
+      if (updated) results.push(updated);
+    } catch (error) {
+      const updated = await updateManagedTradePlan(userId, record.plan.id, (item) => ({
+        ...item,
+        error: `조건주문 동기화 대기: ${errorMessage(error)}`,
+      }));
+      if (updated) results.push(updated);
+    }
+  }
+  return results;
+};
+
+const tickManagedTradePlans = async (request: Request) => {
+  const payload = await readJsonBody(request);
+  const provided = new Map<string, ManagedTradeQuote>();
+  if (Array.isArray(payload.quotes)) {
+    for (const value of payload.quotes) {
+      if (typeof value !== "object" || value === null) continue;
+      const item = value as Record<string, unknown>;
+      const symbol = normalizePaperOrderSymbol(item.symbol);
+      const price = positiveMoneyValue(item.price);
+      if (!symbol || !price) continue;
+      provided.set(symbol, {
+        symbol,
+        price,
+        quoteAt: typeof item.quoteAt === "string" ? item.quoteAt : new Date().toISOString(),
+        stale: item.stale === true,
+      });
+    }
+  }
+  const userId = localUserId();
+  const active = (await listManagedTradePlans(userId)).filter((record) => record.plan.mode === "paper" && record.status === "watching-exit");
+  const results: ManagedTradePlanRecord[] = [];
+  for (const record of active) {
+    if (record.plan.expiryDate < new Date().toISOString().slice(0, 10)) {
+      const expired = await updateManagedTradePlan(userId, record.plan.id, (item) => ({
+        ...item,
+        status: "canceled",
+        error: "계획 만료일이 지났습니다.",
+        plan: { ...item.plan, status: "canceled", updatedAt: new Date().toISOString() },
+      }));
+      if (expired) results.push(expired);
+      continue;
+    }
+    const quote = await managedTradeQuote(record, provided).catch(() => null);
+    const quoteAge = quote ? Math.abs(Date.now() - Date.parse(quote.quoteAt)) : Number.POSITIVE_INFINITY;
+    if (!quote || quote.stale || !Number.isFinite(quoteAge) || quoteAge > MANAGED_TRADE_QUOTE_MAX_AGE_MS) continue;
+    const takeProfitTriggered = record.plan.exits.takeProfit.enabled
+      && quote.price >= (record.plan.exits.takeProfit.triggerPrice ?? Number.POSITIVE_INFINITY);
+    const stopLossTriggered = record.plan.exits.stopLoss.enabled
+      && quote.price <= (record.plan.exits.stopLoss.triggerPrice ?? Number.NEGATIVE_INFINITY);
+    const exitKind = takeProfitTriggered ? "take-profit" as const : stopLossTriggered ? "stop-loss" as const : null;
+    if (!exitKind) {
+      const observed = await updateManagedTradePlan(userId, record.plan.id, (item) => ({
+        ...item,
+        lastPrice: quote.price,
+        lastQuoteAt: quote.quoteAt,
+      }));
+      if (observed) results.push(observed);
+      continue;
+    }
+
+    await updateManagedTradePlan(userId, record.plan.id, (item) => ({ ...item, status: "unknown", error: "청산 체결 처리 중" }));
+    const response = await submitPaperOrderIntent(new Request("http://127.0.0.1/api/paper-trading/order-intent", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        session: record.session,
+        orderIntent: {
+          id: `${record.plan.id}-${exitKind}`,
+          symbol: record.plan.symbol,
+          side: "sell",
+          type: "limit",
+          quantity: record.plan.quantity,
+          limitPrice: quote.price,
+          currency: record.plan.currency,
+        },
+      }),
+    }));
+    const finishedAt = new Date().toISOString();
+    const updated = await updateManagedTradePlan(userId, record.plan.id, (item) => ({
+      ...item,
+      status: response.ok ? "completed" : "rejected",
+      executedExit: response.ok ? exitKind : null,
+      lastPrice: quote.price,
+      lastQuoteAt: quote.quoteAt,
+      error: response.ok ? null : "모의 청산 주문을 실행하지 못했습니다.",
+      plan: { ...item.plan, status: response.ok ? "completed" : "rejected", updatedAt: finishedAt },
+    }));
+    if (updated) results.push(updated);
+  }
+  const liveResults = await syncManagedLiveTradePlans(userId);
+  return jsonResponse({
+    generatedAt: new Date().toISOString(),
+    evaluated: active.length + liveResults.length,
+    records: [...results, ...liveResults],
+  });
+};
+
+const managedTradeLiveSubmit = async (request: Request) => {
+  const payload = await readJsonBody(request);
+  const planId = typeof payload.planId === "string" ? payload.planId : "";
+  const confirmation = typeof payload.confirmation === "string" ? payload.confirmation.trim() : "";
+  const userId = localUserId();
+  const stored = await getManagedTradePlan(userId, planId);
+  if (!stored) return jsonResponse({ error: "매매 계획 미리보기가 필요합니다.", orderSubmissionAttempted: false }, { status: 428 });
+  if (stored.plan.mode !== "toss-live") return jsonResponse({ error: "Toss 실계좌 계획이 아닙니다.", orderSubmissionAttempted: false }, { status: 422 });
+  if (confirmation !== managedTradeConfirmationText(stored.plan)) {
+    return jsonResponse({ error: "계획 요약과 동일한 확인 문구가 필요합니다.", orderSubmissionAttempted: false }, { status: 422 });
+  }
+  if (!liveSubmissionEnabled()) return preReleaseLiveLockResponse("서명된 로컬 QA 빌드에서만 Toss 조건주문을 제출할 수 있습니다.");
+  if (!stored.riskCheck.passed || stored.submittedAt || Date.parse(stored.previewExpiresAt) <= Date.now()) {
+    return jsonResponse({ error: "미리보기 상태가 유효하지 않습니다.", orderSubmissionAttempted: false }, { status: 409 });
+  }
+
+  const credentials = await loadDecryptedCredentials(userId, "toss");
+  const accountSeq = stored.plan.accountSeq;
+  if (!credentials || !accountSeq) return jsonResponse({ error: "검증된 Toss API 키와 선택 계좌가 필요합니다.", orderSubmissionAttempted: false }, { status: 412 });
+  const gate = await getLiveTradingGate(userId, "manual", accountSeq);
+  if (!gate.effective) return jsonResponse({ error: gate.reason ?? "실거래 게이트가 닫혀 있습니다.", orderSubmissionAttempted: false }, { status: gate.status });
+  const client = createTossClient(credentials);
+  const conditionalPayload = buildTossConditionalOrderPayload(stored.plan, stored.clientOrderId);
+  const accountingPrice = stored.plan.entry?.limitPrice
+    ?? stored.plan.exits.takeProfit.orderPrice
+    ?? stored.plan.exits.stopLoss.orderPrice;
+  if (!accountingPrice) return jsonResponse({ error: "원장 기록에 사용할 지정가가 없습니다.", orderSubmissionAttempted: false }, { status: 422 });
+  const conversion = await resolveKrwConversion({
+    client,
+    currency: stored.plan.currency,
+    amount: stored.plan.quantity * accountingPrice,
+  });
+  if (conversion.krwEquivalent === null || conversion.reason) {
+    return jsonResponse({ error: conversion.reason ?? "KRW 환산 검증에 실패했습니다.", orderSubmissionAttempted: false }, { status: 422 });
+  }
+  let liveAttempt: Awaited<ReturnType<typeof prepareLocalLiveOrderAttempt>>;
+  try {
+    liveAttempt = await prepareLocalLiveOrderAttempt({
+      userId,
+      accountSeq,
+      source: "manual",
+      previewId: stored.plan.id,
+      clientOrderId: stored.clientOrderId,
+      payloadHash: stored.previewHash,
+      symbol: stored.plan.symbol,
+      side: stored.plan.purpose === "new-position" ? "buy" : "sell",
+      quantity: stored.plan.quantity,
+      limitPrice: accountingPrice,
+      currency: stored.plan.currency,
+      krwEquivalent: conversion.krwEquivalent,
+      exchangeRate: conversion.exchangeRate,
+    });
+  } catch (error) {
+    return jsonResponse({ error: errorMessage(error), orderSubmissionAttempted: false }, { status: 409 });
+  }
+  const startedAt = new Date().toISOString();
+  await updateManagedTradePlan(userId, planId, (item) => ({
+    ...item,
+    status: "unknown",
+    submittedAt: startedAt,
+    liveAttemptId: liveAttempt.id,
+    error: "submission_pending",
+    plan: { ...item.plan, status: "unknown", updatedAt: startedAt },
+  }));
+  try {
+    if (conditionalPayload) {
+      const submitted = await client.createConditionalOrder(accountSeq, conditionalPayload);
+      await markLocalLiveOrderSubmitted(liveAttempt.id, submitted.conditionalOrderId);
+      const status = stored.plan.purpose === "new-position" ? "watching-entry" as const : "watching-exit" as const;
+      const updated = await updateManagedTradePlan(userId, planId, (item) => ({
+        ...item,
+        status,
+        conditionalOrderId: submitted.conditionalOrderId,
+        error: null,
+        plan: { ...item.plan, status, updatedAt: new Date().toISOString() },
+      }));
+      return jsonResponse({ status: "submitted", record: updated, orderSubmissionAttempted: true }, { status: 201 });
+    }
+    if (!stored.plan.entry) throw new Error("진입 OrderIntent가 필요합니다.");
+    const broker = createTossBroker({ client, liveTradingEnabled: true });
+    const submitted = await broker.submitOrder({
+      orderIntentId: stored.plan.entry.id,
+      accountSeq,
+      symbol: stored.plan.symbol,
+      side: "buy",
+      type: "limit",
+      quantity: stored.plan.quantity,
+      limitPrice: stored.plan.entry.limitPrice,
+      stopPrice: null,
+      clientOrderId: stored.clientOrderId,
+      timeInForce: "DAY",
+    });
+    await markLocalLiveOrderSubmitted(liveAttempt.id, submitted.brokerOrderId);
+    await recordSubmittedOrder({
+      userId,
+      brokerOrderId: submitted.brokerOrderId,
+      clientOrderId: stored.clientOrderId,
+      accountSeq,
+      strategyId: "managed-trade-plan",
+      stepId: stored.plan.id,
+      symbol: stored.plan.symbol,
+      side: "buy",
+      quantity: stored.plan.quantity,
+      limitPrice: stored.plan.entry.limitPrice ?? accountingPrice,
+      submittedAt: submitted.submittedAt,
+    });
+    const updated = await updateManagedTradePlan(userId, planId, (item) => ({
+      ...item,
+      status: "position-open",
+      error: null,
+      plan: { ...item.plan, status: "position-open", updatedAt: new Date().toISOString() },
+    }));
+    return jsonResponse({ status: submitted.status, result: submitted, record: updated, orderSubmissionAttempted: true }, { status: 201 });
+  } catch (error) {
+    const message = errorMessage(error);
+    const unknown = isUnknownSubmissionError(error);
+    if (unknown) await markLocalLiveOrderUnknown(liveAttempt.id, message);
+    else await markLocalLiveOrderRejected(liveAttempt.id, message);
+    const updated = await updateManagedTradePlan(userId, planId, (item) => ({
+      ...item,
+      status: unknown ? "unknown" : "rejected",
+      error: message,
+      plan: { ...item.plan, status: unknown ? "unknown" : "rejected", updatedAt: new Date().toISOString() },
+    }));
+    return jsonResponse({ status: updated?.status, error: message, record: updated, orderSubmissionAttempted: true }, { status: unknown ? 202 : 422 });
+  }
+};
+
+const cancelManagedTradePlan = async (planId: string) => {
+  const userId = localUserId();
+  const stored = await getManagedTradePlan(userId, planId);
+  if (!stored) return jsonResponse({ error: "매매 계획을 찾을 수 없습니다." }, { status: 404 });
+  if (stored.plan.mode === "toss-live" && stored.conditionalOrderId) {
+    if (!liveSubmissionEnabled()) return preReleaseLiveLockResponse();
+    const credentials = await loadDecryptedCredentials(userId, "toss");
+    if (!credentials || !stored.plan.accountSeq) return jsonResponse({ error: "Toss 계좌 준비가 필요합니다." }, { status: 412 });
+    await createTossClient(credentials).cancelConditionalOrder(stored.plan.accountSeq, stored.conditionalOrderId);
+  }
+  const now = new Date().toISOString();
+  const updated = await updateManagedTradePlan(userId, planId, (item) => ({
+    ...item,
+    status: "canceled",
+    error: null,
+    plan: { ...item.plan, status: "canceled", updatedAt: now },
+  }));
+  return jsonResponse({ generatedAt: now, record: updated });
 };
 
 const automationDryRunSummary = async (
@@ -1569,7 +2202,7 @@ const getCryptoLiveTradingGate = async (
     reason,
   });
   if (!liveSubmissionEnabled()) {
-    return closed("1.2.0-beta.2 무실주문 베타의 전역 실주문 잠금이 적용되어 있습니다.");
+    return closed("1.3.0-beta.1 설치본의 전역 실주문 잠금이 적용되어 있습니다.");
   }
   if (!CRYPTO_LIVE_AUTOMATION_SUPPORTED) {
     return closed("1.0.0에서는 코인 API 조회·사전검증·모의 자동화만 지원합니다. 체결 동기화가 포함된 후 실거래를 엽니다.", 501);
@@ -2941,7 +3574,7 @@ const localLiveTradingState = async () => {
       userEnabled: false,
       effective: false,
       status: 423,
-      reason: "1.2.0-beta.2 무실주문 베타의 전역 실주문 잠금이 적용되어 있습니다.",
+      reason: "1.3.0-beta.1 설치본의 전역 실주문 잠금이 적용되어 있습니다.",
       featureEnabled: false,
       localRuntime: process.env.STOCK_ANALYSIS_RUNTIME === "macos-local",
       storageRoot: process.env.STOCK_ANALYSIS_STORAGE_ROOT ?? null,
@@ -2955,7 +3588,7 @@ const localLiveTradingState = async () => {
     },
     readiness,
     guidance: [
-      "1.2.0-beta.2는 Toss·Upbit·Bithumb 실제 주문과 취소를 전역에서 차단합니다.",
+      "1.3.0-beta.1 설치본은 Toss·Upbit·Bithumb 실제 주문과 취소를 전역에서 차단합니다.",
       "자동화 cycle은 저장된 정책과 무관하게 paper 경로만 사용합니다.",
       "IP address not allowed 오류가 나오면 Toss Open API 콘솔 허용 IP를 현재 공인 IP로 갱신하세요.",
     ],
@@ -3785,7 +4418,7 @@ const localSelfTest = async () => {
       blocking: true,
       run: async () => {
         const contract = tossOpenApiContractSummary();
-        const ok = contract.specVersion === "1.2.2" &&
+        const ok = contract.specVersion === "1.2.4" &&
           contract.baseUrl === "https://openapi.tossinvest.com" &&
           contract.requiredOperationCount >= 20 &&
           contract.accountHeaderOperationCount >= 8;
@@ -4642,7 +5275,7 @@ const cryptoLiveTradingState = async (exchange: CryptoExchange) => {
       manualOnly: false,
       manualEnabled: false,
       effective: false,
-      reason: "1.2.0-beta.2 무실주문 베타의 전역 실주문 잠금이 적용되어 있습니다.",
+      reason: "1.3.0-beta.1 설치본의 전역 실주문 잠금이 적용되어 있습니다.",
       remainingDailyBuyKrw: gate.remainingDailyBuyKrw,
       limits: {
         perBuyOrderKrw: LOCAL_CRYPTO_LIVE_TRADING_MAX_BUY_ORDER_KRW,
@@ -5543,6 +6176,413 @@ const localCommunityPainResponse = async (url: URL, encodedSymbol: string) => {
   }
 };
 
+const sentimentInstrumentCacheKey = (symbol: string, market: SentimentOverviewMarket) =>
+  `${market}:${symbol.trim().toUpperCase()}`;
+
+const readSentimentInstrumentCache = (
+  cacheKey: string,
+  now: number,
+  allowExpired: boolean,
+): SentimentInstrument | null => {
+  const cached = localSentimentInstrumentCache.get(cacheKey);
+  if (!cached || (!allowExpired && cached.expiresAt <= now)) {
+    return null;
+  }
+  if (cached.error) {
+    throw new Error(cached.error);
+  }
+  return cached.payload ?? null;
+};
+
+const getLocalSentimentInstrument = async ({
+  symbol,
+  market,
+  forceRefresh,
+}: {
+  symbol: string;
+  market: SentimentOverviewMarket;
+  forceRefresh: boolean;
+}): Promise<SentimentInstrument> => {
+  const cacheKey = sentimentInstrumentCacheKey(symbol, market);
+  const now = Date.now();
+  const lastRefreshAt = localSentimentInstrumentRefreshAt.get(cacheKey) ?? 0;
+  const refreshThrottled = forceRefresh && now - lastRefreshAt < SENTIMENT_INSTRUMENT_REFRESH_THROTTLE_MS;
+  const cached = readSentimentInstrumentCache(cacheKey, now, refreshThrottled);
+  if ((!forceRefresh || refreshThrottled) && cached) {
+    return cached;
+  }
+  const active = localSentimentInstrumentInFlight.get(cacheKey);
+  if (active) {
+    return active;
+  }
+  if (forceRefresh) {
+    localSentimentInstrumentRefreshAt.set(cacheKey, now);
+  }
+  const pending = buildInstrumentSentiment({ symbol, market })
+    .then((payload) => {
+      const transientFailure = payload.krCommunity.status === "error" || payload.globalCommunity.status === "error";
+      localSentimentInstrumentCache.set(cacheKey, {
+        expiresAt: Date.now() + (transientFailure
+          ? SENTIMENT_INSTRUMENT_FAILURE_CACHE_TTL_MS
+          : SENTIMENT_INSTRUMENT_CACHE_TTL_MS),
+        payload,
+      });
+      return payload;
+    })
+    .catch((error: unknown) => {
+      const message = errorMessage(error);
+      localSentimentInstrumentCache.set(cacheKey, {
+        expiresAt: Date.now() + SENTIMENT_INSTRUMENT_FAILURE_CACHE_TTL_MS,
+        error: message,
+      });
+      throw error;
+    })
+    .finally(() => {
+      localSentimentInstrumentInFlight.delete(cacheKey);
+    });
+  localSentimentInstrumentInFlight.set(cacheKey, pending);
+  return pending;
+};
+
+const markSentimentMarketStale = (
+  comparison: SentimentMarketComparison,
+): SentimentMarketComparison => ({
+  ...comparison,
+  stale: true,
+  kr: comparison.kr ? { ...comparison.kr, stale: true } : null,
+  us: comparison.us ? { ...comparison.us, stale: true } : null,
+});
+
+const sanitizeSentimentMarketBucket = (
+  bucket: SentimentMarketBucket | null,
+): SentimentMarketBucket | null => bucket
+  ? {
+    ...bucket,
+    sourceStats: [],
+    evidence: [],
+  }
+  : null;
+
+const sanitizeSentimentMarketComparison = (
+  comparison: SentimentMarketComparison,
+): SentimentMarketComparison => ({
+  ...comparison,
+  kr: sanitizeSentimentMarketBucket(comparison.kr),
+  us: sanitizeSentimentMarketBucket(comparison.us),
+});
+
+const parseStoredSentimentMarketComparison = (value: unknown): SentimentMarketComparison | null => {
+  if (!value || typeof value !== "object") return null;
+  const candidate = value as Partial<SentimentMarketComparison>;
+  if (
+    typeof candidate.status !== "string" ||
+    typeof candidate.generatedAt !== "string" ||
+    typeof candidate.stale !== "boolean"
+  ) {
+    return null;
+  }
+  return candidate as SentimentMarketComparison;
+};
+
+const loadStoredSentimentMarketComparison = async () => {
+  if (localSentimentMarketCacheLoad) {
+    return localSentimentMarketCacheLoad;
+  }
+  localSentimentMarketCacheLoad = (async () => {
+    try {
+      const parsed = JSON.parse(await readFile(SENTIMENT_MARKET_CACHE_PATH, "utf8")) as {
+        savedAt?: unknown;
+        comparison?: unknown;
+      };
+      const comparison = parseStoredSentimentMarketComparison(parsed.comparison);
+      const cachedAt = typeof parsed.savedAt === "string" ? Date.parse(parsed.savedAt) : Number.NaN;
+      if (comparison && Number.isFinite(cachedAt)) {
+        localSentimentMarketCache = { cachedAt, payload: comparison };
+      }
+    } catch {
+      // The aggregate cache is optional and is rebuilt from the configured read-only sources.
+    }
+  })();
+  return localSentimentMarketCacheLoad;
+};
+
+const persistSentimentMarketComparison = async (
+  cachedAt: number,
+  comparison: SentimentMarketComparison,
+) => {
+  await mkdir(dirname(SENTIMENT_MARKET_CACHE_PATH), { recursive: true });
+  await writeFile(SENTIMENT_MARKET_CACHE_PATH, JSON.stringify({
+    version: 1,
+    savedAt: new Date(cachedAt).toISOString(),
+    comparison: sanitizeSentimentMarketComparison(comparison),
+  }, null, 2), "utf8");
+};
+
+const sentimentMarketComparisonStatus = (
+  kr: SentimentMarketBucket,
+  us: SentimentMarketBucket,
+): SentimentOverviewStatus => kr.status === "unavailable" || us.status === "unavailable"
+  ? "unavailable"
+  : kr.status === "low_evidence" || us.status === "low_evidence"
+    ? "low_evidence"
+    : "ready";
+
+const sentimentMarketComparisonReason = (status: SentimentOverviewStatus) => status === "unavailable"
+  ? "한국·미국 시장 표본이 모두 준비돼야 시장 비교를 표시합니다."
+  : status === "low_evidence"
+    ? "일부 시장 표본이 적어 참고용으로만 표시합니다."
+    : undefined;
+
+type StoredTossCredentials = NonNullable<Awaited<ReturnType<typeof loadDecryptedCredentials>>>;
+
+const refreshSentimentMarketComparison = (
+  credentials: StoredTossCredentials,
+): Promise<void> => {
+  if (localSentimentMarketInFlight) {
+    return localSentimentMarketInFlight;
+  }
+  const pending = (async () => {
+    try {
+      const client = createTossClient(credentials);
+      const [krRanking, usRanking] = await Promise.all(
+        SENTIMENT_MARKET_RANKING_REQUESTS.map((options) => client.getRankings(options)),
+      );
+      const krSymbols = [...new Set(krRanking.rankings.map((item) => item.symbol.trim()).filter(Boolean))]
+        .slice(0, 30);
+      const usSymbols = [...new Set(usRanking.rankings.map((item) => item.symbol.trim()).filter(Boolean))]
+        .slice(0, 30);
+      const now = Date.now();
+      const [kr, us] = await Promise.all([
+        buildMarketSentimentBucket({
+          id: "market-kr",
+          market: "KR",
+          symbols: krSymbols,
+          rankedAt: krRanking.rankedAt,
+          nowTimestamp: now,
+        }),
+        buildMarketSentimentBucket({
+          id: "market-us",
+          market: "US",
+          symbols: usSymbols,
+          rankedAt: usRanking.rankedAt,
+          nowTimestamp: now,
+        }),
+      ]);
+      const status = sentimentMarketComparisonStatus(kr, us);
+      const comparison: SentimentMarketComparison = {
+        status,
+        reason: sentimentMarketComparisonReason(status),
+        kr,
+        us,
+        generatedAt: new Date(now).toISOString(),
+        stale: false,
+      };
+      localSentimentMarketCache = { cachedAt: now, payload: comparison };
+      localSentimentMarketFailureUntil = 0;
+      localSentimentMarketFailureReason = null;
+      await persistSentimentMarketComparison(now, comparison).catch(() => undefined);
+    } catch (error) {
+      localSentimentMarketFailureUntil = Date.now() + SENTIMENT_MARKET_FAILURE_BACKOFF_MS;
+      localSentimentMarketFailureReason = errorMessage(error);
+    } finally {
+      localSentimentMarketInFlight = null;
+    }
+  })();
+  localSentimentMarketInFlight = pending;
+  return pending;
+};
+
+const sentimentMarketFailureComparison = (reason: string): SentimentMarketComparison => ({
+  status: "error",
+  reason,
+  kr: null,
+  us: null,
+  generatedAt: new Date().toISOString(),
+  stale: false,
+});
+
+const getLocalSentimentMarketComparison = async (): Promise<SentimentMarketComparison> => {
+  const [credentials] = await Promise.all([
+    loadDecryptedCredentials(localUserId(), "toss").catch(() => null),
+  ]);
+  const redditConfigured = Boolean(
+    process.env.REDDIT_CLIENT_ID?.trim() && process.env.REDDIT_CLIENT_SECRET?.trim(),
+  );
+  if (!credentials || !redditConfigured) {
+    const missing = [
+      !credentials ? "Toss OpenAPI" : null,
+      !redditConfigured ? "Reddit OAuth" : null,
+    ].filter((item): item is string => Boolean(item));
+    return configurationRequiredMarketComparison(
+      `${missing.join(" · ")} 연결 후 한국·미국 거래대금 상위 30종목 시장 비교를 표시합니다.`,
+    );
+  }
+  await loadStoredSentimentMarketComparison();
+  const now = Date.now();
+  const cached = localSentimentMarketCache;
+  if (cached && now - cached.cachedAt <= SENTIMENT_MARKET_CACHE_TTL_MS) {
+    return cached.payload;
+  }
+  const withinFailureBackoff = now < localSentimentMarketFailureUntil;
+  if (cached && now - cached.cachedAt <= SENTIMENT_MARKET_STALE_MAX_AGE_MS) {
+    if (!withinFailureBackoff) {
+      void refreshSentimentMarketComparison(credentials);
+    }
+    return markSentimentMarketStale(cached.payload);
+  }
+  if (withinFailureBackoff) {
+    return sentimentMarketFailureComparison(
+      `시장 민심 집계를 다시 시도하기 전 대기 중입니다. ${localSentimentMarketFailureReason ?? "외부 소스를 확인해 주세요."}`,
+    );
+  }
+  void refreshSentimentMarketComparison(credentials);
+  return warmingMarketComparison();
+};
+
+const fixtureSentimentBucket = ({
+  id,
+  sourceId,
+  sourceLabel,
+  ratios,
+}: {
+  id: string;
+  sourceId: string;
+  sourceLabel: string;
+  ratios: NonNullable<SentimentOverviewBucket["ratios"]>;
+}): SentimentOverviewBucket => ({
+  id,
+  status: "ready",
+  ratios,
+  sampleCount: 24,
+  uniqueAuthorCount: 18,
+  effectiveWindowHours: 24,
+  pain: 32,
+  fomo: 68,
+  toxicity: 14,
+  sourceStats: [{ id: sourceId, label: sourceLabel, status: "ok", itemCount: 24 }],
+  evidence: [],
+  generatedAt: "2026-07-15T00:00:00.000Z",
+  stale: false,
+});
+
+const fixtureSentimentMarketBucket = (
+  id: "market-kr" | "market-us",
+  ratios: NonNullable<SentimentOverviewBucket["ratios"]>,
+): SentimentMarketBucket => ({
+  ...fixtureSentimentBucket({
+    id,
+    sourceId: id === "market-kr" ? "paxnet" : "reddit",
+    sourceLabel: id === "market-kr" ? "팍스넷" : "Reddit",
+    ratios,
+  }),
+  sampleCount: 180,
+  uniqueAuthorCount: 140,
+  basis: "toss_market_trading_amount_1d",
+  universeCount: 30,
+  coverageCount: 30,
+  bullishBreadth: id === "market-kr" ? 19 : 17,
+  bearishBreadth: id === "market-kr" ? 8 : 10,
+  rankedAt: "2026-07-15T00:00:00.000Z",
+});
+
+const fixtureUnsupportedSentimentBucket = (): SentimentOverviewBucket => ({
+  id: "instrument-kr",
+  status: "unavailable",
+  ratios: null,
+  sampleCount: 0,
+  uniqueAuthorCount: null,
+  effectiveWindowHours: 24,
+  pain: 0,
+  fomo: 0,
+  toxicity: 0,
+  sourceStats: [{
+    id: "unsupported_source_coverage",
+    label: "한국 커뮤니티",
+    status: "unsupported_source_coverage",
+    reason: "현재 미국 종목의 한국 커뮤니티 수집 소스를 지원하지 않습니다.",
+    itemCount: 0,
+  }],
+  evidence: [],
+  reason: "unsupported_source_coverage",
+  generatedAt: "2026-07-15T00:00:00.000Z",
+  stale: false,
+});
+
+const fixtureSentimentOverview = (
+  symbol: string,
+  market: SentimentOverviewMarket,
+): SentimentOverviewResponse => {
+  const generatedAt = "2026-07-15T00:00:00.000Z";
+  return {
+    symbol,
+    canonicalSymbol: normalizeCommunitySymbol(symbol, market === "KR" ? "KOSPI" : "US"),
+    symbolMarket: market,
+    generatedAt,
+    stale: false,
+    instrument: {
+      krCommunity: market === "US"
+        ? fixtureUnsupportedSentimentBucket()
+        : fixtureSentimentBucket({
+          id: "instrument-kr",
+          sourceId: "paxnet",
+          sourceLabel: "팍스넷",
+          ratios: { bullishHype: 52, bearishCriticism: 21, mixed: 12, neutral: 15 },
+        }),
+      globalCommunity: fixtureSentimentBucket({
+        id: "instrument-global",
+        sourceId: "reddit",
+        sourceLabel: "Reddit",
+        ratios: { bullishHype: 44, bearishCriticism: 25, mixed: 13, neutral: 18 },
+      }),
+    },
+    marketComparison: {
+      status: "ready",
+      kr: fixtureSentimentMarketBucket(
+        "market-kr",
+        { bullishHype: 39, bearishCriticism: 28, mixed: 12, neutral: 21 },
+      ),
+      us: fixtureSentimentMarketBucket(
+        "market-us",
+        { bullishHype: 42, bearishCriticism: 27, mixed: 11, neutral: 20 },
+      ),
+      generatedAt,
+      stale: false,
+    },
+  };
+};
+
+const localSentimentOverviewResponse = async (url: URL) => {
+  const symbol = url.searchParams.get("symbol")?.trim().toUpperCase() ?? "";
+  if (!symbol || symbol.length > 32 || !/^[A-Z0-9._^-]+$/.test(symbol)) {
+    return jsonResponse({ error: "유효한 종목 코드가 필요합니다." }, { status: 400 });
+  }
+  const requestedMarket = url.searchParams.get("market")?.trim().toUpperCase();
+  if (requestedMarket !== "KR" && requestedMarket !== "US") {
+    return jsonResponse({ error: "market은 KR 또는 US여야 합니다." }, { status: 400 });
+  }
+  const market: SentimentOverviewMarket = requestedMarket;
+  if (process.env.STOCK_ANALYSIS_MARKET_FIXTURE_MODE === "1") {
+    return jsonResponse({ ...fixtureSentimentOverview(symbol, market) });
+  }
+  const forceRefresh = parseCommunityBoolean(url.searchParams.get("refresh"));
+  const [instrument, marketComparison] = await Promise.all([
+    getLocalSentimentInstrument({ symbol, market, forceRefresh }),
+    getLocalSentimentMarketComparison(),
+  ]);
+  const generatedAt = [instrument.krCommunity.generatedAt, instrument.globalCommunity.generatedAt]
+    .toSorted((left, right) => Date.parse(right) - Date.parse(left))[0] ?? new Date().toISOString();
+  const payload: SentimentOverviewResponse = {
+    symbol,
+    canonicalSymbol: normalizeCommunitySymbol(symbol, market === "KR" ? "KOSPI" : "US"),
+    symbolMarket: market,
+    generatedAt,
+    stale: marketComparison.stale,
+    instrument,
+    marketComparison,
+  };
+  return jsonResponse({ ...payload });
+};
+
 export const handleLocalEngineRequest = async (request: Request): Promise<Response> => {
   const url = new URL(request.url);
   try {
@@ -5597,6 +6637,9 @@ export const handleLocalEngineRequest = async (request: Request): Promise<Respon
     if (request.method === "GET" && url.pathname === "/api/local/chart") {
       return localChartResponse(request, url);
     }
+    if (request.method === "GET" && url.pathname === "/api/local/sentiment-overview") {
+      return localSentimentOverviewResponse(url);
+    }
     if (request.method === "GET" && url.pathname === "/api/paper-trading/state") {
       return getPaperTradingStateResponse();
     }
@@ -5608,6 +6651,25 @@ export const handleLocalEngineRequest = async (request: Request): Promise<Respon
     }
     if (request.method === "POST" && url.pathname === "/api/paper-trading/order-intent") {
       return submitPaperOrderIntent(request);
+    }
+    if (request.method === "POST" && url.pathname === "/api/local/trade-plans/precheck") {
+      return managedTradePlanPrecheck(request);
+    }
+    if (request.method === "GET" && url.pathname === "/api/local/trade-plans") {
+      return managedTradePlanList();
+    }
+    if (request.method === "POST" && url.pathname === "/api/local/trade-plans/paper-submit") {
+      return managedTradePaperSubmit(request);
+    }
+    if (request.method === "POST" && url.pathname === "/api/local/trade-plans/live-submit") {
+      return managedTradeLiveSubmit(request);
+    }
+    if (request.method === "POST" && url.pathname === "/api/local/trade-plans/tick") {
+      return tickManagedTradePlans(request);
+    }
+    const managedTradePlanCancelMatch = url.pathname.match(/^\/api\/local\/trade-plans\/([^/]+)\/cancel$/);
+    if (request.method === "POST" && managedTradePlanCancelMatch?.[1]) {
+      return cancelManagedTradePlan(decodeURIComponent(managedTradePlanCancelMatch[1]));
     }
     if (request.method === "POST" && url.pathname === "/api/automation/cycle") {
       return runAutomation(request);

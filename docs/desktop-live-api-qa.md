@@ -1,6 +1,6 @@
 # 데스크톱 실 API 인수 QA
 
-이 문서는 로컬 결정론적 검증을 모두 통과한 YongStockDesk에 실제 Toss·Upbit·Bithumb 연결을 추가해 인수 확인하는 절차다. Toss는 KR/US 지정가, Upbit·Bithumb은 `KRW-*` 지정가 수동/자동 경계를 제공한다. 실제 계좌의 일반 QA는 조회만 수행하고 주문 인수는 별도 승인 세션으로 분리한다.
+이 문서는 로컬 결정론적 검증을 모두 통과한 YongStockDesk에 실제 Toss·Upbit·Bithumb 연결을 추가해 인수 확인하는 절차다. Toss OpenAPI 1.2.4의 일반 지정가와 `SINGLE/OCO/OTO` 조건주문 코드는 포함돼 있지만, 1.3.0-beta.1 일반 설치본은 `liveSubmissionMode=disabled`이므로 실제 제출·수정·취소 인수를 실행하지 않는다. 실제 계좌의 일반 QA는 조회만 수행하고 주문 인수는 향후 서명된 `local-qa` 패키지의 별도 승인 세션으로 분리한다.
 
 ## 완료 판정
 
@@ -123,6 +123,7 @@ curl --fail --silent --show-error \
 - read-only GET의 429는 `Retry-After`/rate-limit 정보를 따라 제한 횟수만 재시도한다.
 - 폐기된 토큰의 401은 캐시를 비우고 GET 한 번만 새 토큰으로 재시도한다.
 - 주문 POST의 401/429는 자동 재시도하지 않는다.
+- 조건주문 생성·수정·취소도 자동 재시도하지 않는다. 수정 성공 시 반환된 새 `conditionalOrderId`만 이후 조회·취소에 사용한다.
 
 실 QA에서는 005930과 AAPL을 연속 조회하고 자연스러운 토큰 갱신 구간이 포함되면 재연결 없이 조회가 계속되는지만 확인한다. 429가 끝내 반환되면 오류가 사용자에게 보여야 하고 마지막 값을 새 실시간 값처럼 표시하면 안 된다. 대기 후 한 번 수동 재시도해 복구되지 않으면 Toss 실 API QA 실패로 판정한다.
 
@@ -187,19 +188,31 @@ curl --fail --silent --show-error \
 
 `accounts=true`인데 `orderChance=false`이면 키 자체 검증 성공과 private QA 완료를 혼동하지 않는다. Upbit 콘솔의 IP와 조회 권한을 확인하고, 필요한 최소 권한을 부여하지 않을 정책이라면 잔고 조회만 가능하다고 명시해 인계한다. 이 경우 공개 1h/4h/1d 분석에는 영향이 없다.
 
-## 6. Paper 경계와 수동 실거래 인수
+## 6. 관리형 모의주문과 조건주문 경계
 
 Upbit 연결 전후와 Toss·Upbit 수동 토글 OFF 상태에서는 다음 조건이 유지되어야 한다.
 
-- 앱 상단 또는 주문/자동화 화면에 `PAPER ONLY`가 보인다.
-- 모의 주문은 우측 drawer에서 명시적으로 연 뒤 기존 OrderIntent, RiskCheck와 확인 단계를 거친다.
+- 앱 상단 또는 주문 인스펙터에 `LIVE LOCKED`가 보인다.
+- 차트와 우측 `분석 / 주문 / 뉴스` 인스펙터가 함께 보이고 페이지 전체가 아니라 인스펙터 내용만 스크롤된다.
+- 주문 인스펙터의 익절·손절 독립 토글 네 조합은 각각 일반 매수, 익절 자동 청산, 손절 자동 청산, 먼저 도달한 OCO 청산으로 동작한다.
+- `분석값 채우기`는 익절·손절 가격만 복사하고 두 토글을 OFF로 유지한다.
 - paper 주문 후 바뀌는 것은 로컬 paper account/state뿐이다.
+- stale 시세에는 청산하지 않고, 첫 청산 뒤 반대 leg가 다시 체결되지 않으며, 앱 재시작 뒤 미완료 계획을 복구한다.
 - Toss readiness, holdings, precheck와 Upbit readiness, precheck에서 `orderSubmissionAttempted=false`다.
 - horizon plan의 stop에는 `isBrokerStopEligible=false`가 유지된다.
-- Toss·Upbit·Bithumb 수동/자동 토글 OFF에서는 submit이 차단된다.
+- 코인 주문 인스펙터는 Toss 실계좌 선택을 비활성화한다.
+- 1.3.0-beta.1 일반 설치본은 Toss 조건주문을 포함한 Toss·Upbit·Bithumb submit·modify·cancel을 HTTP 423으로 차단한다.
 - 브로커·거래소의 주문/체결 내역에 QA로 생성된 주문이 없다.
 
-수동 Toss 인수는 다음을 모두 기록한 경우에만 진행한다.
+향후 서명된 `local-qa`에서 조건주문 인수를 시작할 때는 다음 계약을 먼저 확인한다.
+
+1. 신규 매수+익절 또는 손절 1개는 OTO, 보유분 청산 1개는 SINGLE, 보유분 익절+손절은 OCO다. 신규 매수+익절+손절 3단 브래킷은 사전검증에서 차단한다.
+2. OCO는 선택 계좌의 매도 가능 수량을 확인한 뒤에만 준비 완료가 된다. 국내 주식 손절 지정가는 트리거 한 호가 아래이며 급락 시 미체결 경고가 표시된다.
+3. 조건주문 전체 입력 hash의 10분 미리보기와 화면 주문 요약의 typed confirmation이 일치해야 한다. 같은 `clientOrderId`는 다시 제출하지 않는다.
+4. timeout·429·5xx·결과 불명은 자동 재시도하지 않고 실거래 전역 잠금을 유지한 채 조건주문과 발동된 일반 주문 ID를 각각 조회해 재조정한다.
+5. 조건주문 수정이 반환한 새 `conditionalOrderId`로만 이후 상세 조회와 취소를 실행한다. 기존 ID를 다시 사용하면 실패다.
+
+일반 지정가 수동 Toss 인수는 서명된 `local-qa` 패키지에서 다음을 모두 기록한 경우에만 진행한다.
 
 1. API 등록 또는 계좌 선택 뒤 자동 readiness가 기록되고 `주식 실거래 위험을 확인했습니다` 이용 동의를 별도로 완료했는지 확인한다.
 2. `실거래 수동 주문 해제` 뒤 최소 규모의 KR/US 지정가 주문을 총 5건 제출한다. 각 주문의 typed confirmation, `clientOrderId`, broker order ID, Toss 주문·체결 이력과 앱 감사 원장을 대조한다.

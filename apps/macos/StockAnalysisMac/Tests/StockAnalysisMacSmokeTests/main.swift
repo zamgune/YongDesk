@@ -154,6 +154,14 @@ func verifyBeginnerNavigationAndConnectionWorkspaceSource() throws {
         contentsOf: packageURL.appending(path: "Sources/StockAnalysisMac/BeginnerFirst/BeginnerSectorWorkspace.swift"),
         encoding: .utf8
     )
+    let sentimentWorkspace = try String(
+        contentsOf: packageURL.appending(path: "Sources/StockAnalysisMac/BeginnerFirst/BeginnerSentimentWorkspace.swift"),
+        encoding: .utf8
+    )
+    let appSource = try String(
+        contentsOf: packageURL.appending(path: "Sources/StockAnalysisMac/StockAnalysisMacApp.swift"),
+        encoding: .utf8
+    )
 
     assert(!rootView.contains("showingConnectionChooser"), "beginner flow should not reopen the API chooser dialog")
     assert(rootView.contains("selectedConnectionProvider"), "beginner flow should retain the selected inline API provider")
@@ -182,6 +190,29 @@ func verifyBeginnerNavigationAndConnectionWorkspaceSource() throws {
     assert(sectorWorkspace.contains("대표 ETF 차트 열기"), "sector tiles should explain their chart navigation action")
     assert(supportWorkspace.contains("isCalibratedWatchlistEntryEligible"), "watchlist status must use the calibrated v2 trade plan")
     assert(!supportWorkspace.contains("$0.signal.stage == \"entry-ready\""), "watchlist UI must not promote a legacy raw stage")
+    assert(models.contains("case sentiment"), "beginner navigation should expose the sentiment destination")
+    assert(
+        rootView.contains("[.chart, .sector, .sentiment, .watchlist"),
+        "sentiment navigation should stay between sector and watchlist"
+    )
+    assert(rootView.contains("BeginnerSentimentWorkspace"), "sentiment destination should route to the native workspace")
+    assert(rootView.contains("beginner-sentiment-refresh"), "sentiment should expose a dedicated refresh action")
+    assert(rootView.contains("if destination == .sentiment"), "market changes should preserve the sentiment destination")
+    assert(sentimentWorkspace.contains("beginner-sentiment-root"), "sentiment workspace should expose a stable root identifier")
+    assert(sentimentWorkspace.contains("beginner-sentiment-instrument-kr"), "sentiment should identify the KR instrument row")
+    assert(sentimentWorkspace.contains("beginner-sentiment-instrument-global"), "sentiment should identify the global instrument row")
+    assert(sentimentWorkspace.contains("beginner-sentiment-market-kr"), "sentiment should identify the KR market row")
+    assert(sentimentWorkspace.contains("beginner-sentiment-market-us"), "sentiment should identify the US market row")
+    assert(sentimentWorkspace.contains("-ratio"), "sentiment ratio bars should expose stable identifiers")
+    assert(sentimentWorkspace.contains("beginner-sentiment-source-connection"), "sentiment should identify source connection guidance")
+    assert(sentimentWorkspace.contains("Task.sleep(for: .seconds(5))"), "warming market aggregation should poll every five seconds")
+    assert(sentimentWorkspace.contains("for _ in 0..<12"), "warming polling should stop after sixty seconds")
+    assert(appSource.contains("sentimentRefreshGeneration"), "sentiment requests should have an independent generation guard")
+    assert(
+        appSource.contains("guard requestGeneration == sentimentRefreshGeneration"),
+        "stale sentiment responses must not replace the current selection"
+    )
+    assert(!sentimentWorkspace.contains("OrderIntent") && !sentimentWorkspace.contains("broker adapter"), "sentiment workspace must not enter an order path")
     assert(supportWorkspace.contains("DisclosureGroup(isExpanded: $showingAdvanced)"), "advanced diagnostics should stay collapsed until requested")
     assert(supportWorkspace.contains("TossOperationReport.make"), "Toss operational reports should remain available in advanced diagnostics")
 }
@@ -205,6 +236,14 @@ func verifyInteractiveChartWorkbenchSource() throws {
         contentsOf: packageURL.appending(path: "Sources/StockAnalysisMac/StockAnalysisMacApp.swift"),
         encoding: .utf8
     )
+    let models = try String(
+        contentsOf: packageURL.appending(path: "Sources/StockAnalysisMac/BeginnerFirst/BeginnerFirstModels.swift"),
+        encoding: .utf8
+    )
+    let supportWorkspace = try String(
+        contentsOf: packageURL.appending(path: "Sources/StockAnalysisMac/BeginnerFirst/BeginnerSupportWorkspaces.swift"),
+        encoding: .utf8
+    )
 
     assert(chartView.contains("WKWebView"), "chart workbench should use the bundled WebKit chart surface")
     assert(chartView.contains("lightweight-charts.standalone.production.js"), "chart workbench should load the bundled lightweight chart library")
@@ -224,6 +263,17 @@ func verifyInteractiveChartWorkbenchSource() throws {
     assert(app.contains("json[\"signalEvents\"]"), "the native chart snapshot should decode additive causal signal events")
     assert(app.contains("response.isBrokerStopEligible == false"), "watchlist notifications must require the advisory-only response contract")
     assert(app.contains("$0.tradePlan?.isCalibratedWatchlistEntryEligible == true"), "watchlist notifications must require the calibrated v2 plan")
+    assert(workspace.contains("HSplitView") && workspace.contains("beginner-chart-split-workbench"), "chart and inspector should share a fixed split workbench")
+    assert(workspace.contains("let forceCollapsed = proxy.size.width < 850"), "minimum window width should collapse the inspector before shrinking the chart")
+    assert(workspace.contains("beginner-order-inspector"), "order controls should live in the chart inspector")
+    assert(workspace.contains("identifier: \"take-profit\"") && workspace.contains("identifier: \"stop-loss\""), "take-profit and stop-loss must stay independently selectable")
+    assert(workspace.contains(".disabled(assetClass == .crypto)"), "crypto must keep the Toss live mode disabled")
+    assert(workspace.contains("beginner-analysis-apply-order"), "analysis values should be explicitly copied into the order draft")
+    assert(workspace.contains("beginner-managed-order-submit"), "managed order submission control must remain behind precheck state")
+    assert(workspace.contains("precheck.record.plan.mode"), "submission must remain bound to the exact prechecked execution mode")
+    assert(!models.contains("case longTerm"), "long-term should not remain a chart trading horizon")
+    assert(supportWorkspace.contains("beginner-assets-long-term-management"), "long-term holding management should live in assets")
+    assert(supportWorkspace.contains("beginner-assets-open-long-term-chart"), "long-term holdings should expose only chart navigation")
 }
 
 try verifyInteractiveChartWorkbenchSource()
@@ -2024,5 +2074,153 @@ func verifySectorStrengthClientContract() async throws {
 }
 
 try await verifySectorStrengthClientContract()
+
+func verifySentimentOverviewClientContract() async throws {
+    let configuration = URLSessionConfiguration.ephemeral
+    configuration.protocolClasses = [EngineClientMockURLProtocol.self]
+    let session = URLSession(configuration: configuration)
+    let client = EngineClient(baseURL: URL(string: "http://127.0.0.1:39099")!, session: session)
+    let fullFixture = """
+    {
+      "symbol":"005930.KS",
+      "canonicalSymbol":"005930",
+      "symbolMarket":"KR",
+      "generatedAt":"2026-07-15T16:00:00.000Z",
+      "stale":false,
+      "instrument":{
+        "krCommunity":{
+          "status":"ready",
+          "ratios":{"bullishHype":34,"bearishCriticism":26,"mixed":20,"neutral":20},
+          "sampleCount":25,
+          "uniqueAuthorCount":14,
+          "effectiveWindowHours":24,
+          "pain":48,
+          "fomo":63,
+          "toxicity":17,
+          "sourceStats":[{"id":"paxnet","label":"팍스넷","status":"ok","itemCount":25}],
+          "evidence":[{"classification":"bullish_hype","sourceId":"paxnet","sourceLabel":"팍스넷","title":"가즈아","url":"https://example.com/kr","engagement":8,"symbol":"005930.KS"}],
+          "generatedAt":"2026-07-15T16:00:00.000Z",
+          "stale":false
+        },
+        "globalCommunity":{
+          "status":"low_evidence",
+          "ratios":{"bullishHype":40,"bearishCriticism":20,"mixed":20,"neutral":20},
+          "sampleCount":10,
+          "effectiveWindowHours":72,
+          "pain":35,
+          "fomo":70,
+          "toxicity":9,
+          "sourceStats":[{"id":"reddit","status":"ok","itemCount":10}],
+          "evidence":[],
+          "generatedAt":"2026-07-15T16:00:00.000Z",
+          "stale":false
+        }
+      },
+      "marketComparison":{
+        "status":"ready",
+        "reason":null,
+        "kr":{
+          "status":"ready",
+          "ratios":{"bullishHype":30,"bearishCriticism":30,"mixed":20,"neutral":20},
+          "sampleCount":180,
+          "effectiveWindowHours":24,
+          "pain":50,
+          "fomo":55,
+          "toxicity":12,
+          "sourceStats":[],
+          "evidence":[],
+          "generatedAt":"2026-07-15T16:00:00.000Z",
+          "stale":false,
+          "basis":"equal_weight_by_symbol",
+          "universeCount":30,
+          "coverageCount":27,
+          "bullishBreadth":16,
+          "bearishBreadth":11,
+          "rankedAt":"2026-07-15T15:55:00.000Z"
+        },
+        "us":{
+          "status":"low_evidence",
+          "ratios":{"bullishHype":25,"bearishCriticism":35,"mixed":15,"neutral":25},
+          "sampleCount":80,
+          "effectiveWindowHours":72,
+          "pain":58,
+          "fomo":44,
+          "toxicity":15,
+          "sourceStats":[],
+          "evidence":[],
+          "generatedAt":"2026-07-15T16:00:00.000Z",
+          "stale":false,
+          "basis":"equal_weight_by_symbol",
+          "universeCount":30,
+          "coverageCount":18,
+          "bullishBreadth":7,
+          "bearishBreadth":11,
+          "rankedAt":"2026-07-15T15:55:00.000Z"
+        }
+      }
+    }
+    """
+    EngineClientMockURLProtocol.reset(responses: [mockResponse(fullFixture)])
+
+    let response = try await client.sentimentOverview(symbol: "005930.KS", market: "KR", forceRefresh: true)
+    assert(response.canonicalSymbol == "005930", "sentiment response should decode the canonical symbol")
+    assert(response.instrument.krCommunity.ratios?.total == 100, "instrument sentiment ratios should total 100")
+    assert(response.instrument.krCommunity.sourceStats?.first?.id == "paxnet", "sentiment should decode source status")
+    assert(response.instrument.krCommunity.evidence?.first?.classification == "bullish_hype", "sentiment should decode evidence classification")
+    assert(response.marketComparison.kr?.coverageCount == 27, "sentiment should decode equal-weight market coverage")
+    assert(response.marketComparison.us?.status == "low_evidence", "sentiment should decode partial market evidence")
+
+    let requests = EngineClientMockURLProtocol.captured()
+    requireRequest(
+        requests,
+        0,
+        method: "GET",
+        path: "/api/local/sentiment-overview?symbol=005930.KS&market=KR&refresh=1"
+    )
+
+    let unavailableFixture = """
+    {
+      "symbol":"AAPL",
+      "canonicalSymbol":"AAPL",
+      "symbolMarket":"US",
+      "generatedAt":"2026-07-15T16:01:00.000Z",
+      "stale":true,
+      "instrument":{
+        "krCommunity":{"status":"unavailable","reason":"unsupported_source_coverage"},
+        "globalCommunity":{"status":"low_evidence","ratios":{"bullishHype":20,"bearishCriticism":30,"mixed":10,"neutral":40}}
+      },
+      "marketComparison":{"status":"configuration_required","reason":"reddit_configuration_required"}
+    }
+    """
+    let unavailable = try JSONDecoder().decode(
+        SentimentOverviewResponseView.self,
+        from: Data(unavailableFixture.utf8)
+    )
+    assert(unavailable.stale, "unavailable sentiment responses should preserve stale state")
+    assert(unavailable.instrument.krCommunity.ratios == nil, "unsupported cross-region sentiment should not decode a zero bar")
+    assert(unavailable.marketComparison.kr == nil && unavailable.marketComparison.us == nil, "hidden market comparison may omit market buckets")
+
+    let warmingFixture = """
+    {
+      "symbol":"AAPL",
+      "canonicalSymbol":"AAPL",
+      "symbolMarket":"US",
+      "generatedAt":"2026-07-15T16:02:00.000Z",
+      "stale":false,
+      "instrument":{
+        "krCommunity":{"status":"unavailable","reason":"unsupported_source_coverage"},
+        "globalCommunity":{"status":"ready","ratios":{"bullishHype":25,"bearishCriticism":25,"mixed":25,"neutral":25}}
+      },
+      "marketComparison":{"status":"warming","reason":"initial_market_aggregation"}
+    }
+    """
+    let warming = try JSONDecoder().decode(
+        SentimentOverviewResponseView.self,
+        from: Data(warmingFixture.utf8)
+    )
+    assert(warming.marketComparison.status == "warming", "first market aggregation should decode warming without buckets")
+}
+
+try await verifySentimentOverviewClientContract()
 
 print("StockAnalysisMac smoke tests passed")
