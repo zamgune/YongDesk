@@ -8,7 +8,7 @@
 - 기본 창은 `BeginnerFirstRootView`이며 차트·섹터·관심종목·내 자산·전략·자동화·설정 workspace를 분리한다. API credential은 설정 workspace의 인라인 연결 관리에서 등록하고, 전략·점검·배포·로그 시트는 그대로 재사용한다.
 - 앱은 번들된 TypeScript sidecar를 `127.0.0.1`의 임의 포트에서 자동 시작한다.
 - sidecar는 `src/domain`, `src/use-cases`, `src/ports`와 `src/adapters`의 기존 분석·자동화·브로커 코드를 재사용한다.
-- 앱은 `STOCK_ANALYSIS_STORAGE_ROOT`를 `~/Library/Application Support/com.stockanalysis.mac/sidecar`로 설정한다.
+- 앱은 `STOCK_ANALYSIS_STORAGE_ROOT`를 `~/Library/Application Support/com.stockanalysis.mac/sidecar`로 설정한다. 승인된 주식 플레이북 evidence와 registry도 이 루트의 `backtests/` 아래에 함께 배치되어야 하며, repo `.cache`만 생성해서는 앱 runtime이 승격하지 않는다.
 - broker credential 암호화 키는 App Support의 권한 제한 파일에서 읽으며, 생성·변경 시에만 기록하고 앱 시작마다 Keychain에 다시 저장하지 않는다.
 - 웹 route는 관리·fallback 용도로 유지하지만 Finder에서 실행한 앱은 별도의 Next 서버가 없어도 동작한다.
 
@@ -39,9 +39,9 @@ curl http://127.0.0.1:38771/health
 | 상태 | `GET /health`, `GET /api/local/self-test` | sidecar와 앱 준비 상태 |
 | 시장 | `GET /api/market/:symbol`, `GET /api/briefing/daily-market` | 분석과 시장 브리핑 |
 | 섹터 강도 | `GET /api/local/sector-strength?market=US|KR` | 대표 ETF의 1일·1주·1개월 수익률과 시장 대비 초과수익률. `refresh=1`은 5초 제한 수동 갱신 |
-| 멀티타임프레임 | `GET /api/local/analysis/workspace` | 1시간·4시간·일봉 분석, metadata와 단타·스윙·장기 계획 |
+| 멀티타임프레임 | `GET /api/local/analysis/workspace` | 1시간·4시간·일봉 분석, metadata, 1~3일 단기·스윙·장기 계획과 additive v2 `tradeSignalSet` |
 | 관심종목 | `GET/POST /api/local/watchlist`, `DELETE /api/local/watchlist/:id`, `GET /api/local/watchlist/summary` | 이 Mac의 관심종목 저장과 시세·일봉 기술 요약·커뮤니티 민심·관심도 요약. 코인은 이번 버전에서 시세만 제공 |
-| 급락 감시 | `POST /api/local/watchlist/signal-scan`, `GET /api/local/watchlist/signals` | 한국 주식 관심종목의 Toss 확정 5분봉 급락·반전 상태, KOSPI 문맥, 분석 기준 진입·손절·50/50 익절 계획. 주문 제출 없음 |
+| 급락 감시 | `POST /api/local/watchlist/signal-scan`, `GET /api/local/watchlist/signals` | 한국 주식 관심종목의 Toss 확정 5분봉 장중 급락반등, 동일 시간대 20거래일 RVOL, KOSPI 문맥과 additive `tradePlan`. 주문 제출 없음 |
 | 뉴스·민심 | `GET /api/news/events`, `GET /api/community-pain/:symbol` | 공식/RSS 뉴스와 종목별 커뮤니티 근거 |
 | 대시보드 | `GET /api/dashboard/terminal`, `POST /api/dashboard/playbook` | macOS 대시보드와 포지션 메모 |
 | Toss | `/api/local/broker/credentials`, `/api/local/toss/readiness` | credential과 계좌 준비 상태 |
@@ -81,7 +81,7 @@ curl http://127.0.0.1:38771/health
 - 데스크톱 코인 분석은 `KRW-*` 입력만 허용한다. BTC·USDT 호가 시장과 KRW 시장을 같은 종목처럼 변환하지 않는다.
 - 장기 계획은 일봉 730일을 조회해 SMA200, 주봉 SMA20/60과 10개월 이동평균을 계산하며, 10개월 평균은 진행 중인 현재 달을 제외한 완료 월 종가만 사용한다.
 - 형성 중인 봉은 확정 분석에서 제외하고 `market`, `currency`, `dataSource`, `timeframe`, `quoteAt`, `stale`을 응답과 화면에 함께 표시한다.
-- 단타·스윙·장기 계획은 구조선·ATR·장기 이동평균 조건으로 손절·익절을 계산한다. 가격 계산 상태와 신규 진입 상태를 별도 배지로 표시하며, 추세 조건이 부족한 `조건 대기`에서도 계산된 가격은 유지한다. 필수 가격 데이터가 없을 때만 고정 퍼센트 없이 `계산 불가`를 표시한다.
+- 1~3일 단기·스윙·장기 계획은 구조선·ATR·장기 이동평균 조건으로 손절·익절을 계산한다. 가격 계산 상태와 신규 진입 상태를 별도 배지로 표시하며, 추세 조건이 부족한 `조건 대기`에서도 계산된 가격은 유지한다. 필수 가격 데이터가 없을 때만 고정 퍼센트 없이 `계산 불가`를 표시한다.
 - 기준가는 최근 확정 종가, 일치하는 실제 보유 평단, 직접 입력 중 선택한다. 직접 입력은 0보다 큰 유한 숫자만 `entryPrice` 쿼리로 전달한다.
 - 실제 보유 평단은 `planMode=position-management`로 전달한다. 장기 현재가가 무효선 아래면 `invalidation-breached`와 축소·청산·회복 행동을 우선 표시하고, 평단이 무효선 위일 때만 기존 평단 기준 목표를 함께 유지한다.
 - 계획의 stop과 take-profit은 분석 조언이며 주문 제출이 아니다. `orderSubmissionAttempted=false`와 broker stop 부적격 계약을 유지한다.

@@ -175,10 +175,13 @@ func verifyBeginnerNavigationAndConnectionWorkspaceSource() throws {
     )
     assert(models.contains("beginner-api-provider-"), "connection providers should have stable accessibility identifiers")
     assert(models.contains("case sector"), "beginner navigation should expose the sector destination")
+    assert(models.contains("1~3일 단기"), "the day horizon should be labeled as a short holding period")
     assert(rootView.contains("BeginnerSectorWorkspace"), "sector destination should route to the native workspace")
     assert(sectorWorkspace.contains("beginner-sector-market-picker"), "sector workspace should expose the KR/US picker")
     assert(sectorWorkspace.contains("beginner-sector-ranking-chart"), "sector workspace should expose the strength chart")
     assert(sectorWorkspace.contains("대표 ETF 차트 열기"), "sector tiles should explain their chart navigation action")
+    assert(supportWorkspace.contains("isCalibratedWatchlistEntryEligible"), "watchlist status must use the calibrated v2 trade plan")
+    assert(!supportWorkspace.contains("$0.signal.stage == \"entry-ready\""), "watchlist UI must not promote a legacy raw stage")
     assert(supportWorkspace.contains("DisclosureGroup(isExpanded: $showingAdvanced)"), "advanced diagnostics should stay collapsed until requested")
     assert(supportWorkspace.contains("TossOperationReport.make"), "Toss operational reports should remain available in advanced diagnostics")
 }
@@ -198,6 +201,10 @@ func verifyInteractiveChartWorkbenchSource() throws {
         contentsOf: packageURL.appending(path: "Sources/StockAnalysisMac/BeginnerFirst/BeginnerChartWorkspace.swift"),
         encoding: .utf8
     )
+    let app = try String(
+        contentsOf: packageURL.appending(path: "Sources/StockAnalysisMac/StockAnalysisMacApp.swift"),
+        encoding: .utf8
+    )
 
     assert(chartView.contains("WKWebView"), "chart workbench should use the bundled WebKit chart surface")
     assert(chartView.contains("lightweight-charts.standalone.production.js"), "chart workbench should load the bundled lightweight chart library")
@@ -212,6 +219,11 @@ func verifyInteractiveChartWorkbenchSource() throws {
     assert(workspace.contains("beginner-entry-price-mode"), "horizon plans should expose a stable entry-price selector")
     assert(workspace.contains("beginner-custom-entry-price"), "custom entry price should remain keyboard accessible")
     assert(workspace.contains("가격 계산 완료") && workspace.contains("진입 대기"), "price availability and entry readiness must stay separate")
+    assert(workspace.contains("장중 급락반등"), "intraday crash reversal should stay distinct from the 1~3 day horizon")
+    assert(workspace.contains("선택 필요") && workspace.contains("playbookConflict"), "conflicting calibrated playbooks must require an explicit choice")
+    assert(app.contains("json[\"signalEvents\"]"), "the native chart snapshot should decode additive causal signal events")
+    assert(app.contains("response.isBrokerStopEligible == false"), "watchlist notifications must require the advisory-only response contract")
+    assert(app.contains("$0.tradePlan?.isCalibratedWatchlistEntryEligible == true"), "watchlist notifications must require the calibrated v2 plan")
 }
 
 try verifyInteractiveChartWorkbenchSource()
@@ -1504,6 +1516,7 @@ func verifyMarketAnalysisContracts() async throws {
     let client = EngineClient(baseURL: URL(string: "http://127.0.0.1:39099")!, session: session)
     let workspaceFixture = """
     {
+      "contractVersion": 2,
       "symbol": "005930.KS",
       "assetClass": "stock",
       "market": "KOSPI",
@@ -1594,7 +1607,73 @@ func verifyMarketAnalysisContracts() async throws {
           "blockers": ["주봉 표본 부족"]
         }
       ],
+      "tradeSignalSet": {
+        "contractVersion": 2,
+        "generatedAt": "2026-07-10T06:00:01.000Z",
+        "stage": "shadow",
+        "plans": [
+          {
+            "id": "short-hold-trend",
+            "horizon": "short-hold",
+            "marketScope": ["KR", "US"],
+            "label": "1~3일 단기 추세",
+            "stage": "shadow",
+            "action": "wait",
+            "setupVariant": "breakout-or-pullback",
+            "events": [],
+            "gates": [
+              {
+                "kind": "market",
+                "status": "unavailable",
+                "blocking": true,
+                "label": "시장 breadth",
+                "reason": "shadow 단계에서는 시장 breadth를 통과로 추정하지 않습니다."
+              }
+            ],
+            "riskPlan": {
+              "entryPrice": 88000,
+              "structureInvalidationPrice": 85800,
+              "riskPerShare": 2200,
+              "riskPct": 2.5,
+              "riskStatus": "valid",
+              "stopTrigger": "hourly-close",
+              "targets": [
+                { "price": 90200, "allocationPct": 50, "basis": "1R" }
+              ],
+              "trailingExit": null,
+              "timeStopBars": null,
+              "isBrokerStopEligible": false,
+              "orderSubmissionAttempted": false
+            },
+            "calibration": {
+              "status": "unverified",
+              "sampleSize": 0,
+              "holdoutSampleSize": 0,
+              "targetBeforeStopRate": null,
+              "averageNetR": null,
+              "confidence95": null,
+              "costModel": null,
+              "validationStart": null,
+              "validationEnd": null,
+              "note": "비용 포함 walk-forward 검증 전"
+            },
+            "blockers": ["시장 breadth 미연결"],
+            "reasons": ["기존 계획을 shadow 계약으로 변환"],
+            "isBrokerStopEligible": false,
+            "orderSubmissionAttempted": false
+          }
+        ],
+        "primaryByHorizon": {
+          "intraday": null,
+          "shortHold": "short-hold-trend",
+          "swing": null
+        },
+        "conflicts": [],
+        "isBrokerStopEligible": false,
+        "orderSubmissionAttempted": false
+      },
       "warnings": ["PAPER ONLY"],
+      "isBrokerStopEligible": false,
       "orderSubmissionAttempted": false
     }
     """
@@ -1640,9 +1719,110 @@ func verifyMarketAnalysisContracts() async throws {
     assert(workspace.horizonPlans.first?.stop?.isBrokerStopEligible == false, "analysis stops should remain advisory")
     assert(workspace.horizonPlans.first?.takeProfits.count == 2, "day plan should decode take-profit levels")
     assert(workspace.horizonPlans[1].blockers == ["4시간봉 확정 대기"], "wait plan should preserve blockers")
+    assert(workspace.contractVersion == 2, "workspace should decode the additive contract version")
+    assert(workspace.tradeSignalSet?.stage == "shadow", "workspace should decode shadow playbooks")
+    assert(workspace.tradeSignalSet?.plans.first?.id == "short-hold-trend", "workspace should preserve playbook IDs")
+    assert(workspace.tradeSignalSet?.plans.first?.calibration.status == "unverified", "unverified evidence must remain explicit")
+    assert(workspace.tradeSignalSet?.isBrokerStopEligible == false, "playbook signals must stay advisory")
+    assert(workspace.tradeSignalSet?.orderSubmissionAttempted == false, "playbook signals must not submit orders")
+    assert(workspace.isBrokerStopEligible == false, "workspace analysis must not expose a broker stop")
     assert(workspace.orderSubmissionAttempted == false, "workspace analysis must not submit an order")
 
     let decoder = JSONDecoder()
+    var calibratedWorkspace = try JSONSerialization.jsonObject(with: Data(workspaceFixture.utf8)) as! [String: Any]
+    var calibratedSet = calibratedWorkspace["tradeSignalSet"] as! [String: Any]
+    var calibratedPlans = calibratedSet["plans"] as! [[String: Any]]
+    var calibratedPlan = calibratedPlans[0]
+    calibratedPlan["stage"] = "calibrated"
+    calibratedPlan["action"] = "entry-ready"
+    calibratedPlan["gates"] = [
+        "data", "market", "sector", "setup", "trigger", "liquidity", "risk", "reward",
+    ].map { kind in
+        [
+            "kind": kind,
+            "status": "pass",
+            "blocking": false,
+            "label": "\(kind) 통과",
+            "reason": "검증된 현재 근거",
+        ] as [String: Any]
+    }
+    var calibratedEvidence = calibratedPlan["calibration"] as! [String: Any]
+    calibratedEvidence["status"] = "calibrated"
+    calibratedEvidence["sampleSize"] = 120
+    calibratedEvidence["holdoutSampleSize"] = 30
+    calibratedEvidence["targetBeforeStopRate"] = 0.58
+    calibratedEvidence["averageNetR"] = 0.21
+    calibratedEvidence["confidence95"] = ["lower": 0.05, "upper": 0.37]
+    calibratedEvidence["costModel"] = "base+stress cost schedule"
+    calibratedEvidence["validationStart"] = "2022-01-01T00:00:00Z"
+    calibratedEvidence["validationEnd"] = "2026-06-30T00:00:00Z"
+    calibratedPlan["calibration"] = calibratedEvidence
+    calibratedPlans[0] = calibratedPlan
+    calibratedSet["plans"] = calibratedPlans
+    calibratedWorkspace["tradeSignalSet"] = calibratedSet
+    let calibratedData = try JSONSerialization.data(withJSONObject: calibratedWorkspace)
+    let calibratedDecoded = try decoder.decode(WorkspaceAnalysis.self, from: calibratedData)
+    assert(calibratedDecoded.tradeSignalSet?.plans.first?.isCalibratedDisplayEligible == true, "complete v2 evidence should be eligible for the calibrated UI")
+
+    var watchlistPlan = calibratedPlan
+    watchlistPlan["id"] = "kr-intraday-crash-reversal"
+    watchlistPlan["horizon"] = "intraday"
+    watchlistPlan["marketScope"] = ["KR"]
+    watchlistPlan["label"] = "장중 급락반등"
+    watchlistPlan["blockers"] = []
+    var watchlistCalibration = watchlistPlan["calibration"] as! [String: Any]
+    watchlistCalibration["sampleSize"] = 200
+    watchlistCalibration["holdoutSampleSize"] = 40
+    watchlistPlan["calibration"] = watchlistCalibration
+    watchlistPlan["gates"] = [
+        "data", "market", "sector", "setup", "trigger", "liquidity", "risk", "reward",
+    ].map { kind in
+        [
+            "kind": kind,
+            "status": "pass",
+            "blocking": false,
+            "label": "\(kind) 통과",
+            "reason": "검증된 현재 근거",
+        ] as [String: Any]
+    }
+    let watchlistPlanData = try JSONSerialization.data(withJSONObject: watchlistPlan)
+    let decodedWatchlistPlan = try decoder.decode(AnalysisTradePlaybookPlan.self, from: watchlistPlanData)
+    assert(decodedWatchlistPlan.isCalibratedWatchlistEntryEligible == true, "calibrated watchlist entry requires complete current gates")
+
+    var blockedWatchlistPlan = watchlistPlan
+    var blockedWatchlistGates = blockedWatchlistPlan["gates"] as! [[String: Any]]
+    blockedWatchlistGates[0]["status"] = "fail"
+    blockedWatchlistGates[0]["blocking"] = true
+    blockedWatchlistPlan["gates"] = blockedWatchlistGates
+    let blockedWatchlistData = try JSONSerialization.data(withJSONObject: blockedWatchlistPlan)
+    let blockedWatchlistDecoded = try decoder.decode(AnalysisTradePlaybookPlan.self, from: blockedWatchlistData)
+    assert(blockedWatchlistDecoded.isCalibratedWatchlistEntryEligible == false, "a blocking current gate must suppress watchlist entry")
+
+    var unknownActionWorkspace = calibratedWorkspace
+    var unknownActionSet = unknownActionWorkspace["tradeSignalSet"] as! [String: Any]
+    var unknownActionPlans = unknownActionSet["plans"] as! [[String: Any]]
+    unknownActionPlans[0]["action"] = "future-auto-entry"
+    unknownActionSet["plans"] = unknownActionPlans
+    unknownActionWorkspace["tradeSignalSet"] = unknownActionSet
+    let unknownActionData = try JSONSerialization.data(withJSONObject: unknownActionWorkspace)
+    let unknownActionDecoded = try decoder.decode(WorkspaceAnalysis.self, from: unknownActionData)
+    assert(unknownActionDecoded.tradeSignalSet?.plans.first?.action == "future-auto-entry", "unknown playbook values should remain decodable")
+    assert(unknownActionDecoded.tradeSignalSet?.plans.first?.isCalibratedDisplayEligible == false, "unknown playbook values must not switch the default UI")
+
+    var incompleteEvidenceWorkspace = calibratedWorkspace
+    var incompleteEvidenceSet = incompleteEvidenceWorkspace["tradeSignalSet"] as! [String: Any]
+    var incompleteEvidencePlans = incompleteEvidenceSet["plans"] as! [[String: Any]]
+    var incompleteEvidencePlan = incompleteEvidencePlans[0]
+    var incompleteCalibration = incompleteEvidencePlan["calibration"] as! [String: Any]
+    incompleteCalibration["confidence95"] = NSNull()
+    incompleteEvidencePlan["calibration"] = incompleteCalibration
+    incompleteEvidencePlans[0] = incompleteEvidencePlan
+    incompleteEvidenceSet["plans"] = incompleteEvidencePlans
+    incompleteEvidenceWorkspace["tradeSignalSet"] = incompleteEvidenceSet
+    let incompleteEvidenceData = try JSONSerialization.data(withJSONObject: incompleteEvidenceWorkspace)
+    let incompleteEvidenceDecoded = try decoder.decode(WorkspaceAnalysis.self, from: incompleteEvidenceData)
+    assert(incompleteEvidenceDecoded.tradeSignalSet?.plans.first?.isCalibratedDisplayEligible == false, "missing confidence bounds must keep the legacy UI")
+
     var missingOrderFlag = try JSONSerialization.jsonObject(with: Data(workspaceFixture.utf8)) as! [String: Any]
     missingOrderFlag.removeValue(forKey: "orderSubmissionAttempted")
     let missingOrderData = try JSONSerialization.data(withJSONObject: missingOrderFlag)
@@ -1667,6 +1847,28 @@ func verifyMarketAnalysisContracts() async throws {
         assert(false, "workspace must fail closed when stop eligibility is missing")
     } catch {
         assert(true, "missing stop eligibility rejected")
+    }
+
+    var legacyWorkspace = try JSONSerialization.jsonObject(with: Data(workspaceFixture.utf8)) as! [String: Any]
+    legacyWorkspace.removeValue(forKey: "contractVersion")
+    legacyWorkspace.removeValue(forKey: "tradeSignalSet")
+    legacyWorkspace.removeValue(forKey: "isBrokerStopEligible")
+    let legacyWorkspaceData = try JSONSerialization.data(withJSONObject: legacyWorkspace)
+    let decodedLegacyWorkspace = try decoder.decode(WorkspaceAnalysis.self, from: legacyWorkspaceData)
+    assert(decodedLegacyWorkspace.contractVersion == nil, "v1 workspace should remain decodable")
+    assert(decodedLegacyWorkspace.tradeSignalSet == nil, "v1 workspace should fall back without a playbook contract")
+    assert(decodedLegacyWorkspace.isBrokerStopEligible == false, "v1 workspace should fail closed without broker eligibility")
+
+    var missingPlaybookOrderFlag = try JSONSerialization.jsonObject(with: Data(workspaceFixture.utf8)) as! [String: Any]
+    var tradeSignalSet = missingPlaybookOrderFlag["tradeSignalSet"] as! [String: Any]
+    tradeSignalSet.removeValue(forKey: "orderSubmissionAttempted")
+    missingPlaybookOrderFlag["tradeSignalSet"] = tradeSignalSet
+    let missingPlaybookOrderData = try JSONSerialization.data(withJSONObject: missingPlaybookOrderFlag)
+    do {
+        _ = try decoder.decode(WorkspaceAnalysis.self, from: missingPlaybookOrderData)
+        assert(false, "playbook contract must fail closed when orderSubmissionAttempted is missing")
+    } catch {
+        assert(true, "missing playbook order flag rejected")
     }
 
     let requests = EngineClientMockURLProtocol.captured()
@@ -1751,7 +1953,7 @@ func verifyWatchlistClientContracts() async throws {
         {"generatedAt":"2026-07-15T02:00:00.000Z","monitoringStatus":"ready","monitoringMessage":"매수 검토 가능 신호가 있습니다. 주문은 전송하지 않았습니다.","marketContext":{"status":"weak","label":"KOSPI 약세 지속","changePct":-2.1,"recoveryPct":20,"quoteAt":"2026-07-15T02:00:00.000Z"},"items":[{"id":"watch-1","symbol":"005930.KS","name":"삼성전자","market":"KR","currency":"KRW","dataSource":"toss","generatedAt":"2026-07-15T02:00:00.000Z","quoteAt":"2026-07-15T02:00:00.000Z","stale":false,"notificationEligible":true,"notificationId":"005930.KS:1:2","error":null,"signal":{"stage":"entry-ready","confidence":"medium","label":"매수 검토 가능","detail":"확정 5분봉 반전 조건 통과","reasons":["급락 이후 반전 캔들 확인"],"blockers":[],"panicAt":1,"confirmationAt":2,"quoteAt":2,"sessionChangePct":-5.2,"recentDropPct":-3.1,"volumeRatio":2.2,"rsi14":24,"rsi2":8,"marketContext":{"status":"weak","label":"KOSPI 약세 지속","changePct":-2.1,"recoveryPct":20,"quoteAt":"2026-07-15T02:00:00.000Z"},"exitPlan":{"entryPrice":100,"stopPrice":96,"firstTakeProfit":104,"secondTakeProfit":108,"firstAllocationPct":50,"secondAllocationPct":50,"riskPerShare":4,"rewardRisk":2,"firstTargetBasis":"1R","isBrokerStopEligible":false},"orderSubmissionAttempted":false}}],"orderSubmissionAttempted":false}
         """),
         mockResponse("""
-        {"generatedAt":"2026-07-15T02:00:00.000Z","monitoringStatus":"ready","monitoringMessage":"저장 결과","marketContext":{"status":"weak","label":"KOSPI 약세 지속","changePct":-2.1,"recoveryPct":20,"quoteAt":null},"items":[],"orderSubmissionAttempted":false}
+        {"generatedAt":"2026-07-15T02:00:00.000Z","monitoringStatus":"ready","monitoringMessage":"저장 결과","marketContext":{"status":"weak","label":"KOSPI 약세 지속","changePct":-2.1,"recoveryPct":20,"quoteAt":null},"items":[],"isBrokerStopEligible":false,"orderSubmissionAttempted":false}
         """),
     ])
 
@@ -1768,9 +1970,12 @@ func verifyWatchlistClientContracts() async throws {
     let signalScan = try await client.scanWatchlistSignals()
     assert(signalScan.items.first?.signal.stage == "entry-ready", "signal scan should decode the crash reversal stage")
     assert(signalScan.items.first?.signal.exitPlan?.firstAllocationPct == 50, "signal scan should decode the first partial exit")
+    assert(signalScan.items.first?.tradePlan == nil, "legacy scans without a v2 trade plan must remain fallback-only")
+    assert(signalScan.isBrokerStopEligible == nil, "legacy signal scan should decode without the additive broker-stop flag")
     assert(signalScan.orderSubmissionAttempted == false, "signal scan must preserve the no-order contract")
     let storedSignals = try await client.watchlistSignals()
     assert(storedSignals.items.isEmpty, "stored signal endpoint should decode an empty result")
+    assert(storedSignals.isBrokerStopEligible == false, "v2 stored signals must remain broker-stop ineligible")
 
     let requests = EngineClientMockURLProtocol.captured()
     requireRequest(requests, 0, method: "GET", path: "/api/local/watchlist/summary")

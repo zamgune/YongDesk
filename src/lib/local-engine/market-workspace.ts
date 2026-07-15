@@ -5,12 +5,30 @@ import {
   type HorizonPlanContext,
   type PlanReliabilityGrade,
 } from "@/lib/market/horizon-exit-plans";
-import { getMarketDataProvider, type GetCandlesOptions, type MarketCandleResponse, type MarketDataProvider } from "@/lib/market-data";
+import {
+  loadPlaybookExternalContext,
+  unavailablePlaybookExternalContext,
+  type PlaybookExternalContext,
+  type PlaybookExternalContextInput,
+} from "@/lib/market/playbook-external-context";
+import type { PlaybookCalibrationRegistry } from "@/lib/market/playbook-calibrations";
+import { buildTradeSignalSet } from "@/lib/market/trade-playbook";
+import {
+  getMarketDataProvider,
+  marketCandleCloseTime,
+  type GetCandlesOptions,
+  type MarketCandleResponse,
+  type MarketDataProvider,
+} from "@/lib/market-data";
 import type { CandleSeriesSnapshot, OfficialTimeframe } from "@/lib/market-data/official-types";
 import { TossMarketDataProvider } from "@/lib/market-data/toss";
 import { normalizeUpbitMarket, UpbitMarketDataProvider } from "@/lib/market-data/upbit";
 import { createTossClient, type TossCredentials } from "@/lib/toss/client";
 import { analyzeSymbol } from "@/use-cases/market/analyze-symbol";
+import {
+  loadPlaybookCalibrationRegistry as loadRuntimePlaybookCalibrationRegistry,
+  type LoadedPlaybookCalibrationRegistry,
+} from "./playbook-calibration-registry";
 
 export type MarketWorkspaceAssetClass = "stock" | "crypto";
 export type MarketWorkspaceSource = "auto" | "toss" | "yahoo" | "upbit";
@@ -66,6 +84,10 @@ export type MarketWorkspaceDependencies = {
   analyze?: (options: AnalysisRunOptions) => Promise<AnalysisPayload>;
   fixtureMode?: boolean;
   fixtureProvider?: OfficialSeriesProvider;
+  loadPlaybookExternalContext?: (
+    input: PlaybookExternalContextInput,
+  ) => Promise<PlaybookExternalContext>;
+  loadPlaybookCalibrationRegistry?: () => Promise<LoadedPlaybookCalibrationRegistry>;
 };
 
 export type MarketWorkspaceHandlerOptions = {
@@ -89,78 +111,11 @@ class WorkspaceRequestError extends Error {
 
 const sharedUpbitProvider = new UpbitMarketDataProvider();
 
-const yahooSessionPolicy = (market: AnalysisRunOptions["metadata"]["market"]) => market === "US"
-  ? { timeZone: "America/New_York", closeMinutes: 16 * 60 }
-  : { timeZone: "Asia/Seoul", closeMinutes: 15 * 60 + 30 };
-
-const zonedDateParts = (timestampSeconds: number, timeZone: string) => {
-  const parts = Object.fromEntries(
-    new Intl.DateTimeFormat("en-CA", {
-      timeZone,
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-      hour: "2-digit",
-      minute: "2-digit",
-      hourCycle: "h23",
-    }).formatToParts(new Date(timestampSeconds * 1_000))
-      .filter((part) => part.type !== "literal")
-      .map((part) => [part.type, Number(part.value)]),
-  );
-  return {
-    year: parts.year,
-    month: parts.month,
-    day: parts.day,
-    hour: parts.hour,
-    minute: parts.minute,
-  };
-};
-
-const zonedDateTimeToUnix = ({
-  year,
-  month,
-  day,
-  hour,
-  minute,
-  timeZone,
-}: {
-  year: number;
-  month: number;
-  day: number;
-  hour: number;
-  minute: number;
-  timeZone: string;
-}) => {
-  const targetAsUtc = Date.UTC(year, month - 1, day, hour, minute);
-  let candidate = targetAsUtc;
-  for (let iteration = 0; iteration < 3; iteration += 1) {
-    const actual = zonedDateParts(Math.floor(candidate / 1_000), timeZone);
-    const actualAsUtc = Date.UTC(actual.year, actual.month - 1, actual.day, actual.hour, actual.minute);
-    candidate += targetAsUtc - actualAsUtc;
-  }
-  return Math.floor(candidate / 1_000);
-};
-
 export const yahooCandleCloseTime = (
   candleTime: number,
   interval: GetCandlesOptions["interval"],
   market: AnalysisRunOptions["metadata"]["market"],
-) => {
-  if (interval === "1wk") return candleTime + 7 * 24 * 60 * 60;
-  const policy = yahooSessionPolicy(market);
-  const localDate = zonedDateParts(candleTime, policy.timeZone);
-  const sessionClose = zonedDateTimeToUnix({
-    year: localDate.year,
-    month: localDate.month,
-    day: localDate.day,
-    hour: Math.floor(policy.closeMinutes / 60),
-    minute: policy.closeMinutes % 60,
-    timeZone: policy.timeZone,
-  });
-  if (interval === "1d") return sessionClose;
-  const nominalClose = candleTime + 60 * 60;
-  return sessionClose > candleTime ? Math.min(nominalClose, sessionClose) : nominalClose;
-};
+) => marketCandleCloseTime(candleTime, interval, market);
 
 const isFinitePositive = (value: unknown): value is number =>
   typeof value === "number" && Number.isFinite(value) && value > 0;
@@ -206,6 +161,7 @@ const stripOfficialMetadata = (snapshot: CandleSeriesSnapshot): MarketCandleResp
     .filter((candle) => candle.isClosed && !candle.isPartialSessionBar)
     .map((candle) => ({
       time: candle.time,
+      closeTime: candle.closeTime,
       open: candle.open,
       high: candle.high,
       low: candle.low,
@@ -288,9 +244,12 @@ const createClosedCandleYahooProvider = (
     const nowSeconds = Math.floor(now().getTime() / 1000);
     return {
       ...response,
-      candles: response.candles.filter(
-        (candle) => yahooCandleCloseTime(candle.time, options.interval, market) <= nowSeconds,
-      ),
+      candles: response.candles
+        .map((candle) => ({
+          ...candle,
+          closeTime: candle.closeTime ?? yahooCandleCloseTime(candle.time, options.interval, market),
+        }))
+        .filter((candle) => candle.closeTime <= nowSeconds),
     };
   },
 });
@@ -922,6 +881,65 @@ export const buildMarketWorkspace = async (
     fourHour,
     daily,
   });
+  const horizonPlans = calculateHorizonExitPlans(horizonContext);
+  let playbookExternalContext: PlaybookExternalContext | null = null;
+  let playbookCalibrationRegistry: PlaybookCalibrationRegistry | undefined;
+  let playbookCalibrationWarning: string | null = null;
+  if (assetClass === "stock") {
+    const externalContextLoader = dependencies.loadPlaybookExternalContext ??
+      (options.dependencies === undefined ? loadPlaybookExternalContext : null);
+    const calibrationRegistryLoader = dependencies.loadPlaybookCalibrationRegistry ??
+      (options.dependencies === undefined ? loadRuntimePlaybookCalibrationRegistry : null);
+    const externalContextPromise = externalContextLoader
+      ? externalContextLoader({
+          symbol,
+          market: resolvedMarket,
+          generatedAt,
+        }).catch((error) => unavailablePlaybookExternalContext(
+          generatedAt,
+          `외부 게이트 조회 실패: ${error instanceof Error ? error.message : String(error)}`,
+        ))
+      : Promise.resolve(unavailablePlaybookExternalContext(
+        generatedAt,
+        fixtureMode
+          ? "fixture 분석에는 실제 시장 breadth·섹터 상대강도를 연결하지 않습니다."
+          : "주입형 분석 의존성에는 외부 시장 게이트 loader가 제공되지 않았습니다.",
+      ));
+    const calibrationRegistryPromise = calibrationRegistryLoader
+      ? calibrationRegistryLoader()
+        .then((loaded) => ({
+          registry: loaded.registry,
+          warning: loaded.warning,
+        }))
+        .catch((error) => ({
+          registry: undefined,
+          warning: `승인 calibration registry 조회 실패로 모든 플레이북을 shadow로 유지합니다: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        }))
+      : Promise.resolve({
+        registry: undefined,
+        warning: null,
+      });
+    const [externalContext, calibrationRegistry] = await Promise.all([
+      externalContextPromise,
+      calibrationRegistryPromise,
+    ]);
+    playbookExternalContext = externalContext;
+    playbookCalibrationRegistry = calibrationRegistry.registry;
+    playbookCalibrationWarning = calibrationRegistry.warning;
+  }
+  const tradeSignalSet = assetClass === "stock"
+    ? buildTradeSignalSet({
+        market: resolvedMarket,
+        generatedAt,
+        oneHour,
+        daily,
+        horizonPlans,
+        externalContext: playbookExternalContext ?? undefined,
+        calibrationRegistry: playbookCalibrationRegistry,
+      })
+    : null;
   const warnings = uniqueWarnings([
     ...officialSnapshots.flatMap((snapshot) => snapshot.warnings),
     tossFallbackWarning,
@@ -933,6 +951,13 @@ export const buildMarketWorkspace = async (
     source === "fixture"
       ? "테스트 fixture 모드입니다. 네트워크·자격증명 없이 UI 흐름만 검증하며 실제 투자 판단에 사용할 수 없습니다."
       : null,
+    assetClass === "stock" && playbookExternalContext?.market?.status === "unavailable"
+      ? `시장 breadth 게이트를 확인할 수 없습니다: ${playbookExternalContext.market.reason}`
+      : null,
+    assetClass === "stock" && playbookExternalContext?.sector?.status === "unavailable"
+      ? `섹터 상대강도 게이트를 확인할 수 없습니다: ${playbookExternalContext.sector.reason}`
+      : null,
+    playbookCalibrationWarning,
     assetClass === "stock"
       ? "주식은 6.5시간 정규장의 부분 4시간봉 왜곡을 피하기 위해 일봉 방향과 1시간봉 진입을 사용합니다."
       : "크립토는 일봉 방향, 4시간봉 진입, 1시간봉 재확인을 사용합니다.",
@@ -940,6 +965,7 @@ export const buildMarketWorkspace = async (
   ]);
 
   return {
+    contractVersion: 2 as const,
     symbol: assetClass === "crypto" ? normalizeUpbitMarket(symbolInput) : symbol,
     analysisSymbol: symbol,
     requestedSymbol: symbolInput.toUpperCase(),
@@ -957,8 +983,10 @@ export const buildMarketWorkspace = async (
       fourHour: fourHour ? withLatestClose(fourHour) : null,
       daily: withLatestClose(daily),
     },
-    horizonPlans: calculateHorizonExitPlans(horizonContext),
+    horizonPlans,
+    tradeSignalSet,
     warnings,
+    isBrokerStopEligible: false,
     orderSubmissionAttempted: false,
   };
 };
@@ -976,6 +1004,7 @@ export const handleMarketWorkspaceRequest = async (
     const status = error instanceof WorkspaceRequestError ? error.status : 500;
     return Response.json({
       error: error instanceof Error ? error.message : String(error),
+      isBrokerStopEligible: false,
       orderSubmissionAttempted: false,
     }, {
       status,

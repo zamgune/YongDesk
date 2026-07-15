@@ -8,9 +8,17 @@ import {
 } from "../src/lib/local-engine/market-workspace.ts";
 import type { CandleSeriesSnapshot, OfficialTimeframe } from "../src/lib/market-data/official-types.ts";
 import type { GetCandlesOptions, MarketCandleResponse } from "../src/lib/market-data/types.ts";
+import { verifiedPlaybookCalibration } from "./helpers/verified_playbook_calibration.ts";
 
 const NOW = new Date("2026-07-10T12:00:00.000Z");
 const { handleLocalEngineRequest } = await import("../scripts/local_engine.mts");
+
+const approvedShortHoldCalibration = () => verifiedPlaybookCalibration({
+  playbookId: "short-hold-trend",
+  market: "KR",
+  reviewedAt: "2026-07-10T12:00:00.000Z",
+  averageNetR: 0.19,
+});
 
 test("Yahoo fallback clamps partial hourly bars and daily bars to the real session close", () => {
   const krHourly = Math.floor(Date.parse("2026-07-10T06:00:00.000Z") / 1_000);
@@ -42,6 +50,7 @@ test("Yahoo fallback clamps partial hourly bars and daily bars to the real sessi
 });
 
 type WorkspaceTestPayload = {
+  contractVersion: number;
   symbol: string;
   analysisSymbol: string;
   requestedSymbol: string;
@@ -78,7 +87,40 @@ type WorkspaceTestPayload = {
     stop: { isBrokerStopEligible: boolean; price?: number | null };
     takeProfits?: Array<{ price: number }>;
   }>;
+  tradeSignalSet: {
+    contractVersion: number;
+    stage: string;
+    plans: Array<{
+      id: string;
+      stage: string;
+      action: string;
+      calibration: {
+        status: string;
+        averageNetR: number | null;
+      };
+      gates: Array<{
+        kind: string;
+        status: string;
+        blocking: boolean;
+        label: string;
+        source: string | null;
+        asOf: string | null;
+        dataAgeSeconds: number | null;
+      }>;
+      isBrokerStopEligible: boolean;
+      orderSubmissionAttempted: boolean;
+    }>;
+    primaryByHorizon: {
+      intraday: string | null;
+      shortHold: string | null;
+      swing: string | null;
+    };
+    conflicts: unknown[];
+    isBrokerStopEligible: boolean;
+    orderSubmissionAttempted: boolean;
+  } | null;
   warnings: string[];
+  isBrokerStopEligible: boolean;
   orderSubmissionAttempted: boolean;
 };
 
@@ -271,6 +313,9 @@ test("crypto workspace uses Upbit 1h/4h/1d fixtures and never submits an order",
   assert.equal(payload.horizonPlans[0].basis.timeframeLabel, "4시간봉 방향 · 1시간봉 진입");
   assert.equal(payload.horizonPlans[1].basis.timeframeLabel, "일봉 방향 · 4시간봉 진입 · 1시간봉 재확인");
   assert.equal(payload.horizonPlans[1].basis.support, 91, "스윙 무효선은 tradeSetup.failureLevel을 사용해야 한다");
+  assert.equal(payload.contractVersion, 2);
+  assert.equal(payload.tradeSignalSet, null, "stock-only tradeSignalSet must not be emitted for crypto");
+  assert.equal(payload.isBrokerStopEligible, false);
   assert.equal(payload.orderSubmissionAttempted, false);
   assert.ok(payload.horizonPlans.every((plan) => plan.stop.isBrokerStopEligible === false));
   assert.equal(credentialReads, 0, "Upbit public data must not require Toss credentials");
@@ -306,6 +351,80 @@ test("stock auto source falls back to Yahoo and uses daily direction plus 1h ent
   assert.ok(payload.warnings.some((warning: string) => warning.includes("Yahoo fallback")));
   assert.ok(payload.warnings.some((warning: string) => warning.includes("부분 4시간봉 왜곡")));
   assert.deepEqual(new Set(yahoo.calls), new Set(["1h", "1d", "1wk"]));
+  assert.equal(payload.orderSubmissionAttempted, false);
+});
+
+test("stock workspace wires explicitly sourced breadth, sector ETF strength, and curated 50-day leader gates", async () => {
+  const yahoo = fixtureYahooProvider();
+  const response = await handleMarketWorkspaceRequest(new Request(
+    "http://127.0.0.1/api/local/analysis/workspace?symbol=005930.KS&assetClass=stock&source=yahoo",
+  ), {
+    userId: "fixture-user",
+    dependencies: {
+      now: () => NOW,
+      yahooProvider: yahoo.provider,
+      analyze: fixtureAnalyze,
+      loadTossCredentials: async () => null,
+      loadPlaybookExternalContext: async (input) => {
+        assert.equal(input.symbol, "005930.KS");
+        assert.equal(input.market, "KOSPI");
+        return {
+          market: {
+            status: "pass",
+            label: "시장 breadth 68%",
+            reason: "point-in-time 전체 상장 종목 breadth fixture",
+            source: "fixture.point-in-time-market-breadth",
+            asOf: NOW.toISOString(),
+            dataAgeSeconds: 0,
+          },
+          sector: {
+            status: "pass",
+            label: "반도체 상대강도 1개월",
+            reason: "091160.KS benchmark excess return",
+            source: "sector-strength.KR.091160.KS",
+            asOf: NOW.toISOString(),
+            dataAgeSeconds: 0,
+          },
+          leader50: {
+            status: "pass",
+            label: "50일 leader 2위",
+            reason: "50일 상대수익률 순위 확인",
+            source: "market-leaders.curated-return50-rank",
+            asOf: NOW.toISOString(),
+            dataAgeSeconds: 0,
+          },
+        };
+      },
+      loadPlaybookCalibrationRegistry: async () => ({
+        status: "loaded",
+        sourcePath: "/fixture/calibrations/registry.json",
+        registry: {
+          version: 2,
+          records: [approvedShortHoldCalibration()],
+        },
+        warning: null,
+      }),
+    },
+  });
+  const payload = await response.json() as WorkspaceTestPayload;
+  const tradeSignalSet = payload.tradeSignalSet;
+
+  assert.equal(response.status, 200);
+  assert.ok(tradeSignalSet);
+  const short = tradeSignalSet.plans.find((plan) => plan.id === "short-hold-trend")!;
+  const swingTrend = tradeSignalSet.plans.find((plan) => plan.id === "swing-trend")!;
+  assert.equal(short.stage, "calibrated");
+  assert.equal(short.calibration.status, "calibrated");
+  assert.equal(short.calibration.averageNetR, 0.19);
+  assert.equal(swingTrend.stage, "shadow", "registry records must not promote adjacent playbooks");
+  assert.equal(short.gates.find((gate) => gate.kind === "market")?.source, "fixture.point-in-time-market-breadth");
+  assert.equal(short.gates.find((gate) => gate.kind === "market")?.dataAgeSeconds, 0);
+  assert.equal(short.gates.find((gate) => gate.kind === "sector")?.source, "sector-strength.KR.091160.KS");
+  const leaderGate = swingTrend.gates.find((gate) => gate.label.startsWith("50일 leader"));
+  assert.equal(leaderGate?.status, "pass");
+  assert.equal(leaderGate?.source, "market-leaders.curated-return50-rank");
+  assert.equal(leaderGate?.asOf, NOW.toISOString());
+  assert.equal(tradeSignalSet.orderSubmissionAttempted, false);
   assert.equal(payload.orderSubmissionAttempted, false);
 });
 
@@ -601,6 +720,7 @@ test("explicit Toss source keeps provider failures fail-closed", async () => {
   const payload = await response.json() as Record<string, unknown>;
 
   assert.equal(response.status, 502);
+  assert.equal(payload.isBrokerStopEligible, false);
   assert.equal(payload.orderSubmissionAttempted, false);
   assert.ok(!String(payload.error).includes(clientSecret));
 });
@@ -615,6 +735,7 @@ test("explicit Toss source fails safely without credentials", async () => {
   const payload = await response.json() as Record<string, unknown>;
 
   assert.equal(response.status, 409);
+  assert.equal(payload.isBrokerStopEligible, false);
   assert.equal(payload.orderSubmissionAttempted, false);
   assert.match(String(payload.error), /자격증명/);
 });

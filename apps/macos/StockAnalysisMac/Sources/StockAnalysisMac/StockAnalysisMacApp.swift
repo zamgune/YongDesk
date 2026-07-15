@@ -84,6 +84,7 @@ final class AppModel: ObservableObject {
     @Published var watchlistSignals: [WatchlistSignalItem] = []
     @Published var watchlistSignalMessage = "급락 감시를 켜면 Toss 확정 5분봉으로 관심종목을 확인합니다."
     @Published var watchlistSignalMarketContext: WatchlistSignalMarketContext?
+    @Published var watchlistSignalResponseIsAdvisoryOnly = false
     @Published var sectorStrength: SectorStrengthResponseView?
     @Published var sectorStrengthMessage = "한국 또는 미국 시장을 선택하면 섹터 강도를 비교합니다."
     @Published private(set) var isSectorStrengthLoading = false
@@ -1811,8 +1812,17 @@ final class AppModel: ObservableObject {
             watchlistSignals = response.items
             watchlistSignalMarketContext = response.marketContext
             watchlistSignalMessage = response.monitoringMessage
-            if scan && settings.crashSignalMonitoringEnabled {
-                let alerts = response.items.filter { $0.notificationEligible && $0.signal.stage == "entry-ready" }
+            let responseIsAdvisoryOnly = response.isBrokerStopEligible == false
+                && response.orderSubmissionAttempted == false
+            watchlistSignalResponseIsAdvisoryOnly = responseIsAdvisoryOnly
+            if scan && settings.crashSignalMonitoringEnabled && responseIsAdvisoryOnly {
+                let alerts = response.items.filter {
+                    $0.notificationEligible
+                        && !$0.stale
+                        && $0.signal.orderSubmissionAttempted == false
+                        && $0.signal.exitPlan?.isBrokerStopEligible == false
+                        && $0.tradePlan?.isCalibratedWatchlistEntryEligible == true
+                }
                 if !alerts.isEmpty {
                     await notifier.requestAuthorization()
                     for item in alerts.prefix(3) {
@@ -1821,6 +1831,7 @@ final class AppModel: ObservableObject {
                 }
             }
         } catch {
+            watchlistSignalResponseIsAdvisoryOnly = false
             watchlistSignalMessage = "급락 감시 실패: \(Self.errorMessage(error))"
         }
     }
@@ -2861,7 +2872,7 @@ final class AppModel: ObservableObject {
         let statuses = workspace.horizonPlans.map { plan in
             let horizon: String
             switch plan.horizon {
-            case .day: horizon = "단타"
+            case .day: horizon = "1~3일 단기"
             case .swing: horizon = "스윙"
             case .long: horizon = "장기"
             case let .unknown(value): horizon = value
@@ -2937,6 +2948,14 @@ final class AppModel: ObservableObject {
                 price: number(signal["price"])
             )
         }
+        let signalEvents: [AnalysisTradeSignalEvent] = {
+            guard let raw = json["signalEvents"],
+                  JSONSerialization.isValidJSONObject(raw),
+                  let data = try? JSONSerialization.data(withJSONObject: raw) else {
+                return []
+            }
+            return (try? JSONDecoder().decode([AnalysisTradeSignalEvent].self, from: data)) ?? []
+        }()
 
         return MarketAnalysisSnapshot(
             symbol: string(json["symbol"]) ?? "UNKNOWN",
@@ -2963,7 +2982,10 @@ final class AppModel: ObservableObject {
             indicators: indicators,
             breakoutTime: breakout.flatMap { number($0["time"]) }.map(Int.init),
             breakoutPrice: breakout.flatMap { number($0["price"]) },
-            recentSignals: Array(recentSignals)
+            recentSignals: Array(recentSignals),
+            signalEvents: signalEvents,
+            isBrokerStopEligible: bool(json["isBrokerStopEligible"]) ?? false,
+            orderSubmissionAttempted: bool(json["orderSubmissionAttempted"]) ?? false
         )
     }
 
@@ -4698,6 +4720,9 @@ struct MarketAnalysisSnapshot: Equatable {
     let breakoutTime: Int?
     let breakoutPrice: Double?
     let recentSignals: [AnalysisSignal]
+    let signalEvents: [AnalysisTradeSignalEvent]
+    let isBrokerStopEligible: Bool
+    let orderSubmissionAttempted: Bool
 
     var changeRatio: Double? {
         guard let latestClose, let previousClose, previousClose != 0 else {

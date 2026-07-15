@@ -137,3 +137,22 @@ test("session boundary conversion handles Korean time and US daylight saving tim
     Math.floor(Date.parse("2026-01-09T21:00:00.000Z") / 1_000),
   );
 });
+
+test("session policies keep holidays empty and close half-days at the configured boundary", () => {
+  const holiday = aggregateSessionCandles([], krPolicy(60));
+  assert.deepEqual(holiday, []);
+
+  const halfDay = aggregateSessionCandles([
+    candle("2026-07-10T00:00:00Z", 100, 101, 2),
+    candle("2026-07-10T03:59:00Z", 104, 105, 3),
+    candle("2026-07-10T04:00:00Z", 106, 107, 4),
+  ], {
+    ...krPolicy(60),
+    sessionEndMinutes: 13 * 60,
+    nowMs: Date.parse("2026-07-10T05:00:00Z"),
+  });
+
+  assert.equal(halfDay.length, 2);
+  assert.equal(halfDay.at(-1)?.closeTime, Math.floor(Date.parse("2026-07-10T04:00:00Z") / 1_000));
+  assert.equal(halfDay.some((item) => item.close === 107), false);
+});

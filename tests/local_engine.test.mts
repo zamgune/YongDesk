@@ -426,9 +426,11 @@ test("local watchlist stores unique items, enforces its limit, and isolates summ
   assert.equal(signalScan.status, 200);
   const signalPayload = await signalScan.json() as {
     monitoringStatus?: string;
+    isBrokerStopEligible?: boolean;
     orderSubmissionAttempted?: boolean;
   };
   assert.equal(signalPayload.monitoringStatus, "empty");
+  assert.equal(signalPayload.isBrokerStopEligible, false);
   assert.equal(signalPayload.orderSubmissionAttempted, false);
 });
 

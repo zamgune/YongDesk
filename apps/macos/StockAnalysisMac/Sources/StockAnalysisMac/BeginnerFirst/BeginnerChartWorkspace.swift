@@ -111,7 +111,7 @@ struct BeginnerChartWorkspace: View {
             VStack(alignment: .leading, spacing: 10) {
                 HStack(alignment: .top) {
                     VStack(alignment: .leading, spacing: 3) {
-                        Text("급락 반전 감시")
+                        Text("장중 급락반등")
                             .font(.headline)
                         Text(item.signal.detail)
                             .font(.caption)
@@ -119,6 +119,7 @@ struct BeginnerChartWorkspace: View {
                     }
                     Spacer()
                     BeginnerStatusBadge(item.signal.label, color: crashSignalColor(item.signal.stage))
+                    BeginnerStatusBadge("검증 전", color: BeginnerPalette.muted)
                     BeginnerStatusBadge(item.signal.marketContext.label, color: item.signal.marketContext.status == "weak" ? BeginnerPalette.amber : BeginnerPalette.blue)
                 }
 
@@ -636,6 +637,7 @@ private struct BeginnerHorizonPlan: View {
     let analysis: MarketAnalysisSnapshot?
     let workspaceAnalysis: WorkspaceAnalysis?
     let assetClass: BeginnerAssetClass
+    @State private var selectedPlaybookId = ""
 
     private var plan: AnalysisHorizonPlan? {
         workspaceAnalysis?.horizonPlans.first { item in
@@ -646,12 +648,60 @@ private struct BeginnerHorizonPlan: View {
         }
     }
 
+    private var playbookHorizon: String {
+        switch horizon {
+        case .day: "short-hold"
+        case .swing: "swing"
+        case .longTerm: "long"
+        }
+    }
+
+    private var calibratedPlaybooks: [AnalysisTradePlaybookPlan] {
+        guard
+            assetClass == .stock,
+            workspaceAnalysis?.contractVersion == 2,
+            workspaceAnalysis?.isBrokerStopEligible == false,
+            workspaceAnalysis?.orderSubmissionAttempted == false,
+            let signalSet = workspaceAnalysis?.tradeSignalSet,
+            signalSet.contractVersion == 2,
+            !signalSet.isBrokerStopEligible,
+            !signalSet.orderSubmissionAttempted
+        else { return [] }
+        return signalSet.plans.filter {
+            $0.horizon == playbookHorizon &&
+                $0.isCalibratedDisplayEligible
+        }
+    }
+
+    private var playbookConflict: AnalysisTradePlaybookConflict? {
+        let eligibleIds = Set(calibratedPlaybooks.map(\.id))
+        return workspaceAnalysis?.tradeSignalSet?.conflicts.first {
+            $0.horizon == playbookHorizon &&
+                $0.playbookIds.filter(eligibleIds.contains).count > 1
+        }
+    }
+
+    private var selectedPlaybook: AnalysisTradePlaybookPlan? {
+        if let explicit = calibratedPlaybooks.first(where: { $0.id == selectedPlaybookId }) {
+            return explicit
+        }
+        return calibratedPlaybooks.count == 1 && playbookConflict == nil
+            ? calibratedPlaybooks.first
+            : nil
+    }
+
     private var currency: String {
         plan?.basis?.currency ?? workspaceAnalysis?.currency ?? analysis?.currency ?? "KRW"
     }
 
     private var isActionable: Bool {
-        plan?.status == .actionable
+        if let selectedPlaybook {
+            return selectedPlaybook.action == "entry-ready"
+        }
+        if playbookConflict != nil {
+            return false
+        }
+        return plan?.status == .actionable
     }
 
     var body: some View {
@@ -669,33 +719,47 @@ private struct BeginnerHorizonPlan: View {
                 HStack(spacing: 6) {
                     BeginnerStatusBadge(calculationStatusLabel, color: calculationStatusColor)
                     BeginnerStatusBadge(entryStatusLabel, color: entryStatusColor)
+                    if selectedPlaybook != nil {
+                        BeginnerStatusBadge("시간순 OOS", color: BeginnerPalette.blue)
+                    }
                 }
+            }
+
+            if calibratedPlaybooks.count > 1 {
+                Picker("전략 방식", selection: $selectedPlaybookId) {
+                    Text("선택 필요").tag("")
+                    ForEach(calibratedPlaybooks, id: \.id) { item in
+                        Text(item.label).tag(item.id)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .accessibilityIdentifier("beginner-playbook-picker-\(horizon.rawValue)")
             }
 
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 190), spacing: 10)], spacing: 10) {
                 planTile(
                     title: entryPriceTitle,
-                    value: beginnerPrice(plan?.entryPrice ?? analysis?.latestClose, currency: currency),
-                    detail: plan?.entryPrice == nil ? "분석 후 표시" : "계산 기준 · 주문 미전송"
+                    value: beginnerPrice(selectedPlaybook?.riskPlan.entryPrice ?? plan?.entryPrice ?? analysis?.latestClose, currency: currency),
+                    detail: selectedPlaybook == nil && plan?.entryPrice == nil ? "분석 후 표시" : "계산 기준 · 주문 미전송"
                 )
                 planTile(
                     title: "손절·무효화",
-                    value: beginnerPrice(plan?.stop?.price, currency: currency),
+                    value: beginnerPrice(selectedPlaybook?.riskPlan.structureInvalidationPrice ?? plan?.stop?.price, currency: currency),
                     detail: stopDetail
                 )
                 planTile(
                     title: "1차 익절",
-                    value: beginnerPrice(plan?.takeProfits.first?.price, currency: currency),
+                    value: beginnerPrice(selectedPlaybook?.riskPlan.targets.first?.price ?? plan?.takeProfits.first?.price, currency: currency),
                     detail: takeProfitDetail(at: 0)
                 )
                 planTile(
                     title: "2차 익절",
-                    value: beginnerPrice(plan?.takeProfits.dropFirst().first?.price, currency: currency),
+                    value: beginnerPrice(selectedPlaybook?.riskPlan.targets.dropFirst().first?.price ?? plan?.takeProfits.dropFirst().first?.price, currency: currency),
                     detail: takeProfitDetail(at: 1)
                 )
                 planTile(
                     title: "추적 청산",
-                    value: beginnerPrice(plan?.trailingExit?.price, currency: currency),
+                    value: beginnerPrice(selectedPlaybook?.riskPlan.trailingExit?.price ?? plan?.trailingExit?.price, currency: currency),
                     detail: trailingExitDetail
                 )
             }
@@ -732,9 +796,51 @@ private struct BeginnerHorizonPlan: View {
                 }
                 .accessibilityIdentifier("beginner-horizon-evidence-\(horizon.rawValue)")
             }
+
+            if let selectedPlaybook {
+                DisclosureGroup("시간순 검증 근거") {
+                    VStack(alignment: .leading, spacing: 7) {
+                        Text("표본 \(selectedPlaybook.calibration.sampleSize)건 · holdout \(selectedPlaybook.calibration.holdoutSampleSize)건")
+                        if let averageNetR = selectedPlaybook.calibration.averageNetR {
+                            Text("비용 후 평균 \(averageNetR.formatted(.number.precision(.fractionLength(2))))R")
+                        }
+                        if let targetBeforeStopRate = selectedPlaybook.calibration.targetBeforeStopRate {
+                            Text("결과 정의 · 최초 손절 전 목표 선도달률 \(targetBeforeStopRate.formatted(.percent.precision(.fractionLength(1))))")
+                        }
+                        if let lower = selectedPlaybook.calibration.confidence95?.lower,
+                           let upper = selectedPlaybook.calibration.confidence95?.upper {
+                            Text("95% 구간 \(lower.formatted(.number.precision(.fractionLength(2))))R ~ \(upper.formatted(.number.precision(.fractionLength(2))))R")
+                        }
+                        if let costModel = selectedPlaybook.calibration.costModel {
+                            Text("비용 포함 · \(costModel)")
+                        }
+                        if let validationStart = selectedPlaybook.calibration.validationStart,
+                           let validationEnd = selectedPlaybook.calibration.validationEnd {
+                            Text("검증 기간 · \(validationStart) ~ \(validationEnd)")
+                        }
+                        Text(selectedPlaybook.calibration.note)
+                    }
+                    .font(.caption)
+                    .foregroundStyle(BeginnerPalette.muted)
+                    .padding(.top, 8)
+                }
+                .accessibilityIdentifier("beginner-playbook-evidence-\(horizon.rawValue)")
+            }
         }
         .id(horizon)
         .accessibilityIdentifier(horizon.accessibilityIdentifier)
+        .onAppear {
+            if selectedPlaybookId.isEmpty && calibratedPlaybooks.count == 1 && playbookConflict == nil {
+                selectedPlaybookId = calibratedPlaybooks.first?.id ?? ""
+            }
+        }
+        .onChange(of: calibratedPlaybooks.map(\.id)) { _, ids in
+            if !ids.contains(selectedPlaybookId) {
+                selectedPlaybookId = ids.count == 1 && playbookConflict == nil
+                    ? ids.first ?? ""
+                    : ""
+            }
+        }
     }
 
     private func planTile(title: String, value: String, detail: String) -> some View {
@@ -791,14 +897,20 @@ private struct BeginnerHorizonPlan: View {
     }
 
     private var statusDescription: String {
+        if let selectedPlaybook {
+            return selectedPlaybook.reasons.first ?? selectedPlaybook.label
+        }
+        if let playbookConflict {
+            return playbookConflict.reason
+        }
         if let reason = plan?.reasons.first, !reason.isEmpty {
             return reason
         }
         switch horizon {
         case .day:
             return assetClass == .crypto
-                ? "단타는 일봉 결론을 그대로 재사용하지 않습니다. 4시간 위험 필터와 1시간 진입 조건이 일치할 때만 손절·익절선을 계산합니다."
-                : "주식 단타는 정규장 일봉 위험 필터와 확정 1시간봉 진입 조건을 결합합니다. 장중 미완성 봉은 확정 신호에서 제외합니다."
+                ? "1~3일 단기는 일봉 결론을 그대로 재사용하지 않습니다. 4시간 위험 필터와 1시간 진입 조건이 일치할 때만 손절·익절선을 계산합니다."
+                : "주식 1~3일 단기는 정규장 일봉 위험 필터와 확정 1시간봉 진입 조건을 결합합니다. 장중 미완성 봉은 확정 신호에서 제외합니다."
         case .swing:
             return assetClass == .crypto
                 ? "코인 스윙은 일봉 추세를 기준으로 4시간 진입과 1시간 재확인을 결합합니다. 부분 봉은 확정 신호에서 제외합니다."
@@ -809,6 +921,10 @@ private struct BeginnerHorizonPlan: View {
     }
 
     private func takeProfitDetail(at index: Int) -> String {
+        if let targets = selectedPlaybook?.riskPlan.targets, targets.indices.contains(index) {
+            let target = targets[index]
+            return "\(target.basis) · \(Int(target.allocationPct.rounded()))% 청산"
+        }
         guard let targets = plan?.takeProfits, targets.indices.contains(index) else {
             switch horizon {
             case .day: return index == 0 ? "1R와 가까운 저항 비교" : "2R 기준"
@@ -822,6 +938,10 @@ private struct BeginnerHorizonPlan: View {
     }
 
     private var stopDetail: String {
+        if let riskPlan = selectedPlaybook?.riskPlan {
+            let trigger = localizedTrigger(riskPlan.stopTrigger)
+            return "\(trigger ?? "구조 무효선") · 검증된 플레이북 기준 · 자동 주문 아님"
+        }
         guard let stop = plan?.stop else { return "시간봉 구조·ATR 필요" }
         let trigger = localizedTrigger(stop.trigger)
         let executionNote = stop.isBrokerStopEligible == false ? " · 자동 주문 아님" : ""
@@ -853,6 +973,9 @@ private struct BeginnerHorizonPlan: View {
     }
 
     private var trailingExitDetail: String {
+        if let trailingExit = selectedPlaybook?.riskPlan.trailingExit {
+            return "\(trailingExit.basis) · \(Int(trailingExit.allocationPct.rounded()))% 청산"
+        }
         if let trailingExit = plan?.trailingExit {
             let allocation = trailingExit.allocationPct.map { " · \(Int($0.rounded()))% 청산" } ?? ""
             return "\(trailingExit.basis ?? trailingDetail)\(allocation)"
@@ -875,6 +998,10 @@ private struct BeginnerHorizonPlan: View {
     }
 
     private var hasCalculatedPrices: Bool {
+        if let riskPlan = selectedPlaybook?.riskPlan {
+            return riskPlan.structureInvalidationPrice != nil &&
+                (!riskPlan.targets.isEmpty || riskPlan.trailingExit != nil)
+        }
         guard let plan else { return false }
         if plan.managementState != nil, plan.stop?.price != nil {
             return true
@@ -892,6 +1019,17 @@ private struct BeginnerHorizonPlan: View {
     }
 
     private var entryStatusLabel: String {
+        if let selectedPlaybook {
+            return switch selectedPlaybook.action {
+            case "entry-ready": "진입 조건 충족"
+            case "watch": "관찰"
+            case "wait": "진입 대기"
+            default: "검증 데이터 대기"
+            }
+        }
+        if playbookConflict != nil {
+            return "방식 선택 필요"
+        }
         guard let plan else { return "진입 판단 대기" }
         if plan.managementState?.state == .invalidationBreached { return "무효선 이탈" }
         if plan.managementState?.state == .recoveryWatch { return "회복 관찰" }
@@ -905,6 +1043,16 @@ private struct BeginnerHorizonPlan: View {
     }
 
     private var entryStatusColor: Color {
+        if let selectedPlaybook {
+            return switch selectedPlaybook.action {
+            case "entry-ready": BeginnerPalette.green
+            case "watch", "wait": BeginnerPalette.amber
+            default: BeginnerPalette.muted
+            }
+        }
+        if playbookConflict != nil {
+            return BeginnerPalette.amber
+        }
         guard let plan else { return BeginnerPalette.muted }
         if plan.managementState?.state == .invalidationBreached { return BeginnerPalette.red }
         if plan.managementState?.state == .recoveryWatch { return BeginnerPalette.amber }
@@ -917,6 +1065,10 @@ private struct BeginnerHorizonPlan: View {
     }
 
     private var planGuidance: String {
+        if let selectedPlaybook {
+            let costModel = selectedPlaybook.calibration.costModel ?? "비용 모델 확인"
+            return "\(selectedPlaybook.label) · \(costModel) · 시간순 OOS 검증 기준입니다. 분석 결과는 주문으로 자동 전송되지 않습니다."
+        }
         if let managementState = plan?.managementState {
             return managementState.state == .invalidationBreached
                 ? "보유 평단 기준 계획의 장기 무효선이 이미 이탈했습니다. 익절 목표보다 축소·청산과 재진입 조건을 먼저 확인하세요."

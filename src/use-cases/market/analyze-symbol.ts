@@ -16,13 +16,20 @@ import {
 } from "technicalindicators";
 import {
   getMarketDataProvider,
+  marketCandleCloseTime,
   type MarketCandle,
   type MarketDataInterval,
   type MarketDataProvider,
+  type MarketSessionKind,
 } from "@/lib/market-data";
 import { calculateBreakoutRule } from "@/lib/market/breakout-rule";
+import {
+  calculateConfirmedObvDivergence,
+  calculateConfirmedRsiDivergence,
+} from "@/lib/market/causal-divergence";
 import { calculatePatternSignals } from "@/lib/market/pattern-signals";
 import { calculateSignalReliability } from "@/lib/market/signal-reliability";
+import { buildTradeSignalEvents } from "@/lib/market/trade-playbook";
 import { buildTradeSetup } from "@/lib/market/trade-setup";
 import { calculateTrendFollowingSignals } from "@/lib/market/trend-following";
 import { GENERAL_ANALYSIS_MAX_DAYS, parseBoundedDays } from "@/lib/security/request-bounds";
@@ -36,6 +43,8 @@ type MarketSignal = {
   label: string;
   reason: string;
   stopLevel?: number;
+  profile?: "base-panic" | "growth-reset";
+  setupFamilies?: string[];
 };
 
 const DAILY_TRIGGER_REASON_PREFIX = "Oversold setup +";
@@ -101,6 +110,7 @@ const resampleCandles = (
     const volume = bucket.reduce((sum, candle) => sum + candle.volume, 0);
     resampled.push({
       time: bucket[0].time,
+      closeTime: bucket.at(-1)?.closeTime,
       open,
       high,
       low,
@@ -762,148 +772,6 @@ const getRsiThresholds = (atrValue: number | null, close: number) => {
   };
 };
 
-const getDivergenceMasks = (
-  candles: Candle[],
-  rsiValues: Array<number | null>,
-  window = 5,
-) => {
-  const length = candles.length;
-  const isLow = new Array<boolean>(length).fill(false);
-  const isHigh = new Array<boolean>(length).fill(false);
-
-  for (let i = window; i < length - window; i += 1) {
-    const lowSlice = candles
-      .slice(i - window, i + window + 1)
-      .map((candle) => candle.low);
-    const highSlice = candles
-      .slice(i - window, i + window + 1)
-      .map((candle) => candle.high);
-    const lowMin = Math.min(...lowSlice);
-    const highMax = Math.max(...highSlice);
-
-    if (candles[i].low === lowMin) {
-      isLow[i] = true;
-    }
-    if (candles[i].high === highMax) {
-      isHigh[i] = true;
-    }
-  }
-
-  const lowIndices = isLow
-    .map((value, index) => (value ? index : -1))
-    .filter((index) => index >= 0);
-  const highIndices = isHigh
-    .map((value, index) => (value ? index : -1))
-    .filter((index) => index >= 0);
-
-  const bullMask = new Array<boolean>(length).fill(false);
-  const bearMask = new Array<boolean>(length).fill(false);
-
-  for (let i = 1; i < lowIndices.length; i += 1) {
-    const curr = lowIndices[i];
-    const prev = lowIndices[i - 1];
-    const currRsi = rsiValues[curr];
-    const prevRsi = rsiValues[prev];
-    if (
-      isNumber(currRsi) &&
-      isNumber(prevRsi) &&
-      candles[curr].low <= candles[prev].low &&
-      currRsi > prevRsi &&
-      currRsi < 40
-    ) {
-      bullMask[curr] = true;
-    }
-  }
-
-  for (let i = 1; i < highIndices.length; i += 1) {
-    const curr = highIndices[i];
-    const prev = highIndices[i - 1];
-    const currRsi = rsiValues[curr];
-    const prevRsi = rsiValues[prev];
-    if (
-      isNumber(currRsi) &&
-      isNumber(prevRsi) &&
-      candles[curr].high >= candles[prev].high &&
-      currRsi < prevRsi &&
-      currRsi > 60
-    ) {
-      bearMask[curr] = true;
-    }
-  }
-
-  return { bullMask, bearMask };
-};
-
-const getObvDivergenceMasks = (
-  candles: Candle[],
-  obvValues: Array<number | null>,
-  window = 5,
-) => {
-  const length = candles.length;
-  const isLow = new Array<boolean>(length).fill(false);
-  const isHigh = new Array<boolean>(length).fill(false);
-
-  for (let i = window; i < length - window; i += 1) {
-    const lowSlice = candles
-      .slice(i - window, i + window + 1)
-      .map((candle) => candle.low);
-    const highSlice = candles
-      .slice(i - window, i + window + 1)
-      .map((candle) => candle.high);
-    const lowMin = Math.min(...lowSlice);
-    const highMax = Math.max(...highSlice);
-
-    if (candles[i].low === lowMin) {
-      isLow[i] = true;
-    }
-    if (candles[i].high === highMax) {
-      isHigh[i] = true;
-    }
-  }
-
-  const lowIndices = isLow
-    .map((value, index) => (value ? index : -1))
-    .filter((index) => index >= 0);
-  const highIndices = isHigh
-    .map((value, index) => (value ? index : -1))
-    .filter((index) => index >= 0);
-
-  const bullMask = new Array<boolean>(length).fill(false);
-  const bearMask = new Array<boolean>(length).fill(false);
-
-  for (let i = 1; i < lowIndices.length; i += 1) {
-    const curr = lowIndices[i];
-    const prev = lowIndices[i - 1];
-    const currObv = obvValues[curr];
-    const prevObv = obvValues[prev];
-    if (
-      isNumber(currObv) &&
-      isNumber(prevObv) &&
-      candles[curr].low <= candles[prev].low &&
-      currObv > prevObv
-    ) {
-      bullMask[curr] = true;
-    }
-  }
-
-  for (let i = 1; i < highIndices.length; i += 1) {
-    const curr = highIndices[i];
-    const prev = highIndices[i - 1];
-    const currObv = obvValues[curr];
-    const prevObv = obvValues[prev];
-    if (
-      isNumber(currObv) &&
-      isNumber(prevObv) &&
-      candles[curr].high >= candles[prev].high &&
-      currObv < prevObv
-    ) {
-      bearMask[curr] = true;
-    }
-  }
-
-  return { bullMask, bearMask };
-};
-
 const getRsiDoubleBottom = (rsiValues: Array<number | null>, lookback = 20) => {
   const length = rsiValues.length;
   const mask = new Array<boolean>(length).fill(false);
@@ -966,7 +834,11 @@ export async function analyzeSymbol(
   const timeframeParam = url.searchParams.get("tf") ?? "1d";
   if (!new Set(["5m", "15m", "30m", "1h", "4h", "1d", "1wk"]).has(timeframeParam)) {
     return Response.json(
-      { error: "Unsupported timeframe. Use 5m, 15m, 30m, 1h, 4h, 1d, or 1wk." },
+      {
+        error: "Unsupported timeframe. Use 5m, 15m, 30m, 1h, 4h, 1d, or 1wk.",
+        isBrokerStopEligible: false,
+        orderSubmissionAttempted: false,
+      },
       { status: 400 },
     );
   }
@@ -994,7 +866,11 @@ export async function analyzeSymbol(
   const sanitizedSymbol = symbol.trim().toUpperCase();
 
   if (!sanitizedSymbol) {
-    return Response.json({ error: "Symbol is required." }, { status: 400 });
+    return Response.json({
+      error: "Symbol is required.",
+      isBrokerStopEligible: false,
+      orderSubmissionAttempted: false,
+    }, { status: 400 });
   }
 
   const requestedRangeDays = Number.isFinite(rangeDays) ? rangeDays : DEFAULT_DAYS;
@@ -1030,12 +906,32 @@ export async function analyzeSymbol(
 
   if (!chart.candles.length) {
     return Response.json(
-      { error: "No data returned for symbol." },
+      {
+        error: "No data returned for symbol.",
+        isBrokerStopEligible: false,
+        orderSubmissionAttempted: false,
+      },
       { status: 404 },
     );
   }
 
-  let candles: Candle[] = chart.candles;
+  const candleMarket: MarketSessionKind = options?.metadata?.market ?? (
+    /^(?:KRW|BTC|USDT)-|-(?:USD|USDT|USDC)$/i.test(sanitizedSymbol)
+      ? "CRYPTO"
+      : /^\d{6}\.KQ$/i.test(sanitizedSymbol)
+        ? "KOSDAQ"
+        : /^\d{6}(?:\.KS)?$/i.test(sanitizedSymbol)
+          ? "KOSPI"
+          : "US"
+  );
+  let candles: Candle[] = chart.candles.map((candle) => ({
+    ...candle,
+    closeTime: candle.closeTime ?? marketCandleCloseTime(
+      candle.time,
+      timeframe.interval,
+      candleMarket,
+    ),
+  }));
 
   if (timeframe.resample && options?.preAggregatedTimeframe !== timeframeParam) {
     candles = resampleCandles(candles, timeframe.resample, chartTimeZone);
@@ -1217,11 +1113,18 @@ export async function analyzeSymbol(
       ? "growth reset"
       : "base panic";
 
-  const { bullMask, bearMask } = getDivergenceMasks(candles, rsiAligned);
-  const { bullMask: obvBullMask, bearMask: obvBearMask } = getObvDivergenceMasks(
-    candles,
-    obvAligned,
-  );
+  const {
+    bullMask,
+    bearMask,
+    bullEvents: rsiBullDivergenceEvents,
+    bearEvents: rsiBearDivergenceEvents,
+  } = calculateConfirmedRsiDivergence(candles, rsiAligned, 5, toUnix(endDate));
+  const {
+    bullMask: obvBullMask,
+    bearMask: obvBearMask,
+    bullEvents: obvBullDivergenceEvents,
+    bearEvents: obvBearDivergenceEvents,
+  } = calculateConfirmedObvDivergence(candles, obvAligned, 5, toUnix(endDate));
   const rsiDoubleBottom = getRsiDoubleBottom(rsiAligned);
 
   const lookbackBars =
@@ -1239,6 +1142,10 @@ export async function analyzeSymbol(
   const swingTrapBullStop = new Array<number | null>(candles.length).fill(null);
   const swingTrapBullReason = new Array<string | null>(candles.length).fill(null);
   const swingTrapBullProfile = new Array<"base-panic" | "growth-reset" | null>(candles.length).fill(null);
+  const swingTrapBullSetupFamilies = Array.from(
+    { length: candles.length },
+    (): string[] => [],
+  );
   const swingTrapBearReason = new Array<string | null>(candles.length).fill(null);
   const swingTrapDebug = {
     bullSweepsDetected: 0,
@@ -1311,6 +1218,7 @@ export async function analyzeSymbol(
     setupAtr: number | null;
     setupScore: number;
     setupDetails: string[];
+    setupFamilies: string[];
     growthEligible: boolean;
     rangeAtrMultiple: number;
     volumeRatio: number | null;
@@ -1778,6 +1686,7 @@ export async function analyzeSymbol(
               swingTrapBullStop[i] =
                 pendingDailySetup.stopLow - stopBuffer;
               swingTrapBullProfile[i] = "growth-reset";
+              swingTrapBullSetupFamilies[i] = [...pendingDailySetup.setupFamilies];
               swingTrapBullReason[i] =
                 `${DAILY_TRIGGER_REASON_PREFIX}Growth Reset: ${archetype} (+${triggerLag}). ` +
                 `Setup ${pendingDailySetup.setupScore}/6 (${pendingDailySetup.setupDetails.join(", ")}). ` +
@@ -1789,6 +1698,7 @@ export async function analyzeSymbol(
       }
 
       const setupDetails: string[] = [];
+      const setupFamilies: string[] = [];
       if (isNumber(rsiValue) && rsiValue <= 40) {
         setupDetails.push("RSI<=40");
       }
@@ -1801,11 +1711,16 @@ export async function analyzeSymbol(
       ) {
         setupDetails.push("Stoch/Williams oversold");
       }
+      if (setupDetails.length > 0) {
+        setupFamilies.push("oscillator");
+      }
       if (isNumber(bbValue?.lower) && candle.low < bbValue.lower) {
         setupDetails.push("Below BB lower");
+        setupFamilies.push("volatility-band");
       }
       if (isNumber(ma20Value) && candle.close <= ma20Value * 0.95) {
         setupDetails.push("<= SMA20 -5%");
+        setupFamilies.push("trend-distance");
       }
       if (
         i >= 5 &&
@@ -1813,6 +1728,7 @@ export async function analyzeSymbol(
         candle.close / candles[i - 5].close - 1 <= -0.07
       ) {
         setupDetails.push("5d return<=-7%");
+        setupFamilies.push("drawdown");
       }
 
       const setupScore = setupDetails.length;
@@ -1890,6 +1806,7 @@ export async function analyzeSymbol(
             swingTrapBullLevelIndex[i] = i;
             swingTrapBullStop[i] = candle.low - stopBuffer;
             swingTrapBullProfile[i] = "base-panic";
+            swingTrapBullSetupFamilies[i] = [...setupFamilies];
             const archetype = crashReclaim
               ? "Crash Reclaim"
               : balancedPanic
@@ -1936,6 +1853,7 @@ export async function analyzeSymbol(
                 setupAtr: isNumber(atrValue) ? atrValue : null,
                 setupScore,
                 setupDetails,
+                setupFamilies,
                 growthEligible: growthProfileEligibleMask[i],
                 rangeAtrMultiple,
                 volumeRatio,
@@ -2231,6 +2149,7 @@ export async function analyzeSymbol(
       reason: string;
       stopLevel?: number;
       profile?: "base-panic" | "growth-reset";
+      setupFamilies?: string[];
     }> = [];
 
     // V2.2: Detect candlestick patterns for current candle
@@ -2606,6 +2525,7 @@ export async function analyzeSymbol(
           swingTrapBullStop[i] ??
           (isNumber(atrValue) ? candle.low - atrValue * 0.25 : candle.low - candle.close * 0.005),
         profile: swingTrapBullProfile[i] ?? "base-panic",
+        setupFamilies: swingTrapBullSetupFamilies[i],
       });
     }
     if (hasBearTrap) {
@@ -2694,6 +2614,8 @@ export async function analyzeSymbol(
           label: chosen.label,
           reason: chosen.reason,
           stopLevel: chosen.stopLevel,
+          profile: chosen.profile,
+          setupFamilies: chosen.setupFamilies,
         });
         lastBuyIndex = i;
         if (chosen.profile === "growth-reset") {
@@ -2711,12 +2633,33 @@ export async function analyzeSymbol(
 
   const visibleCandles = candles.slice(visibleStartIndex);
   const candleByTime = new Map(candles.map((candle) => [candle.time, candle]));
+  const divergenceEvents = [
+    ...rsiBullDivergenceEvents,
+    ...rsiBearDivergenceEvents,
+    ...obvBullDivergenceEvents,
+    ...obvBearDivergenceEvents,
+  ];
   const visibleSignals = signals
     .filter((signal) => signal.time >= requestedStartUnix)
-    .map((signal) => ({
-      ...signal,
-      price: candleByTime.get(signal.time)?.close ?? null,
-    }));
+    .map((signal) => {
+      const usesDivergence = /divergence/i.test(`${signal.label} ${signal.reason}`);
+      const expectedDirection = signal.type === "buy" ? "bullish" : "bearish";
+      const causalDivergence = usesDivergence
+        ? divergenceEvents
+          .filter((event) =>
+            candles[event.confirmedIndex]?.time === signal.time &&
+            event.direction === expectedDirection)
+          .toSorted((left, right) => left.occurredAt - right.occurredAt)[0]
+        : null;
+      const confirmationCandle = candleByTime.get(signal.time);
+      return {
+        ...signal,
+        occurredAt: causalDivergence?.occurredAt ?? signal.time,
+        confirmedAt: causalDivergence?.confirmedAt ??
+          confirmationCandle?.closeTime ?? signal.time,
+        price: confirmationCandle?.close ?? null,
+      };
+    });
   const trendFollowingSignals = calculateTrendFollowingSignals({
     candles,
     sma5: sma5Aligned,
@@ -2885,6 +2828,12 @@ export async function analyzeSymbol(
       },
     },
     signals: visibleSignals,
+    signalEvents: buildTradeSignalEvents({
+      candles: visibleCandles,
+      signals: visibleSignals,
+      trendFollowing,
+      tradeSetup,
+    }),
     trendFollowing,
     breakoutRule,
     tradeSetup,
@@ -2892,6 +2841,8 @@ export async function analyzeSymbol(
     patternSignals,
     breakoutSignal: chartBreakoutSignal,
     signalReliability,
+    isBrokerStopEligible: false as const,
+    orderSubmissionAttempted: false as const,
     analysisBasis: {
       atr14: latestAtr14,
       sma20: latestSma20,

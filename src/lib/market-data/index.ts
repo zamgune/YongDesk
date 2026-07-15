@@ -1,6 +1,8 @@
 import type { MarketDataProvider } from "./types";
 import { YahooMarketDataProvider } from "./yahoo";
 
+export { marketCandleCloseTime, type MarketSessionKind } from "./candle-close-time";
+
 export type {
   GetCandlesOptions,
   GetScreenerCandidatesOptions,

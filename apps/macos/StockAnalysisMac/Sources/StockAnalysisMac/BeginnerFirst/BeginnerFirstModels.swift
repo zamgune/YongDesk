@@ -201,7 +201,7 @@ enum BeginnerTradeHorizon: String, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
-        case .day: return "단타"
+        case .day: return "1~3일 단기"
         case .swing: return "스윙"
         case .longTerm: return "장투"
         }

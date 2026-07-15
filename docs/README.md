@@ -19,6 +19,7 @@
 - [어스플러스식 브리핑 전략](us-plus-briefing-strategy.md)
 - [추세추종 대장주 백테스트](trend-following-leader-backtest.md)
 - [추세추종 임계값 메모](trend-following-threshold-notes.md)
+- [주식 신호 플레이북과 검증 계약](stock-signal-playbooks.md) — 장중·단기·스윙 신호 분리, 구조 손절과 OOS 승격 기준
 - [커뮤니티 반응 소스 정책](community-pain-sources.md)
 - [크립토 매수 신호 백테스트 사양](../crypto_buy_signal_backtest_spec.md)
 

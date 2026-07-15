@@ -60,13 +60,14 @@ test("horizon plans calculate explainable day, swing, and long exits", () => {
   assert.equal(day.horizon, "day");
   assert.equal(day.stop.trigger, "hourly-close");
   assert.equal(day.stop.isBrokerStopEligible, false);
-  assert.ok((day.stop.price ?? 0) < day.entryPrice);
+  assert.equal(day.stop.price, 82_880);
   assert.equal(day.takeProfits[0]?.allocationPct, 50);
   assert.equal(day.takeProfits[1]?.basis, "2R");
   assert.match(day.formulaSteps.join(" "), /ATR1h/);
 
   const swing = plans[1];
   assert.equal(swing.stop.trigger, "daily-close");
+  assert.equal(swing.stop.price, 80_900);
   assert.equal(swing.trailingExit?.allocationPct, 40);
   assert.equal(swing.trailingExit?.price, 82_100);
 
@@ -127,7 +128,7 @@ test("stale, forming, weak-trend, and low-reward inputs produce wait plans", () 
   assert.ok(plans[2].blockers.some((reason) => reason.includes("SMA20")));
 });
 
-test("a custom entry price recalculates every horizon price without changing safety status", () => {
+test("a custom entry price recalculates targets without moving structural stops", () => {
   const defaultPlans = calculateHorizonExitPlans(baseContext());
   const customContext = baseContext();
   customContext.entryPrice = 90_000;
@@ -138,8 +139,8 @@ test("a custom entry price recalculates every horizon price without changing saf
     assert.notEqual(customPlans[index].takeProfits[0]?.price, defaultPlans[index].takeProfits[0]?.price);
     assert.equal(customPlans[index].stop.isBrokerStopEligible, false);
   }
-  assert.notEqual(customPlans[0].stop.price, defaultPlans[0].stop.price);
-  assert.notEqual(customPlans[1].stop.price, defaultPlans[1].stop.price);
+  assert.equal(customPlans[0].stop.price, defaultPlans[0].stop.price);
+  assert.equal(customPlans[1].stop.price, defaultPlans[1].stop.price);
   assert.equal(customPlans[2].stop.price, defaultPlans[2].stop.price, "장기 구조 무효선은 진입가와 무관해야 한다");
 });
 
@@ -212,7 +213,7 @@ test("long plans never turn a monthly thesis line into a broker stop", () => {
   assert.match(long.stop.reason, /월말 종가/);
 });
 
-test("plans reject non-positive stops and never emit negative prices", () => {
+test("ATR risk gates wait without replacing valid structural stops", () => {
   const context = baseContext();
   context.day = {
     ...context.day!,
@@ -224,10 +225,56 @@ test("plans reject non-positive stops and never emit negative prices", () => {
   };
 
   const [day, swing] = calculateHorizonExitPlans(context);
-  assert.equal(day.status, "unavailable");
-  assert.equal(day.stop.price, null);
-  assert.equal(swing.status, "unavailable");
-  assert.equal(swing.stop.price, null);
+  assert.equal(day.status, "wait");
+  assert.equal(day.stop.price, 43_100);
+  assert.ok(day.blockers.some((blocker) => blocker.includes("0.8 ATR1h")));
+  assert.equal(swing.status, "wait");
+  assert.equal(swing.stop.price, 80_900);
+  assert.ok(swing.blockers.some((blocker) => blocker.includes("1.5 ATR1d")));
+});
+
+test("wide day and swing risks keep structure and never clamp stops inward", () => {
+  const context = baseContext();
+  context.day = {
+    ...context.day!,
+    recentLow20: 75_000,
+  };
+  context.swing = {
+    ...context.swing!,
+    failureLevel: 70_000,
+  };
+
+  const [day, swing] = calculateHorizonExitPlans(context);
+  assert.equal(day.status, "wait");
+  assert.equal(day.stop.price, 74_780);
+  assert.equal(day.riskPerShare, 9_420);
+  assert.ok(day.blockers.some((blocker) => blocker.includes("안쪽으로 당기지 않고")));
+  assert.equal(swing.status, "wait");
+  assert.equal(swing.stop.price, 70_000);
+  assert.equal(swing.riskPerShare, 14_200);
+  assert.ok(swing.blockers.some((blocker) => blocker.includes("안쪽으로 당기지 않고")));
+});
+
+test("narrow structural risks wait instead of moving the stop outward", () => {
+  const context = baseContext();
+  context.day = {
+    ...context.day!,
+    recentLow20: 84_000,
+  };
+  context.swing = {
+    ...context.swing!,
+    failureLevel: 82_000,
+  };
+
+  const [day, swing] = calculateHorizonExitPlans(context);
+  assert.equal(day.status, "wait");
+  assert.equal(day.stop.price, 83_780);
+  assert.equal(day.riskPerShare, 420);
+  assert.ok(day.blockers.some((blocker) => blocker.includes("0.8 ATR1h")));
+  assert.equal(swing.status, "wait");
+  assert.equal(swing.stop.price, 82_000);
+  assert.equal(swing.riskPerShare, 2_200);
+  assert.ok(swing.blockers.some((blocker) => blocker.includes("1.5 ATR1d")));
 });
 
 test("swing plans require real trailing inputs instead of allocating forty percent to null", () => {
@@ -282,5 +329,9 @@ test("swing plan waits when its failure level is not below entry", () => {
 
   const swing = calculateHorizonExitPlans(context)[1];
   assert.equal(swing.status, "wait");
+  assert.equal(swing.stop.price, context.entryPrice + 100);
+  assert.equal(swing.riskPerShare, null);
+  assert.deepEqual(swing.takeProfits, []);
+  assert.equal(swing.trailingExit, null);
   assert.ok(swing.blockers.some((reason) => reason.includes("현재 진입가 아래")));
 });

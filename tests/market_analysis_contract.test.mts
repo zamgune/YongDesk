@@ -11,6 +11,7 @@ const buildCandles = (count: number, intervalSeconds: number): MarketCandle[] =>
     const close = 60_000 + index * 25 + Math.sin(index / 8) * 300;
     return {
       time: nowSeconds - (count - index) * intervalSeconds,
+      closeTime: nowSeconds - (count - index - 1) * intervalSeconds,
       open: close - 80,
       high: close + 220,
       low: close - 240,
@@ -53,6 +54,19 @@ test("analysis accepts supported intraday timeframes and rejects unknown values"
   );
   assert.equal(unsupported.status, 400);
   assert.match((await unsupported.json()).error, /Unsupported timeframe/);
+});
+
+test("analysis validation errors preserve the no-order safety contract", async () => {
+  const response = await analyzeSymbol(
+    new Request("http://localhost/api/market/005930.KS?days=999999&tf=1d"),
+    undefined,
+    { marketData },
+  );
+  const payload = await response.json();
+
+  assert.equal(response.status, 400);
+  assert.equal(payload.isBrokerStopEligible, false);
+  assert.equal(payload.orderSubmissionAttempted, false);
 });
 
 test("daily analysis exposes a real ten-month close average for long-term plans", async () => {
@@ -119,11 +133,68 @@ test("analysis exposes market, currency, source, timeframe, quote time and horiz
   assert.equal(payload.quoteAt, "2026-07-10T06:30:00.000Z");
   assert.equal(payload.stale, true);
   assert.equal(payload.chartTimeZone, "Asia/Seoul");
+  assert.ok(Array.isArray(payload.signalEvents));
+  assert.ok(payload.signalEvents.every((event: { occurredAt: number; confirmedAt: number }) =>
+    event.confirmedAt >= event.occurredAt));
   assert.ok(payload.analysisBasis.closedCandleCount >= 200);
   assert.equal(typeof payload.analysisBasis.atr14, "number");
   assert.equal(typeof payload.analysisBasis.hma20, "number");
   assert.equal(typeof payload.analysisBasis.hma50, "number");
   assert.equal(typeof payload.analysisBasis.sma200, "number");
+});
+
+test("full analysis keeps every pre-cutoff signal event invariant under future suffixes", async () => {
+  const cutoffIndex = 420;
+  const causalCandles = dailyCandles.map((candle) => ({ ...candle }));
+  const breakoutBase = causalCandles[300].close;
+  causalCandles[300] = {
+    ...causalCandles[300],
+    open: breakoutBase + 500,
+    high: breakoutBase + 1_100,
+    low: breakoutBase + 450,
+    close: breakoutBase + 1_050,
+    volume: 5_000_000,
+  };
+  const cutoff = causalCandles[cutoffIndex - 1].closeTime!;
+  const providerFor = (candles: MarketCandle[]): Pick<MarketDataProvider, "getCandles"> => ({
+    async getCandles(_symbol, options) {
+      return {
+        candles: options.interval === "1wk" ? weeklyCandles : candles,
+        timeZone: "America/New_York",
+      };
+    },
+  });
+  const request = () => new Request("http://localhost/api/market/AAPL?days=500&tf=1d");
+  const [prefixResponse, fullResponse] = await Promise.all([
+    analyzeSymbol(request(), undefined, { marketData: providerFor(causalCandles.slice(0, cutoffIndex)) }),
+    analyzeSymbol(request(), undefined, { marketData: providerFor(causalCandles) }),
+  ]);
+  const prefix = await prefixResponse.json();
+  const full = await fullResponse.json();
+  const causalShape = (event: {
+    occurredAt: number;
+    confirmedAt: number;
+    role: string;
+    side: string;
+    label: string;
+    reason: string;
+  }) => ({
+    occurredAt: event.occurredAt,
+    confirmedAt: event.confirmedAt,
+    role: event.role,
+    side: event.side,
+    label: event.label,
+    reason: event.reason,
+  });
+  const prefixEvents = (prefix.signalEvents as Parameters<typeof causalShape>[0][]).map(causalShape);
+  const fullPrefixEvents = (full.signalEvents as Parameters<typeof causalShape>[0][])
+    .filter((event) => event.confirmedAt <= cutoff)
+    .map(causalShape);
+
+  assert.equal(prefixResponse.status, 200);
+  assert.equal(fullResponse.status, 200);
+  assert.ok(prefixEvents.length > 0, "fixture should exercise at least one emitted event");
+  assert.deepEqual(fullPrefixEvents, prefixEvents);
 });
 
 test("pre-aggregated 4 hour providers are not grouped a second time", async () => {

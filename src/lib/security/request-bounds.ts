@@ -19,7 +19,11 @@ export const parseBoundedDays = (
     return {
       ok: false as const,
       response: Response.json(
-        { error: `${label}는 1 이상 ${max} 이하의 정수여야 합니다.` },
+        {
+          error: `${label}는 1 이상 ${max} 이하의 정수여야 합니다.`,
+          isBrokerStopEligible: false,
+          orderSubmissionAttempted: false,
+        },
         { status: 400 },
       ),
     };
@@ -45,7 +49,11 @@ export const parseBoundedDateRange = ({
     return {
       ok: false as const,
       response: Response.json(
-        { error: "start/end 날짜 범위가 유효하지 않습니다." },
+        {
+          error: "start/end 날짜 범위가 유효하지 않습니다.",
+          isBrokerStopEligible: false,
+          orderSubmissionAttempted: false,
+        },
         { status: 400 },
       ),
     };
@@ -55,7 +63,11 @@ export const parseBoundedDateRange = ({
     return {
       ok: false as const,
       response: Response.json(
-        { error: `날짜 범위는 최대 ${maxDays}일까지만 허용됩니다.` },
+        {
+          error: `날짜 범위는 최대 ${maxDays}일까지만 허용됩니다.`,
+          isBrokerStopEligible: false,
+          orderSubmissionAttempted: false,
+        },
         { status: 400 },
       ),
     };

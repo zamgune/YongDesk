@@ -24,6 +24,13 @@ This document outlines the **Hybrid Kinetic** trading strategy version 2.2. This
 > - Entry review focuses on SMA5/SMA20 support, volume confirmation, market breadth, and leader filtering.
 > - `breakoutRule` is an advisory overlay for new-high breakouts, -10% fixed stop reference, +20% profit-tracking switch, and SMA20 trailing exit review.
 > - This overlay is not an automatic buy command; the UI should phrase it as `breakout candidate`, `support check`, `20-day trailing mode`, or `risk management`.
+>
+> Stock playbook shadow note (2026-07-15): the additive v2 contract separates `kr-intraday-crash-reversal`, `short-hold-trend`, `swing-mean-reversion`, and `swing-trend`.
+> - The legacy daily `3/6` diagnostic remains for backward-compatible `signals`; it is not accepted by itself as calibrated playbook evidence. RSI, CCI, Stochastic, and Williams %R are one oscillator family in the new validation design.
+> - Divergence markers are exposed only at their confirmation candle and carry separate `occurredAt` and `confirmedAt` values.
+> - Structural invalidation levels are never clamped into an ATR policy band. An out-of-policy distance blocks a new entry.
+> - Runtime loads mapped sector-relative-strength and curated 50-day leader evidence. The curated universe is not representative market breadth, so the market gate remains `unavailable` until a point-in-time full-market provider is connected. Missing, stale, or low-coverage evidence also remains `unavailable`.
+> - A market/playbook is promoted only by one complete, explicitly reviewed calibration record; otherwise it stays shadow/fail-closed.
 
 ## 1. Monitor & Indicators
 
@@ -145,10 +152,10 @@ Effective risk management is enforced via specific Stop Levels displayed on the 
 
 이 신호는 기존 일봉 BUY 엔진과 분리된 장중 보조 분석이다. 검증된 Toss API의 확정 1분봉을 5분봉으로 집계하며 Yahoo fallback으로 알림을 내지 않는다. `급락 감지`는 매수 명령이 아니고, 반전봉 확인 뒤에도 UI 문구는 `매수 검토 가능`을 사용한다.
 
-- `급락 감지`: 당일 `-4%` 이하이면서 일봉 ATR14 대비 `1.5 ATR` 이상 하락하거나 최근 15분 `-3%` 이하 하락, 5분 거래량 20봉 평균 `2배` 이상, RSI14 `25` 이하 또는 RSI2 `10` 이하를 모두 확인한다.
-- `반전 확인`: 급락 저점 이후 확정 5분봉이 Hammer, Bullish Engulfing 또는 강한 양봉이고 급락봉 몸통 중간값을 회복하며 종가 위치가 봉 상단 35% 안, 거래량이 20봉 평균 `1.2배` 이상이어야 한다.
+- `급락 감지`: 당일 `-4%` 이하이면서 일봉 ATR14 대비 `1.5 ATR` 이상 하락하거나 최근 15분 `-3%` 이하 하락, 직전 20거래일의 동일 KST 5분 구간 대비 거래량 `2배` 이상, RSI14 `25` 이하 또는 RSI2 `10` 이하를 모두 확인한다.
+- `반전 확인`: 급락 저점 이후 확정 5분봉이 Hammer, Bullish Engulfing 또는 강한 양봉이고 급락봉 몸통 중간값을 회복하며 종가 위치가 봉 상단 35% 안, 동일 시간대 거래량이 `1.2배` 이상이어야 한다.
 - 급락 저점을 다시 이탈하면 후보를 무효화한다. KOSPI가 `-1.5%` 이하이고 장중 저점 회복률이 35% 미만이면 신호를 차단하지 않고 신뢰도를 한 단계 낮춘다.
-- 손절은 `min(급락 저점, 최근 20개 5분봉 저점) - 0.2 ATR5m` 구조선에서 계산하고 손실 거리를 `0.8~1.8 ATR5m`로 제한한다.
+- 손절은 `min(급락 저점, 최근 20개 5분봉 저점) - 0.2 ATR5m` 구조선을 그대로 유지한다. 손실 거리가 `0.8~1.8 ATR5m` 밖이면 손절선을 이동하지 않고 신규 진입을 보류한다.
 - 1차 익절은 가까운 저항이 `0.8R~1.5R`이면 그 저항, 아니면 `1R`에서 50%다. 2차는 `2R`에서 50%다. 가까운 저항이 `0.8R` 미만이면 `보상 부족`으로 표시한다.
 - 손절·익절은 분석 기준가 기준의 설명 가능한 가격선이며 broker stop, OrderIntent 또는 주문 제출로 변환하지 않는다.
 

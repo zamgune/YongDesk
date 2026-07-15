@@ -1,8 +1,9 @@
-import type {
-  MarketCandle,
-  MarketDataProvider,
-  MarketExtendedQuote,
+import {
+  type MarketCandle,
+  type MarketDataProvider,
+  type MarketExtendedQuote,
 } from "@/lib/market-data";
+import { confirmedDailyCandles } from "@/lib/market/confirmed-daily-candles";
 
 export type SectorStrengthMarket = "US" | "KR";
 export type SectorStrengthPeriod = "oneDay" | "oneWeek" | "oneMonth";
@@ -18,6 +19,8 @@ export type SectorStrengthItem = SectorStrengthInstrument & {
   returns: SectorStrengthReturns;
   excessReturns: SectorStrengthReturns;
   quoteAt: string | null;
+  candleAsOf: string | null;
+  candleAgeSeconds: number | null;
   status: "intraday" | "closed" | "fallback";
 };
 
@@ -30,6 +33,9 @@ export type SectorStrengthResponse = {
   market: SectorStrengthMarket;
   generatedAt: string;
   asOf: string;
+  dataProvenance: "confirmed-daily-candles";
+  candleAsOf: string | null;
+  maxCandleAgeSeconds: number | null;
   marketState: "intraday" | "closed";
   benchmark: SectorStrengthItem;
   sectors: SectorStrengthItem[];
@@ -89,31 +95,13 @@ const returnBetween = (latest: number | undefined, previous: number | undefined)
     ? latest / previous - 1
     : null;
 
-const localDateKey = (date: Date, timeZone: string) =>
-  new Intl.DateTimeFormat("en-CA", {
-    timeZone,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).format(date);
-
 const confirmedCandles = (
   candles: MarketCandle[],
-  quote: MarketExtendedQuote | null,
-  timeZone: string | undefined,
   now: Date,
+  market: SectorStrengthMarket,
 ) => {
-  const sorted = candles.toSorted((left, right) => left.time - right.time);
-  const latest = sorted.at(-1);
-  if (
-    quote?.marketState?.toUpperCase() === "REGULAR" &&
-    latest &&
-    timeZone &&
-    localDateKey(new Date(latest.time * 1_000), timeZone) === localDateKey(now, timeZone)
-  ) {
-    return sorted.slice(0, -1);
-  }
-  return sorted;
+  const sessionMarket = market === "US" ? "US" : "KOSPI";
+  return confirmedDailyCandles(candles, sessionMarket, now);
 };
 
 export const calculateSectorReturns = (
@@ -121,8 +109,12 @@ export const calculateSectorReturns = (
   quote: MarketExtendedQuote | null,
   timeZone: string | undefined,
   now: Date,
-): { returns: SectorStrengthReturns; quoteAt: string | null; status: SectorStrengthItem["status"] } => {
-  const confirmed = confirmedCandles(candles, quote, timeZone, now);
+  market: SectorStrengthMarket = timeZone?.includes("New_York") ? "US" : "KR",
+): Pick<
+  SectorStrengthItem,
+  "returns" | "quoteAt" | "candleAsOf" | "candleAgeSeconds" | "status"
+> => {
+  const confirmed = confirmedCandles(candles, now, market);
   const latest = confirmed.at(-1);
   const regularPrice = quote?.regularMarketPrice;
   const previousClose = quote?.regularMarketPreviousClose;
@@ -134,11 +126,17 @@ export const calculateSectorReturns = (
   const oneMonth = returnBetween(latest?.close, confirmed.at(-22)?.close);
   const quoteAt = intraday
     ? now.toISOString()
-    : latest ? new Date(latest.time * 1_000).toISOString() : null;
+    : latest ? new Date(latest.closeTime * 1_000).toISOString() : null;
+  const candleAsOf = latest ? new Date(latest.closeTime * 1_000).toISOString() : null;
+  const candleAgeSeconds = candleAsOf
+    ? Math.max(0, Math.floor((now.getTime() - Date.parse(candleAsOf)) / 1_000))
+    : null;
 
   return {
     returns: { oneDay, oneWeek, oneMonth },
     quoteAt,
+    candleAsOf,
+    candleAgeSeconds,
     status: intraday ? "intraday" : quoteReturn !== null ? "closed" : "fallback",
   };
 };
@@ -158,6 +156,7 @@ const loadInstrument = async (
   instrument: SectorStrengthInstrument,
   provider: MarketDataProvider,
   now: Date,
+  market: SectorStrengthMarket,
 ): Promise<SectorStrengthItem> => {
   const [quote, candleResponse] = await Promise.all([
     provider.getExtendedQuote(instrument.symbol),
@@ -168,7 +167,13 @@ const loadInstrument = async (
       includePrePost: false,
     }),
   ]);
-  const calculated = calculateSectorReturns(candleResponse.candles, quote, candleResponse.timeZone, now);
+  const calculated = calculateSectorReturns(
+    candleResponse.candles,
+    quote,
+    candleResponse.timeZone,
+    now,
+    market,
+  );
   if (Object.values(calculated.returns).every((value) => value === null)) {
     throw new Error("수익률을 계산할 수 있는 시세가 없습니다.");
   }
@@ -197,10 +202,14 @@ export const buildSectorStrengthSnapshot = async (
   now = new Date(),
 ): Promise<SectorStrengthResponse> => {
   const config = SECTOR_STRENGTH_MARKETS[market];
-  const benchmark = await loadInstrument(config.benchmark, provider, now).catch((error) => {
+  const benchmark = await loadInstrument(config.benchmark, provider, now, market).catch((error) => {
     throw new Error(`시장 벤치마크 ${config.benchmark.symbol} 조회 실패: ${error instanceof Error ? error.message : String(error)}`);
   });
-  const settled = await loadInBatches(config.sectors, 4, (instrument) => loadInstrument(instrument, provider, now));
+  const settled = await loadInBatches(
+    config.sectors,
+    4,
+    (instrument) => loadInstrument(instrument, provider, now, market),
+  );
   const errors: SectorStrengthError[] = [];
   const sectors = settled.flatMap((result, index) => {
     if (result.status === "fulfilled") {
@@ -220,11 +229,24 @@ export const buildSectorStrengthSnapshot = async (
     .filter((value): value is string => value !== null)
     .toSorted()
     .at(-1) ?? now.toISOString();
+  const candleAsOf = [benchmark, ...sectors]
+    .map((item) => item.candleAsOf)
+    .filter((value): value is string => value !== null)
+    .toSorted()
+    .at(0) ?? null;
+  const maxCandleAgeSeconds = [benchmark, ...sectors]
+    .map((item) => item.candleAgeSeconds)
+    .filter((value): value is number => value !== null)
+    .toSorted((left, right) => right - left)
+    .at(0) ?? null;
 
   return {
     market,
     generatedAt: now.toISOString(),
     asOf,
+    dataProvenance: "confirmed-daily-candles",
+    candleAsOf,
+    maxCandleAgeSeconds,
     marketState: [benchmark, ...sectors].some((item) => item.status === "intraday") ? "intraday" : "closed",
     benchmark,
     sectors,

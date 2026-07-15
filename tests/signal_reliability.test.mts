@@ -135,3 +135,69 @@ test("calculateSignalReliability lowers grade when stops are hit first", () => {
   assert.equal(reliability.grade, "low");
   assert.equal((reliability.stopHitRate ?? 0) >= 0.6, true);
 });
+
+test("MFE and MAE ignore bars after the first terminal stop or target", () => {
+  const breakoutSignal = {
+    status: "confirmed" as const,
+    pattern: "new-high" as const,
+    breakoutLevel: 102,
+    supportLevel: 102,
+    failureLevel: 95,
+    volumeRatio: 2.2,
+    entryPlan: "신고가 기준선 위 종가 유지와 거래량 확인으로 진입 가능 후보입니다.",
+    invalidation: "실패선 아래 마감 시 무효입니다.",
+    reasons: [],
+  };
+
+  for (const outcome of ["target", "stop"] as const) {
+    const baseline = makeBaseCandles(150);
+    if (outcome === "target") addSuccessfulBreakout(baseline, 70, 102);
+    else addFailedBreakout(baseline, 70, 102);
+    const postTerminalExtreme = baseline.map((candle) => ({ ...candle }));
+    postTerminalExtreme[80] = {
+      ...postTerminalExtreme[80],
+      high: 10_000,
+      low: 1,
+    };
+
+    const expected = calculateSignalReliability({ candles: baseline, breakoutSignal });
+    const actual = calculateSignalReliability({ candles: postTerminalExtreme, breakoutSignal });
+
+    assert.equal(actual.sampleSize, expected.sampleSize);
+    assert.equal(actual.averageMaxGainPct, expected.averageMaxGainPct);
+    assert.equal(actual.averageMaxDrawdownPct, expected.averageMaxDrawdownPct);
+    assert.equal(actual.averageBarsHeld, expected.averageBarsHeld);
+  }
+});
+
+test("stop-first reliability does not count a same-bar post-stop high as MFE", () => {
+  const breakoutSignal = {
+    status: "confirmed" as const,
+    pattern: "new-high" as const,
+    breakoutLevel: 102,
+    supportLevel: 102,
+    failureLevel: 95,
+    volumeRatio: 2.2,
+    entryPlan: "신고가 기준선 위 종가 유지와 거래량 확인으로 진입 가능 후보입니다.",
+    invalidation: "실패선 아래 마감 시 무효입니다.",
+    reasons: [],
+  };
+  const stopped = makeBaseCandles(150);
+  addFailedBreakout(stopped, 70, 102);
+  stopped[71] = {
+    ...stopped[71],
+    open: 106,
+    high: 108,
+    low: 90,
+    close: 95,
+  };
+  const ambiguous = stopped.map((candle) => ({ ...candle }));
+  ambiguous[71].high = 10_000;
+
+  const expected = calculateSignalReliability({ candles: stopped, breakoutSignal });
+  const actual = calculateSignalReliability({ candles: ambiguous, breakoutSignal });
+
+  assert.equal(actual.sampleSize, expected.sampleSize);
+  assert.equal(actual.averageMaxGainPct, expected.averageMaxGainPct);
+  assert.equal(actual.averageMaxDrawdownPct, expected.averageMaxDrawdownPct);
+});

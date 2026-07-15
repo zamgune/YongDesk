@@ -217,6 +217,7 @@ public enum AnalysisDataSource: Codable, Equatable, Hashable, Sendable {
 }
 
 public struct WorkspaceAnalysis: Codable, Equatable, Sendable {
+    public let contractVersion: Int?
     public let symbol: String
     public let assetClass: AnalysisAssetClass
     public let market: AnalysisMarket?
@@ -229,10 +230,13 @@ public struct WorkspaceAnalysis: Codable, Equatable, Sendable {
     public let stale: Bool?
     public let analyses: WorkspaceTimeframeAnalyses?
     public let horizonPlans: [AnalysisHorizonPlan]
+    public let tradeSignalSet: AnalysisTradeSignalSet?
     public let warnings: [String]
+    public let isBrokerStopEligible: Bool
     public let orderSubmissionAttempted: Bool
 
     enum CodingKeys: String, CodingKey {
+        case contractVersion
         case symbol
         case assetClass
         case market
@@ -245,12 +249,15 @@ public struct WorkspaceAnalysis: Codable, Equatable, Sendable {
         case stale
         case analyses
         case horizonPlans
+        case tradeSignalSet
         case warnings
+        case isBrokerStopEligible
         case orderSubmissionAttempted
     }
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
+        contractVersion = try container.decodeIfPresent(Int.self, forKey: .contractVersion)
         symbol = try container.decode(String.self, forKey: .symbol)
         assetClass = try container.decode(AnalysisAssetClass.self, forKey: .assetClass)
         market = try container.decodeIfPresent(AnalysisMarket.self, forKey: .market)
@@ -263,7 +270,9 @@ public struct WorkspaceAnalysis: Codable, Equatable, Sendable {
         stale = try container.decodeIfPresent(Bool.self, forKey: .stale)
         analyses = try container.decodeIfPresent(WorkspaceTimeframeAnalyses.self, forKey: .analyses)
         horizonPlans = try container.decodeIfPresent([AnalysisHorizonPlan].self, forKey: .horizonPlans) ?? []
+        tradeSignalSet = try container.decodeIfPresent(AnalysisTradeSignalSet.self, forKey: .tradeSignalSet)
         warnings = try container.decodeIfPresent([String].self, forKey: .warnings) ?? []
+        isBrokerStopEligible = try container.decodeIfPresent(Bool.self, forKey: .isBrokerStopEligible) ?? false
         orderSubmissionAttempted = try container.decode(Bool.self, forKey: .orderSubmissionAttempted)
     }
 }
@@ -532,6 +541,194 @@ public struct AnalysisHorizonBasis: Codable, Equatable, Sendable {
     public let weeklySma60: Double?
     public let chandelierLong: Double?
     public let reliabilityGrade: String?
+}
+
+public struct AnalysisTradeSignalSet: Codable, Equatable, Sendable {
+    public let contractVersion: Int
+    public let generatedAt: String
+    public let stage: String
+    public let plans: [AnalysisTradePlaybookPlan]
+    public let primaryByHorizon: AnalysisTradePrimaryByHorizon
+    public let conflicts: [AnalysisTradePlaybookConflict]
+    public let isBrokerStopEligible: Bool
+    public let orderSubmissionAttempted: Bool
+}
+
+public struct AnalysisTradePrimaryByHorizon: Codable, Equatable, Sendable {
+    public let intraday: String?
+    public let shortHold: String?
+    public let swing: String?
+}
+
+public struct AnalysisTradePlaybookConflict: Codable, Equatable, Sendable {
+    public let horizon: String
+    public let playbookIds: [String]
+    public let reason: String
+}
+
+public struct AnalysisTradePlaybookPlan: Codable, Equatable, Sendable {
+    public let id: String
+    public let horizon: String
+    public let marketScope: [String]
+    public let label: String
+    public let stage: String
+    public let action: String
+    public let setupVariant: String?
+    public let events: [AnalysisTradeSignalEvent]
+    public let gates: [AnalysisTradePlanGate]
+    public let riskPlan: AnalysisTradeRiskPlan
+    public let calibration: AnalysisTradePlanCalibration
+    public let blockers: [String]
+    public let reasons: [String]
+    public let isBrokerStopEligible: Bool
+    public let orderSubmissionAttempted: Bool
+
+    public var isCalibratedDisplayEligible: Bool {
+        let knownIds = [
+            "kr-intraday-crash-reversal",
+            "short-hold-trend",
+            "swing-mean-reversion",
+            "swing-trend",
+        ]
+        let expectedHorizon: [String: String] = [
+            "kr-intraday-crash-reversal": "intraday",
+            "short-hold-trend": "short-hold",
+            "swing-mean-reversion": "swing",
+            "swing-trend": "swing",
+        ]
+        let knownActions = ["entry-ready", "watch", "wait", "unavailable"]
+        let knownGateKinds = ["data", "market", "sector", "setup", "trigger", "liquidity", "risk", "reward"]
+        let requiredGateKinds = Set(knownGateKinds)
+        let presentGateKinds = Set(gates.map(\.kind))
+        let knownGateStatuses = ["pass", "warning", "fail", "unavailable"]
+        let knownRiskStatuses = ["valid", "outside-policy", "unavailable"]
+        let knownEventRoles = ["setup", "trigger", "warning", "exit"]
+        let knownEventSides = ["buy", "sell", "neutral"]
+        let minimumSamples = switch horizon {
+        case "intraday": (oos: 200, holdout: 40)
+        case "short-hold": (oos: 120, holdout: 30)
+        case "swing": (oos: 80, holdout: 20)
+        default: (oos: Int.max, holdout: Int.max)
+        }
+        let interval = calibration.confidence95
+        let start = calibration.validationStart.flatMap { ISO8601DateFormatter().date(from: $0) }
+        let end = calibration.validationEnd.flatMap { ISO8601DateFormatter().date(from: $0) }
+
+        return knownIds.contains(id)
+            && expectedHorizon[id] == horizon
+            && stage == "calibrated"
+            && knownActions.contains(action)
+            && calibration.status == "calibrated"
+            && calibration.sampleSize >= minimumSamples.oos
+            && calibration.holdoutSampleSize >= minimumSamples.holdout
+            && calibration.targetBeforeStopRate.map { (0...1).contains($0) } == true
+            && calibration.averageNetR.map { $0 > 0 && $0.isFinite } == true
+            && interval?.lower.map { $0 > 0 && $0.isFinite } == true
+            && interval?.upper.map { upper in
+                upper.isFinite && upper >= (interval?.lower ?? .infinity)
+            } == true
+            && calibration.costModel?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+            && start != nil
+            && end.map { value in start.map { $0 < value } ?? false } == true
+            && !isBrokerStopEligible
+            && !orderSubmissionAttempted
+            && !riskPlan.isBrokerStopEligible
+            && !riskPlan.orderSubmissionAttempted
+            && knownRiskStatuses.contains(riskPlan.riskStatus)
+            && requiredGateKinds.isSubset(of: presentGateKinds)
+            && gates.allSatisfy { gate in
+                knownGateKinds.contains(gate.kind) && knownGateStatuses.contains(gate.status)
+            }
+            && events.allSatisfy {
+                $0.confirmedAt >= $0.occurredAt
+                    && knownEventRoles.contains($0.role)
+                    && knownEventSides.contains($0.side)
+            }
+    }
+
+    public var isCalibratedWatchlistEntryEligible: Bool {
+        let requiredGateKinds: Set<String> = [
+            "data",
+            "market",
+            "sector",
+            "setup",
+            "trigger",
+            "liquidity",
+            "risk",
+            "reward",
+        ]
+        let presentGateKinds = Set(gates.map(\.kind))
+
+        return isCalibratedDisplayEligible
+            && id == "kr-intraday-crash-reversal"
+            && action == "entry-ready"
+            && riskPlan.riskStatus == "valid"
+            && blockers.isEmpty
+            && requiredGateKinds.isSubset(of: presentGateKinds)
+            && gates.allSatisfy {
+                !$0.blocking && ($0.status == "pass" || $0.status == "warning")
+            }
+    }
+}
+
+public struct AnalysisTradeSignalEvent: Codable, Equatable, Sendable {
+    public let occurredAt: Int
+    public let confirmedAt: Int
+    public let role: String
+    public let side: String
+    public let label: String
+    public let reason: String
+    public let price: Double?
+    public let structureInvalidationPrice: Double?
+}
+
+public struct AnalysisTradePlanGate: Codable, Equatable, Sendable {
+    public let kind: String
+    public let status: String
+    public let blocking: Bool
+    public let label: String
+    public let reason: String
+    public let source: String?
+    public let asOf: String?
+    public let dataAgeSeconds: Int?
+}
+
+public struct AnalysisTradeRiskPlan: Codable, Equatable, Sendable {
+    public let entryPrice: Double?
+    public let structureInvalidationPrice: Double?
+    public let riskPerShare: Double?
+    public let riskPct: Double?
+    public let riskStatus: String
+    public let stopTrigger: String?
+    public let targets: [AnalysisTradeRiskTarget]
+    public let trailingExit: AnalysisTradeRiskTarget?
+    public let timeStopBars: Int?
+    public let isBrokerStopEligible: Bool
+    public let orderSubmissionAttempted: Bool
+}
+
+public struct AnalysisTradeRiskTarget: Codable, Equatable, Sendable {
+    public let price: Double
+    public let allocationPct: Double
+    public let basis: String
+}
+
+public struct AnalysisTradePlanCalibration: Codable, Equatable, Sendable {
+    public let status: String
+    public let sampleSize: Int
+    public let holdoutSampleSize: Int
+    public let targetBeforeStopRate: Double?
+    public let averageNetR: Double?
+    public let confidence95: AnalysisTradeConfidenceInterval?
+    public let costModel: String?
+    public let validationStart: String?
+    public let validationEnd: String?
+    public let note: String
+}
+
+public struct AnalysisTradeConfidenceInterval: Codable, Equatable, Sendable {
+    public let lower: Double?
+    public let upper: Double?
 }
 
 public struct LocalNewsEvent: Codable, Identifiable, Equatable, Sendable {
@@ -1961,6 +2158,7 @@ public struct WatchlistSignalScanResponse: Codable, Equatable, Sendable {
     public let monitoringMessage: String
     public let marketContext: WatchlistSignalMarketContext
     public let items: [WatchlistSignalItem]
+    public let isBrokerStopEligible: Bool?
     public let orderSubmissionAttempted: Bool
 }
 
@@ -1986,6 +2184,7 @@ public struct WatchlistSignalItem: Codable, Identifiable, Equatable, Sendable {
     public let notificationId: String?
     public let error: String?
     public let signal: WatchlistCrashSignal
+    public let tradePlan: AnalysisTradePlaybookPlan?
 }
 
 public struct WatchlistCrashSignal: Codable, Equatable, Sendable {

@@ -598,7 +598,9 @@ struct BeginnerWatchlistWorkspace: View {
                     .accessibilityIdentifier("beginner-watchlist-message")
                 Text(model.watchlistSignalMessage)
                     .font(.caption)
-                    .foregroundStyle(model.watchlistSignals.contains { $0.signal.stage == "entry-ready" } ? BeginnerPalette.green : BeginnerPalette.muted)
+                    .foregroundStyle(model.watchlistSignalResponseIsAdvisoryOnly && model.watchlistSignals.contains {
+                        crashSignalIsEntryEligible($0)
+                    } ? BeginnerPalette.green : BeginnerPalette.muted)
                     .accessibilityIdentifier("beginner-watchlist-signal-message")
             }
             .padding(20)
@@ -675,9 +677,9 @@ struct BeginnerWatchlistWorkspace: View {
                 if let signal = model.watchlistSignal(for: item.symbol) {
                     insightChip(
                         title: "급락",
-                        value: signal.signal.label,
-                        detail: signal.error ?? signal.signal.detail,
-                        status: signal.signal.stage
+                        value: crashSignalLabel(signal),
+                        detail: crashSignalDetail(signal),
+                        status: crashSignalStatus(signal)
                     )
                 }
                 insightChip(
@@ -707,6 +709,50 @@ struct BeginnerWatchlistWorkspace: View {
         BeginnerStatusBadge(value, color: insightColor(status: status, value: value))
             .help("\(title): \(detail)")
             .accessibilityLabel("\(title) \(value), \(detail)")
+    }
+
+    private func crashSignalLabel(_ item: WatchlistSignalItem) -> String {
+        guard model.watchlistSignalResponseIsAdvisoryOnly else { return "안전 계약 불일치" }
+        guard let plan = item.tradePlan else { return "검증 계약 없음" }
+        if crashSignalIsEntryEligible(item) { return "진입 검토 가능" }
+        if plan.stage != "calibrated" { return "검증 관찰" }
+        switch plan.action {
+        case "wait": return "진입 대기"
+        case "watch": return "조건 관찰"
+        default: return "게이트 확인 불가"
+        }
+    }
+
+    private func crashSignalDetail(_ item: WatchlistSignalItem) -> String {
+        guard model.watchlistSignalResponseIsAdvisoryOnly else {
+            return "응답의 주문·브로커 손절 안전 플래그를 확인하지 못해 신호를 사용하지 않습니다."
+        }
+        if let error = item.error { return error }
+        guard let plan = item.tradePlan else {
+            return "v2 플레이북 계약이 없어 기존 신호를 진입 근거로 사용하지 않습니다."
+        }
+        if let blocker = plan.blockers.first { return blocker }
+        if crashSignalIsEntryEligible(item) {
+            return plan.reasons.first ?? item.signal.detail
+        }
+        return plan.calibration.note
+    }
+
+    private func crashSignalStatus(_ item: WatchlistSignalItem) -> String {
+        guard model.watchlistSignalResponseIsAdvisoryOnly else { return "unavailable" }
+        guard let plan = item.tradePlan else { return "unavailable" }
+        if crashSignalIsEntryEligible(item) { return "entry-ready" }
+        if plan.stage != "calibrated" || plan.action == "watch" { return "low-evidence" }
+        if plan.action == "wait" { return "insufficient-reward" }
+        return "unavailable"
+    }
+
+    private func crashSignalIsEntryEligible(_ item: WatchlistSignalItem) -> Bool {
+        model.watchlistSignalResponseIsAdvisoryOnly
+            && !item.stale
+            && item.signal.orderSubmissionAttempted == false
+            && item.signal.exitPlan?.isBrokerStopEligible == false
+            && item.tradePlan?.isCalibratedWatchlistEntryEligible == true
     }
 
     private func sentimentDetail(_ item: LocalWatchlistSummaryItem) -> String {

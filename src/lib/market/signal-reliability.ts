@@ -247,23 +247,30 @@ const evaluateSetup = (
   let success = false;
   let stopped = false;
   let barsHeld = future.length;
+  let maxHigh = entry;
+  let minLow = entry;
 
   for (let offset = 0; offset < future.length; offset += 1) {
     const bar = future[offset];
     if (bar.low <= stop) {
+      // Same-bar ambiguity is resolved stop-first. Once the stop is touched,
+      // later intrabar highs/lows are not part of the trade excursion.
+      maxHigh = Math.max(maxHigh, bar.open, stop);
+      minLow = Math.min(minLow, bar.open, stop);
       stopped = true;
       barsHeld = offset + 1;
       break;
     }
     if (bar.high >= target) {
+      maxHigh = Math.max(maxHigh, target);
+      minLow = Math.min(minLow, bar.open, bar.low);
       success = true;
       barsHeld = offset + 1;
       break;
     }
+    maxHigh = Math.max(maxHigh, bar.high);
+    minLow = Math.min(minLow, bar.low);
   }
-
-  const maxHigh = Math.max(...future.map((bar) => bar.high));
-  const minLow = Math.min(...future.map((bar) => bar.low));
 
   return {
     success,

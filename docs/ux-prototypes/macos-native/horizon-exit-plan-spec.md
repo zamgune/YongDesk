@@ -2,7 +2,7 @@
 
 ## 1. 목적과 경계
 
-이 문서는 최근 확정 종가, 일치하는 보유 평단 또는 사용자가 입력한 가격에 진입했다고 가정할 때 단타·스윙·장기 계획을 설명 가능한 방식으로 계산하기 위한 UI/엔진 계약이다.
+이 문서는 최근 확정 종가, 일치하는 보유 평단 또는 사용자가 입력한 가격에 진입했다고 가정할 때 1~3일 단기·스윙·장기 계획을 설명 가능한 방식으로 계산하기 위한 UI/엔진 계약이다.
 
 - 결과는 분석 참고값이며 수익률이나 체결가를 보장하지 않는다.
 - 분석 생성만으로 주문 또는 자동화 설정을 변경하지 않는다.
@@ -95,7 +95,7 @@ type HorizonExitPlan = {
 
 ## 4. 기간별 계산
 
-### 단타 — 당일~3거래일
+### 1~3일 단기
 
 진입과 손절 계산의 주 봉은 1시간봉이다. 필수 데이터는 1시간봉 HMA20/50, ADX14, Choppiness14, 거래량 비율, ATR14, 최근 20개 봉의 저점과 저항이다.
 
@@ -105,14 +105,15 @@ type HorizonExitPlan = {
 
 ```text
 structureStop = recentLow20 - 0.2 * ATR1h
-distance = clamp(entry - structureStop, 0.8 * ATR1h, 1.8 * ATR1h)
-stop = entry - distance
+distance = entry - structureStop
+stop = structureStop
 R = entry - stop
 takeProfit1 = resistance가 entry+0.8R~entry+1.5R이면 resistance, 아니면 entry+1R
 takeProfit2 = entry + 2R
 ```
 
 - 1차·2차 익절 비중은 각각 50%다.
+- `distance`가 `0.8~1.8 ATR1h` 밖이면 구조선을 이동하지 않고 `wait`으로 신규 진입을 보류한다.
 - 상위 방향 필터 실패, HMA 추세 실패, ADX·Choppiness 품질 실패, 거래량 확인 실패 또는 가까운 저항까지 0.8R 미만이면 `wait`다.
 - 손절은 1시간봉 종가 기준이다. 분석 화면에서 바로 broker stop으로 변환하지 않는다.
 
@@ -124,8 +125,8 @@ takeProfit2 = entry + 2R
 - 주식은 `일봉 방향 → 1시간봉 진입`을 사용한다. 세션 길이가 다른 4시간봉을 코인과 동일한 신호로 취급하지 않는다.
 
 ```text
-distance = clamp(entry - failureLevel, 1.5 * ATR1d, 2.5 * ATR1d)
-stop = entry - distance
+distance = entry - failureLevel
+stop = failureLevel
 R = entry - stop
 takeProfit1 = resistance가 entry+1R~entry+2R이면 resistance, 아니면 entry+1R
 takeProfit2 = entry + 2R
@@ -133,6 +134,7 @@ trailingExit = max(SMA20, ChandelierLong)
 ```
 
 - 1차 30%, 2차 30%, 추적 보유 40%다.
+- `distance`가 `1.5~2.5 ATR1d` 밖이면 구조 무효선을 이동하지 않고 `wait`으로 신규 진입을 보류한다.
 - 종목 일봉 위험 게이트 실패, 진입 봉 추세 실패, 코인의 1시간 재확인 실패, 신뢰도 `low`, 또는 무효선이 진입가 이상이면 `wait`다.
 - 손절과 추적선은 일봉 종가 기준으로 평가한다.
 

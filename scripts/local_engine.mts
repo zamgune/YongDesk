@@ -409,6 +409,8 @@ const developerQaReleaseAcceptance = () => jsonResponse({
 const errorResponse = (error: unknown, status = 500) =>
   jsonResponse({
     error: error instanceof Error ? error.message : String(error),
+    isBrokerStopEligible: false,
+    orderSubmissionAttempted: false,
   }, { status });
 
 const errorMessage = (error: unknown) =>

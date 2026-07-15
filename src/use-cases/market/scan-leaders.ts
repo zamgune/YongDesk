@@ -1,6 +1,10 @@
 import { SMA } from "technicalindicators";
 import { getMarketDataProvider } from "@/lib/market-data";
 import {
+  confirmedDailyCandles,
+  type ConfirmedDailyCandle,
+} from "@/lib/market/confirmed-daily-candles";
+import {
   getLeaderUniverse,
   type LeaderMarket,
   type LeaderSymbol,
@@ -15,8 +19,10 @@ import { LEADER_SCAN_MAX_DAYS, mapWithBoundedConcurrency, parseBoundedDays } fro
 import type { UserContext } from "@/domain/user";
 import type { CandidateSourceDetail } from "@/lib/market/market-briefing-report";
 
+type LeaderCandle = TrendFollowingCandle & ConfirmedDailyCandle;
+
 type CandleState = {
-  candles: TrendFollowingCandle[];
+  candles: LeaderCandle[];
   sma5: Array<number | null>;
   sma20: Array<number | null>;
   sma50: Array<number | null>;
@@ -132,8 +138,13 @@ const closeLocation = (candle: TrendFollowingCandle) => {
   return range > 0 ? (candle.close - candle.low) / range : 0.5;
 };
 
-const fetchCandles = async (symbol: string, days: number) => {
-  const end = new Date();
+const fetchCandles = async (
+  symbol: string,
+  days: number,
+  market: LeaderMarket,
+  now: Date,
+) => {
+  const end = now;
   const start = new Date(end);
   start.setDate(end.getDate() - days);
 
@@ -143,10 +154,10 @@ const fetchCandles = async (symbol: string, days: number) => {
     interval: "1d",
   });
 
-  return result.candles;
+  return confirmedDailyCandles(result.candles, market, now);
 };
 
-const buildState = (candles: TrendFollowingCandle[]): CandleState => {
+const buildState = (candles: LeaderCandle[]): CandleState => {
   const closes = candles.map((candle) => candle.close);
   const volumes = candles.map((candle) => candle.volume);
   const sma5 = SMA.calculate({ period: 5, values: closes });
@@ -392,8 +403,9 @@ export async function scanLeaders(
   const url = new URL(request.url);
   const universe = getLeaderUniverse(url.searchParams.get("market") ?? "US");
   const { market } = universe;
+  const rawSymbols = url.searchParams.get("symbols");
   const symbols = parseCustomSymbols({
-    rawSymbols: url.searchParams.get("symbols"),
+    rawSymbols,
     market,
     defaultSymbols: universe.symbols,
   });
@@ -409,6 +421,7 @@ export async function scanLeaders(
     return daysResult.response;
   }
   const days = daysResult.value;
+  const requestAt = new Date();
 
   if (!symbols.length) {
     return Response.json({ error: "No symbols to scan." }, { status: 400 });
@@ -418,7 +431,7 @@ export async function scanLeaders(
     symbols,
     async (item) => {
       try {
-        const candles = await fetchCandles(item.symbol, days);
+        const candles = await fetchCandles(item.symbol, days, market, requestAt);
         return {
           ...item,
           state: buildState(candles),
@@ -432,6 +445,7 @@ export async function scanLeaders(
     },
     6,
   );
+  const generatedAt = new Date();
   const loaded = results.filter((item): item is typeof item & { state: CandleState } => "state" in item);
   const ranked = loaded
     .map((item) => ({
@@ -455,6 +469,19 @@ export async function scanLeaders(
               : 0);
       return breakoutScore(b) - breakoutScore(a);
     });
+  const latestCandleTimes = loaded.flatMap((item) => {
+    const value = item.state.candles.at(-1)?.closeTime;
+    return isNumber(value) ? [value] : [];
+  });
+  const latestCandleAt = latestCandleTimes.length
+    ? new Date(Math.max(...latestCandleTimes) * 1_000).toISOString()
+    : null;
+  const oldestLatestCandleAt = latestCandleTimes.length
+    ? new Date(Math.min(...latestCandleTimes) * 1_000).toISOString()
+    : null;
+  const maxDataAgeSeconds = oldestLatestCandleAt
+    ? Math.max(0, Math.floor((generatedAt.getTime() - Date.parse(oldestLatestCandleAt)) / 1_000))
+    : null;
   const breadth =
     ranked.filter((item) => {
       const index = item.state.candles.length - 1;
@@ -508,6 +535,12 @@ export async function scanLeaders(
       themes: item.themes?.length ? item.themes : [item.sector ?? "기타"],
       rank: 0,
       price: latest.close,
+      dataProvenance: "market-data.confirmed-daily-candles" as const,
+      latestCandleAt: new Date(latest.closeTime * 1_000).toISOString(),
+      dataAgeSeconds: Math.max(
+        0,
+        Math.floor((generatedAt.getTime() - latest.closeTime * 1_000) / 1_000),
+      ),
       return5,
       return50: item.return50,
       breakoutRule: item.breakoutRule,
@@ -671,13 +704,19 @@ export async function scanLeaders(
   return Response.json({
     market,
     strategy,
-    generatedAt: new Date().toISOString(),
+    generatedAt: generatedAt.toISOString(),
     marketHealth: {
       breadth,
       averageReturn50,
       pass: marketPass,
       loadedSymbols: loaded.length,
       totalSymbols: symbols.length,
+      timestampedSymbols: latestCandleTimes.length,
+      coverageType: rawSymbols ? "custom-symbol-list" : "curated-leader-universe",
+      source: rawSymbols ? "request.custom-symbols" : "leader-universes.static-curated",
+      latestCandleAt,
+      oldestLatestCandleAt,
+      maxDataAgeSeconds,
     },
     candidates,
     errors: results

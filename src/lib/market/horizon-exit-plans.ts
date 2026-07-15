@@ -123,9 +123,6 @@ const contextIsStale = (context: HorizonPlanContext, horizon: HoldingHorizon) =>
 const finitePositive = (value: number | null | undefined): value is number =>
   typeof value === "number" && Number.isFinite(value) && value > 0;
 
-const clamp = (value: number, minimum: number, maximum: number) =>
-  Math.min(Math.max(value, minimum), maximum);
-
 const stopPercent = (entryPrice: number, stopPrice: number) =>
   ((stopPrice / entryPrice) - 1) * 100;
 
@@ -229,30 +226,30 @@ const calculateDayPlan = (context: HorizonPlanContext): HorizonExitPlan => {
   }
 
   const structureStop = values.recentLow20 - values.atr14 * 0.2;
-  const distance = clamp(
-    context.entryPrice - structureStop,
-    values.atr14 * 0.8,
-    values.atr14 * 1.8,
-  );
-  const stopPrice = context.entryPrice - distance;
+  const stopPrice = structureStop;
   const risk = context.entryPrice - stopPrice;
-  if (!finitePositive(stopPrice) || !finitePositive(risk)) {
+  if (!finitePositive(stopPrice)) {
     return unavailablePlan({
       context,
       horizon: "day",
       trigger: "hourly-close",
       timeframeLabel,
-      blockers: ["계산된 손절가 또는 손절 거리 R이 0 이하입니다."],
+      blockers: ["계산된 구조 손절가가 0 이하입니다."],
       basisValues: { atr14: values.atr14, support: values.recentLow20, resistance: values.resistance },
     });
   }
 
+  const riskIsPositive = finitePositive(risk);
+  const minimumRisk = values.atr14 * 0.8;
+  const maximumRisk = values.atr14 * 1.8;
   const resistanceDistance = finitePositive(values.resistance)
     ? values.resistance - context.entryPrice
     : null;
-  const firstTarget = resistanceDistance !== null && resistanceDistance >= risk * 0.8 && resistanceDistance <= risk * 1.5
-    ? values.resistance!
-    : context.entryPrice + risk;
+  const firstTarget = riskIsPositive
+    ? resistanceDistance !== null && resistanceDistance >= risk * 0.8 && resistanceDistance <= risk * 1.5
+      ? values.resistance!
+      : context.entryPrice + risk
+    : null;
   const blockers = [
     contextIsStale(context, "day") ? "가격 또는 1시간봉 데이터가 오래되었습니다." : null,
     !values.latestBarClosed ? "형성 중인 1시간봉은 확정 신호로 사용하지 않습니다." : null,
@@ -270,7 +267,14 @@ const calculateDayPlan = (context: HorizonPlanContext): HorizonExitPlan => {
     values.trendQualityPassed === null ? "1시간봉 추세 품질을 확인할 지표가 부족합니다." : null,
     values.volumeConfirmed === false ? "1시간봉 거래량 확인 조건을 충족하지 않습니다." : null,
     values.volumeConfirmed === null ? "1시간봉 거래량 확인 표본이 부족합니다." : null,
-    resistanceDistance !== null && resistanceDistance > 0 && resistanceDistance < risk * 0.8
+    !riskIsPositive
+      ? "구조 손절선이 현재 진입가 아래에 있지 않습니다."
+      : risk < minimumRisk
+        ? "구조 손절 거리가 0.8 ATR1h보다 좁아 신규 진입을 보류합니다."
+        : risk > maximumRisk
+          ? "구조 손절 거리가 1.8 ATR1h보다 넓어 손절선을 안쪽으로 당기지 않고 신규 진입을 보류합니다."
+          : null,
+    riskIsPositive && resistanceDistance !== null && resistanceDistance > 0 && resistanceDistance < risk * 0.8
       ? "가까운 저항까지의 보상이 0.8R보다 작습니다."
       : null,
   ].filter((value): value is string => value !== null);
@@ -286,14 +290,14 @@ const calculateDayPlan = (context: HorizonPlanContext): HorizonExitPlan => {
       isBrokerStopEligible: false,
       reason: "최근 20개 1시간봉 저점과 ATR14 완충폭으로 계산한 종가 무효선입니다.",
     },
-    takeProfits: [
+    takeProfits: firstTarget === null ? [] : [
       { price: firstTarget, allocationPct: 50, basis: firstTarget === values.resistance ? "가까운 1시간봉 저항" : "1R" },
       { price: context.entryPrice + risk * 2, allocationPct: 50, basis: "2R" },
     ],
     trailingExit: null,
-    riskPerShare: risk,
+    riskPerShare: riskIsPositive ? risk : null,
     stopPct: stopPercent(context.entryPrice, stopPrice),
-    rewardRisk: 2,
+    rewardRisk: riskIsPositive ? 2 : null,
     basis: baseBasis(context, "day", timeframeLabel, {
       atr14: values.atr14,
       support: values.recentLow20,
@@ -301,8 +305,8 @@ const calculateDayPlan = (context: HorizonPlanContext): HorizonExitPlan => {
     }),
     formulaSteps: [
       "structureStop = recentLow20 - 0.2 × ATR1h",
-      "distance = clamp(entry - structureStop, 0.8 × ATR1h, 1.8 × ATR1h)",
-      "stop = entry - distance",
+      "stop = structureStop",
+      "entry - stop이 0.8~1.8 × ATR1h 밖이면 진입 보류",
       "takeProfit1 = 유효 저항 또는 1R, takeProfit2 = 2R",
     ],
     reasons: [
@@ -353,35 +357,41 @@ const calculateSwingPlan = (context: HorizonPlanContext): HorizonExitPlan => {
     });
   }
 
-  const distance = clamp(
-    context.entryPrice - values.failureLevel,
-    values.atr14Daily * 1.5,
-    values.atr14Daily * 2.5,
-  );
-  const stopPrice = context.entryPrice - distance;
+  const stopPrice = values.failureLevel;
   const risk = context.entryPrice - stopPrice;
-  if (!finitePositive(stopPrice) || !finitePositive(risk)) {
+  if (!finitePositive(stopPrice)) {
     return unavailablePlan({
       context,
       horizon: "swing",
       trigger: "daily-close",
       timeframeLabel,
-      blockers: ["계산된 스윙 손절가 또는 손절 거리 R이 0 이하입니다."],
+      blockers: ["계산된 스윙 구조 손절가가 0 이하입니다."],
     });
   }
 
+  const riskIsPositive = finitePositive(risk);
+  const minimumRisk = values.atr14Daily * 1.5;
+  const maximumRisk = values.atr14Daily * 2.5;
   const resistanceDistance = finitePositive(values.resistance)
     ? values.resistance - context.entryPrice
     : null;
-  const firstTarget = resistanceDistance !== null && resistanceDistance >= risk && resistanceDistance <= risk * 2
-    ? values.resistance!
-    : context.entryPrice + risk;
+  const firstTarget = riskIsPositive
+    ? resistanceDistance !== null && resistanceDistance >= risk && resistanceDistance <= risk * 2
+      ? values.resistance!
+      : context.entryPrice + risk
+    : null;
   const trailingCandidates = [values.sma20, values.chandelierLong].filter(finitePositive);
   const trailingExitPrice = Math.max(...trailingCandidates);
   const blockers = [
     contextIsStale(context, "swing") ? "가격 또는 스윙 데이터가 오래되었습니다." : null,
-    values.failureLevel >= context.entryPrice
+    !riskIsPositive
       ? "스윙 무효선이 현재 진입가 아래에 있지 않습니다."
+      : null,
+    riskIsPositive && risk < minimumRisk
+      ? "구조 손절 거리가 1.5 ATR1d보다 좁아 신규 진입을 보류합니다."
+      : null,
+    riskIsPositive && risk > maximumRisk
+      ? "구조 손절 거리가 2.5 ATR1d보다 넓어 손절선을 안쪽으로 당기지 않고 신규 진입을 보류합니다."
       : null,
     !values.latestBarClosed ? `형성 중인 ${values.entryTimeframe === "4h" ? "4시간봉" : "1시간봉"}은 진입 확정에 사용하지 않습니다.` : null,
     values.marketGatePassed === false ? "종목 일봉 위험 게이트가 스윙 신규 진입을 허용하지 않습니다." : null,
@@ -406,7 +416,7 @@ const calculateSwingPlan = (context: HorizonPlanContext): HorizonExitPlan => {
     context.reliabilityGrade === "low" || context.reliabilityGrade === "insufficient-data"
       ? "신호 신뢰도가 낮거나 표본이 부족합니다."
       : null,
-    resistanceDistance !== null && resistanceDistance > 0 && resistanceDistance < risk
+    riskIsPositive && resistanceDistance !== null && resistanceDistance > 0 && resistanceDistance < risk
       ? "가까운 저항까지의 보상이 1R보다 작습니다."
       : null,
   ].filter((value): value is string => value !== null);
@@ -420,20 +430,20 @@ const calculateSwingPlan = (context: HorizonPlanContext): HorizonExitPlan => {
       price: stopPrice,
       trigger: "daily-close",
       isBrokerStopEligible: false,
-      reason: "스윙 failure level을 일봉 ATR14의 1.5~2.5배 범위로 제한한 종가 무효선입니다.",
+      reason: "스윙 failure level을 안쪽으로 조정하지 않고 유지한 종가 무효선입니다.",
     },
-    takeProfits: [
+    takeProfits: firstTarget === null ? [] : [
       { price: firstTarget, allocationPct: 30, basis: firstTarget === values.resistance ? "스윙 저항" : "1R" },
       { price: context.entryPrice + risk * 2, allocationPct: 30, basis: "2R" },
     ],
-    trailingExit: {
+    trailingExit: !riskIsPositive ? null : {
       price: trailingExitPrice,
       allocationPct: 40,
       basis: "SMA20과 22봉 Chandelier 3ATR 중 높은 추적선",
     },
-    riskPerShare: risk,
+    riskPerShare: riskIsPositive ? risk : null,
     stopPct: stopPercent(context.entryPrice, stopPrice),
-    rewardRisk: 2,
+    rewardRisk: riskIsPositive ? 2 : null,
     basis: baseBasis(context, "swing", timeframeLabel, {
       atr14: values.atr14Daily,
       support: values.failureLevel,
@@ -442,8 +452,8 @@ const calculateSwingPlan = (context: HorizonPlanContext): HorizonExitPlan => {
       chandelierLong: values.chandelierLong,
     }),
     formulaSteps: [
-      "distance = clamp(entry - failureLevel, 1.5 × ATR1d, 2.5 × ATR1d)",
-      "stop = entry - distance",
+      "stop = failureLevel",
+      "entry - stop이 1.5~2.5 × ATR1d 밖이면 진입 보류",
       "takeProfit1 = 유효 저항 또는 1R, takeProfit2 = 2R",
       "trailingExit = max(SMA20, ChandelierLong)",
     ],
