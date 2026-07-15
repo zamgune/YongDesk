@@ -1225,7 +1225,6 @@ private struct BeginnerHorizonPlan: View {
         switch horizon {
         case .day: "short-hold"
         case .swing: "swing"
-        case .longTerm: "long"
         }
     }
 
