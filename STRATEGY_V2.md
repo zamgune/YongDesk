@@ -141,7 +141,18 @@ Effective risk management is enforced via specific Stop Levels displayed on the 
 | **Bearish Engulfing** | Bearish Reversal | Red body engulfs previous Green body. | High |
 | **Evening Star** | Bearish Reversal | Big Green -> Doji -> Big Red. | High (Strong Top) |
 
-## 7. Beginner-first 자동화 계약 (macOS 1.0)
+## 7. 관심종목 급락 반전 감시 (macOS)
+
+이 신호는 기존 일봉 BUY 엔진과 분리된 장중 보조 분석이다. 검증된 Toss API의 확정 1분봉을 5분봉으로 집계하며 Yahoo fallback으로 알림을 내지 않는다. `급락 감지`는 매수 명령이 아니고, 반전봉 확인 뒤에도 UI 문구는 `매수 검토 가능`을 사용한다.
+
+- `급락 감지`: 당일 `-4%` 이하이면서 일봉 ATR14 대비 `1.5 ATR` 이상 하락하거나 최근 15분 `-3%` 이하 하락, 5분 거래량 20봉 평균 `2배` 이상, RSI14 `25` 이하 또는 RSI2 `10` 이하를 모두 확인한다.
+- `반전 확인`: 급락 저점 이후 확정 5분봉이 Hammer, Bullish Engulfing 또는 강한 양봉이고 급락봉 몸통 중간값을 회복하며 종가 위치가 봉 상단 35% 안, 거래량이 20봉 평균 `1.2배` 이상이어야 한다.
+- 급락 저점을 다시 이탈하면 후보를 무효화한다. KOSPI가 `-1.5%` 이하이고 장중 저점 회복률이 35% 미만이면 신호를 차단하지 않고 신뢰도를 한 단계 낮춘다.
+- 손절은 `min(급락 저점, 최근 20개 5분봉 저점) - 0.2 ATR5m` 구조선에서 계산하고 손실 거리를 `0.8~1.8 ATR5m`로 제한한다.
+- 1차 익절은 가까운 저항이 `0.8R~1.5R`이면 그 저항, 아니면 `1R`에서 50%다. 2차는 `2R`에서 50%다. 가까운 저항이 `0.8R` 미만이면 `보상 부족`으로 표시한다.
+- 손절·익절은 분석 기준가 기준의 설명 가능한 가격선이며 broker stop, OrderIntent 또는 주문 제출로 변환하지 않는다.
+
+## 8. Beginner-first 자동화 계약 (macOS 1.0)
 
 전략 설정은 `초안 저장 → 조건 확인 → paper 시뮬레이션 → 활성화` 순서를 지킨다. 데스크톱 앱은 실제 broker 제출을 하지 않으며, 자동화 탭은 `status == enabled` 전략만 단일 원본으로 표시한다.
 

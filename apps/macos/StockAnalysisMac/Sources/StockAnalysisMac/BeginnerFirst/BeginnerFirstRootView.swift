@@ -64,23 +64,25 @@ struct BeginnerFirstRootView: View {
                     .frame(width: compactSidebar ? 78 : 210)
 
                     VStack(spacing: 0) {
-                        BeginnerTopBar(
-                            assetClass: Binding(
-                                get: { assetClass },
-                                set: { changeAssetClass($0) }
-                            ),
-                            stockMarket: Binding(
-                                get: { stockMarket },
-                                set: { changeStockMarket($0) }
-                            ),
-                            selectedSymbol: $selectedSymbol,
-                            querySession: assetClass == .stock ? stockMarket.session : "US",
-                            healthOK: model.health?.ok == true,
-                            lastUpdated: model.lastUpdated,
-                            isLoading: isLoading,
-                            onSymbolResolved: { selectedSymbolName = $0 },
-                            onAnalyze: { Task { await runAnalysis() } }
-                        )
+                        if destination != .sector {
+                            BeginnerTopBar(
+                                assetClass: Binding(
+                                    get: { assetClass },
+                                    set: { changeAssetClass($0) }
+                                ),
+                                stockMarket: Binding(
+                                    get: { stockMarket },
+                                    set: { changeStockMarket($0) }
+                                ),
+                                selectedSymbol: $selectedSymbol,
+                                querySession: assetClass == .stock ? stockMarket.session : "US",
+                                healthOK: model.health?.ok == true,
+                                lastUpdated: model.lastUpdated,
+                                isLoading: isLoading,
+                                onSymbolResolved: { selectedSymbolName = $0 },
+                                onAnalyze: { Task { await runAnalysis() } }
+                            )
+                        }
 
                         workspace(compact: proxy.size.width < 1_230)
                             .id(workspaceRevision)
@@ -208,6 +210,20 @@ struct BeginnerFirstRootView: View {
                 onOpenOrder: { showingOrderDrawer = true },
                 onRefreshNews: { Task { await refreshNewsAndSentiment() } }
             )
+        case .sector:
+            BeginnerSectorWorkspace(
+                stockMarket: Binding(
+                    get: { stockMarket },
+                    set: { stockMarket = $0 }
+                ),
+                onRefresh: { force in
+                    guard await ensureEngineReady() else { return }
+                    await model.refreshSectorStrength(market: stockMarket.session, forceRefresh: force)
+                },
+                onSelect: { item, market in
+                    selectSectorETF(item, market: market)
+                }
+            )
         case .watchlist:
             BeginnerWatchlistWorkspace(
                 onSelect: { item in selectWatchlistItem(item) },
@@ -278,6 +294,9 @@ struct BeginnerFirstRootView: View {
     }
 
     private func selectDestination(_ next: BeginnerDestination) {
+        if next == .sector {
+            assetClass = .stock
+        }
         destination = next
         workspaceRevision = UUID()
     }
@@ -415,6 +434,10 @@ struct BeginnerFirstRootView: View {
         }
         selectedSymbol = item.symbol
         selectedSymbolName = item.name
+        if model.watchlistSignal(for: item.symbol)?.signal.stage == "entry-ready" ||
+            model.watchlistSignal(for: item.symbol)?.signal.stage == "panic-watch" {
+            selectedChartTimeframe = .fiveMinutes
+        }
         destination = .chart
         Task { await runAnalysis() }
     }
@@ -431,6 +454,15 @@ struct BeginnerFirstRootView: View {
         destination = .chart
         Task { await runAnalysis() }
     }
+
+    private func selectSectorETF(_ item: SectorStrengthItemView, market: BeginnerStockMarket) {
+        assetClass = .stock
+        stockMarket = market
+        selectedSymbol = item.symbol
+        selectedSymbolName = item.name
+        destination = .chart
+        Task { await runAnalysis() }
+    }
 }
 
 private struct BeginnerSidebar: View {
@@ -439,7 +471,7 @@ private struct BeginnerSidebar: View {
 
     @State private var hoveredDestination: BeginnerDestination?
 
-    private let primaryDestinations: [BeginnerDestination] = [.chart, .watchlist, .assets, .strategy, .automation]
+    private let primaryDestinations: [BeginnerDestination] = [.chart, .sector, .watchlist, .assets, .strategy, .automation]
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {

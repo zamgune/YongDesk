@@ -171,6 +171,14 @@ test("local engine rejects unsupported routes", async () => {
   assert.equal(response.status, 404);
 });
 
+test("local engine validates the sector-strength market contract before data fetch", async () => {
+  const response = await handleLocalEngineRequest(new Request(
+    "http://127.0.0.1:38771/api/local/sector-strength?market=CRYPTO",
+  ));
+  assert.equal(response.status, 400);
+  assert.match(await response.text(), /US 또는 KR/);
+});
+
 test("local engine exposes community sentiment through the sidecar contract", async () => {
   const response = await handleLocalEngineRequest(new Request(
     "http://127.0.0.1:38771/api/community-pain/NVDA?market=US&sources=blind",
@@ -404,6 +412,24 @@ test("local watchlist stores unique items, enforces its limit, and isolates summ
     { method: "DELETE" },
   ));
   assert.equal(deleted.status, 200);
+
+  const storedSignals = await handleLocalEngineRequest(new Request(
+    "http://127.0.0.1:38771/api/local/watchlist/signals",
+  ));
+  assert.equal(storedSignals.status, 200);
+  assert.equal((await storedSignals.json() as { items?: unknown[] }).items?.length, 0);
+
+  const signalScan = await handleLocalEngineRequest(new Request(
+    "http://127.0.0.1:38771/api/local/watchlist/signal-scan",
+    { method: "POST" },
+  ));
+  assert.equal(signalScan.status, 200);
+  const signalPayload = await signalScan.json() as {
+    monitoringStatus?: string;
+    orderSubmissionAttempted?: boolean;
+  };
+  assert.equal(signalPayload.monitoringStatus, "empty");
+  assert.equal(signalPayload.orderSubmissionAttempted, false);
 });
 
 test("watchlist insight falls back to volume attention when Toss ranking is unavailable", async () => {

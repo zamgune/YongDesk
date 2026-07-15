@@ -101,6 +101,13 @@ export type CandlePageResponse = {
   nextBefore: string | null;
 };
 
+export type MarketIndicatorCandle = Omit<Candle, "currency">;
+
+export type MarketIndicatorCandlePageResponse = {
+  candles: MarketIndicatorCandle[];
+  nextBefore: string | null;
+};
+
 export type OrderbookEntry = {
   price: string;
   volume: string;

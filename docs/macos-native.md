@@ -5,7 +5,7 @@
 ## 아키텍처
 
 - SwiftUI가 메인 대시보드, 설정 시트, 메뉴바, 알림, Keychain과 App Support 상태를 담당한다.
-- 기본 창은 `BeginnerFirstRootView`이며 차트·내 자산·전략·자동화·설정 workspace를 분리한다. API credential은 설정 workspace의 인라인 연결 관리에서 등록하고, 전략·점검·배포·로그 시트는 그대로 재사용한다.
+- 기본 창은 `BeginnerFirstRootView`이며 차트·섹터·관심종목·내 자산·전략·자동화·설정 workspace를 분리한다. API credential은 설정 workspace의 인라인 연결 관리에서 등록하고, 전략·점검·배포·로그 시트는 그대로 재사용한다.
 - 앱은 번들된 TypeScript sidecar를 `127.0.0.1`의 임의 포트에서 자동 시작한다.
 - sidecar는 `src/domain`, `src/use-cases`, `src/ports`와 `src/adapters`의 기존 분석·자동화·브로커 코드를 재사용한다.
 - 앱은 `STOCK_ANALYSIS_STORAGE_ROOT`를 `~/Library/Application Support/com.stockanalysis.mac/sidecar`로 설정한다.
@@ -38,8 +38,10 @@ curl http://127.0.0.1:38771/health
 |---|---|---|
 | 상태 | `GET /health`, `GET /api/local/self-test` | sidecar와 앱 준비 상태 |
 | 시장 | `GET /api/market/:symbol`, `GET /api/briefing/daily-market` | 분석과 시장 브리핑 |
+| 섹터 강도 | `GET /api/local/sector-strength?market=US|KR` | 대표 ETF의 1일·1주·1개월 수익률과 시장 대비 초과수익률. `refresh=1`은 5초 제한 수동 갱신 |
 | 멀티타임프레임 | `GET /api/local/analysis/workspace` | 1시간·4시간·일봉 분석, metadata와 단타·스윙·장기 계획 |
 | 관심종목 | `GET/POST /api/local/watchlist`, `DELETE /api/local/watchlist/:id`, `GET /api/local/watchlist/summary` | 이 Mac의 관심종목 저장과 시세·일봉 기술 요약·커뮤니티 민심·관심도 요약. 코인은 이번 버전에서 시세만 제공 |
+| 급락 감시 | `POST /api/local/watchlist/signal-scan`, `GET /api/local/watchlist/signals` | 한국 주식 관심종목의 Toss 확정 5분봉 급락·반전 상태, KOSPI 문맥, 분석 기준 진입·손절·50/50 익절 계획. 주문 제출 없음 |
 | 뉴스·민심 | `GET /api/news/events`, `GET /api/community-pain/:symbol` | 공식/RSS 뉴스와 종목별 커뮤니티 근거 |
 | 대시보드 | `GET /api/dashboard/terminal`, `POST /api/dashboard/playbook` | macOS 대시보드와 포지션 메모 |
 | Toss | `/api/local/broker/credentials`, `/api/local/toss/readiness` | credential과 계좌 준비 상태 |
@@ -61,6 +63,8 @@ curl http://127.0.0.1:38771/health
 - credential은 선택 사항이다. API 키 없이도 삼성전자 Yahoo fallback 분석, Upbit 공개 분석, 공식/RSS 뉴스와 모의투자를 사용할 수 있다.
 - `내 자산`은 Toss·Upbit·Bithumb 실자산만 포지션 중심 보드로 표시한다. 공급자별 색상·연결 상태와 종목 수를 구분하고 평가금액은 공급자·통화별로만 표시하며, 모의계좌 전환은 노출하지 않는다. paper 엔진은 무실주문 베타의 자동화·안전 검증을 위해 유지한다.
 - 차트에서 현재 종목을 관심종목에 추가하면 최대 20개를 이 Mac의 sidecar 저장소에 보관한다. 관심종목은 현재가·등락·출처·갱신 상태만 비교하며, 행 선택 후 단건 분석으로 이동한다.
+- 관심종목의 `급락 감시`는 사용자가 켠 경우에만 앱 실행 중 KRX 정규장에서 60초마다 동작한다. 검증된 Toss credential이 필요하며, 1분봉을 확정 5분봉으로 집계해 `급락 감지 → 반전 대기 → 매수 검토 가능`을 구분한다. Yahoo fallback, stale 시세와 429 응답에서는 알림을 내지 않는다.
+- `매수 검토 가능`은 동일 급락·확인봉 조합에서 한 번만 macOS 알림을 보낸다. 차트 카드의 기준가·구조 손절·1R/저항 1차 50%·2R 2차 50%는 분석값이며 주문이나 보유 사실을 뜻하지 않는다.
 - Finder/Dock 실행 시 번들 sidecar를 우선 사용한다.
 - 번들 경로가 없으면 빌드 시 저장한 저장소 경로와 사용자가 저장한 sidecar 경로를 순서대로 확인한다.
 - 상단 상태와 메뉴바에서 sidecar, 모의투자, `PAPER ONLY`, 최근 갱신을 확인한다.
@@ -81,6 +85,13 @@ curl http://127.0.0.1:38771/health
 - 기준가는 최근 확정 종가, 일치하는 실제 보유 평단, 직접 입력 중 선택한다. 직접 입력은 0보다 큰 유한 숫자만 `entryPrice` 쿼리로 전달한다.
 - 실제 보유 평단은 `planMode=position-management`로 전달한다. 장기 현재가가 무효선 아래면 `invalidation-breached`와 축소·청산·회복 행동을 우선 표시하고, 평단이 무효선 위일 때만 기존 평단 기준 목표를 함께 유지한다.
 - 계획의 stop과 take-profit은 분석 조언이며 주문 제출이 아니다. `orderSubmissionAttempted=false`와 broker stop 부적격 계약을 유지한다.
+
+### 섹터 강도
+
+- 사이드바의 `섹터`는 한국과 미국을 전환하며 대표 ETF의 강약을 히트맵과 시장 대비 초과수익률 순위봉으로 표시한다. 타일을 선택하면 대표 ETF를 기존 차트 workspace에서 분석한다.
+- 미국은 SPY와 GICS 11개 Select Sector SPDR ETF를, 한국은 KODEX 200과 반도체·자동차·은행·증권·헬스케어·보험·건설·IT·K콘텐츠·에너지화학·철강·기계장비·운송·필수소비재·경기소비재·부동산리츠 ETF를 비교한다.
+- 1일은 정규장 현재가와 전일 종가를 우선 사용해 `장중 잠정`으로 표시하고, 1주·1개월은 각각 확정 일봉 5·21거래일 기준이다. 강도는 `ETF 수익률 - 시장 벤치마크 수익률`이며 주문 신호가 아니다.
+- sidecar는 Yahoo provider 요청을 최대 4개씩 처리하고 시장별 결과를 5분 캐시한다. 개별 ETF 실패는 성공 항목을 유지하면서 제외 종목을 표시하고, 벤치마크 실패는 상대강도 계산을 중단한다. 이전 성공 결과가 있으면 `이전 데이터`로 명시한다.
 
 ### Toss 연결
 

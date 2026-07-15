@@ -52,6 +52,7 @@ struct BeginnerChartWorkspace: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
                 marketSummary
+                crashSignalCard
                 instrumentHeader
                 chartCard
                 analysisTabs
@@ -102,6 +103,71 @@ struct BeginnerChartWorkspace: View {
         }
         .accessibilityElement(children: .combine)
         .accessibilityIdentifier("beginner-market-summary")
+    }
+
+    @ViewBuilder
+    private var crashSignalCard: some View {
+        if assetClass == .stock, selectedSession == "KR", let item = model.watchlistSignal(for: selectedSymbol) {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(alignment: .top) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("급락 반전 감시")
+                            .font(.headline)
+                        Text(item.signal.detail)
+                            .font(.caption)
+                            .foregroundStyle(BeginnerPalette.muted)
+                    }
+                    Spacer()
+                    BeginnerStatusBadge(item.signal.label, color: crashSignalColor(item.signal.stage))
+                    BeginnerStatusBadge(item.signal.marketContext.label, color: item.signal.marketContext.status == "weak" ? BeginnerPalette.amber : BeginnerPalette.blue)
+                }
+
+                if let plan = item.signal.exitPlan {
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 8)], spacing: 8) {
+                        crashPlanTile("분석 기준가", value: beginnerPrice(plan.entryPrice, currency: item.currency), detail: "확인봉 종가 · 주문 미전송")
+                        crashPlanTile("손절·무효화", value: beginnerPrice(plan.stopPrice, currency: item.currency), detail: "확정 5분봉 구조 이탈 · 자동 주문 아님")
+                        crashPlanTile("1차 익절 50%", value: beginnerPrice(plan.firstTakeProfit, currency: item.currency), detail: plan.firstTargetBasis == "near-resistance" ? "가까운 저항" : "1R")
+                        crashPlanTile("2차 익절 50%", value: beginnerPrice(plan.secondTakeProfit, currency: item.currency), detail: "2R · 예상 손익비 \(plan.rewardRisk.formatted(.number.precision(.fractionLength(1))))")
+                    }
+                }
+
+                HStack(alignment: .top, spacing: 8) {
+                    Image(systemName: "info.circle")
+                        .foregroundStyle(BeginnerPalette.blue)
+                    Text((item.signal.reasons + item.signal.blockers).joined(separator: " · "))
+                        .font(.caption)
+                        .foregroundStyle(BeginnerPalette.muted)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Text("Toss REST 확정 5분봉 · \(item.quoteAt.map(beginnerTimestamp) ?? "시각 확인 불가") · 분석·알림 전용")
+                    .font(.caption2)
+                    .foregroundStyle(item.stale ? BeginnerPalette.red : BeginnerPalette.muted)
+            }
+            .padding(14)
+            .background(BeginnerPalette.surfaceRaised, in: RoundedRectangle(cornerRadius: 12))
+            .overlay { RoundedRectangle(cornerRadius: 12).stroke(crashSignalColor(item.signal.stage).opacity(0.45)) }
+            .accessibilityIdentifier("beginner-crash-signal-card")
+        }
+    }
+
+    private func crashPlanTile(_ title: String, value: String, detail: String) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title).font(.caption.weight(.semibold)).foregroundStyle(BeginnerPalette.muted)
+            Text(value).font(.system(size: 16, weight: .bold, design: .rounded))
+            Text(detail).font(.caption2).foregroundStyle(BeginnerPalette.muted)
+        }
+        .padding(9)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(BeginnerPalette.background, in: RoundedRectangle(cornerRadius: 8))
+    }
+
+    private func crashSignalColor(_ stage: String) -> Color {
+        switch stage {
+        case "entry-ready": return BeginnerPalette.green
+        case "panic-watch", "insufficient-reward": return BeginnerPalette.amber
+        case "invalidated", "expired": return BeginnerPalette.red
+        default: return BeginnerPalette.muted
+        }
     }
 
     private var instrumentHeader: some View {

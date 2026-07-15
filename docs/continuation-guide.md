@@ -131,6 +131,7 @@ node --experimental-strip-types scripts/verify_desktop_readiness.mts
 3. 친구 Mac API 등록은 설정의 엔진 상태에서 `엔진 준비`를 먼저 확인한다. 실패 시 번들 누락·실행 거부·조기 종료 코드·15초 timeout을 구분하고 `엔진 다시 시작` 또는 `로그 열기`로 복구한다. 엔진 실패 중에는 credential POST와 Keychain 저장을 시도하지 않는다.
 4. 외부 배포는 Developer ID 서명, 앱·DMG notarization/stapling, Gatekeeper 승인과 실제 Apple Silicon·Intel Mac의 새 사용자 설치·실행을 별도로 완료한다. 해당 아키텍처 실기기 확인 전에는 `MACOS_HARDWARE_VERIFIED=1`을 사용하지 않는다.
 5. WebSocket 실시간 차트와 재연결 정책은 후속이다. 현재 1시간·4시간·일봉 분석을 streaming으로 표현하지 않는다.
+   관심종목 급락 감시는 별도의 Toss REST 1분봉 60초 polling 경로이며 WebSocket이나 항상 실행되는 백그라운드 서비스로 표현하지 않는다.
 6. Upbit 수동 지정가의 체결·부분체결·취소 동기화와 재시작 후 전체 주문 원장 재조정은 후속이다. 현재는 timeout/429/5xx 결과 불명 시 client order identifier 단건 조회로만 잠금을 해소하며 자동 재시도하지 않는다.
 7. 문장형 전략 조립기를 실제 계약에 연결하고, 기능 안정화 후 YongStockDesk 런타임 이름과 기존 Keychain/App Support 데이터를 함께 마이그레이션한다.
 

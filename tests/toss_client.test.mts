@@ -108,6 +108,25 @@ test("toss client reads Toss Securities rankings without an account header", asy
   );
 });
 
+test("toss client reads KOSPI minute candles without an account header", async () => {
+  await withMockFetch(
+    [
+      tokenResponse(),
+      jsonResponse({ result: { candles: [], nextBefore: null } }),
+    ],
+    async (calls) => {
+      const client = createTossClient({ clientId: "client-id", clientSecret: "client-secret" });
+      await client.getMarketIndicatorCandles("KOSPI", { interval: "1m", count: 200 });
+
+      const url = new URL(calls[1]?.url ?? "");
+      assert.equal(url.pathname, "/api/v1/market-indicators/KOSPI/candles");
+      assert.equal(url.searchParams.get("interval"), "1m");
+      assert.equal(url.searchParams.get("count"), "200");
+      assert.equal((calls[1]?.init?.headers as Record<string, string>)["X-Tossinvest-Account"], undefined);
+    },
+  );
+});
+
 test("toss client sends account header for closed order history", async () => {
   await withMockFetch(
     [

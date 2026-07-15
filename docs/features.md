@@ -21,6 +21,7 @@
 | 앱 셸 | 메뉴바 상태, 앱 점검, sidecar 로그, 배포 점검 | 구현됨 | 로컬 App Support와 번들 상태를 사용 | 없음 |
 | 앱 셸 | Keychain 비대화식 시작, 명시적 권한 재설정, sidecar 부모 감시 | 구현됨 | 일반 시작은 Toss·코인 secret 0회, Reddit 최대 1회 읽기. 정식 서명 설치본에서만 ACL 재등록 | 없음 |
 | 앱 셸 | 차트 중심 사이드바와 단순화된 beginner-first 레이아웃 | 구현됨 | `BeginnerFirstRootView`가 승인된 `beginner-first-v3.html` 정보 구조를 적용하며 최소 크기는 1024×720 | 없음 |
+| 시장 비교 | 한국·미국 섹터 강도 히트맵과 순위봉 | 구현됨 | 대표 섹터 ETF의 1일·1주·1개월 수익률을 SPY·KODEX 200 대비 초과수익률로 정렬. 1일은 장중 잠정값을 포함하며 Yahoo 부분 실패·stale 상태를 표시 | 없음 |
 | 앱 셸 | 개인 관심종목 목록과 한국·미국 주식·코인 요약 | 구현됨 | 최대 20개를 이 Mac의 sidecar 저장소에 보관하며, 현재가·등락·출처·갱신 상태만 비교 | 없음 |
 | 온보딩 | 삼성전자 예제, 설정 내 인라인 API 연결과 나중에 연결 경로 | 구현됨 | API 키 없이 Yahoo fallback 분석·Upbit 공개 분석·모의투자로 시작 가능 | 없음 |
 | 시장 데이터 | US·KOSPI·KOSDAQ·CRYPTO 종목 검색과 수동 티커 입력 | 구현됨 | 종목 마스터 캐시가 없으면 seed/fallback 사용 | 없음 |
@@ -33,6 +34,7 @@
 | 분석 | 신호 신뢰도, 유사 표본, 최대 상승·하락과 손익비 | 구현됨 | 표본 부족 시 `insufficient-data` | 없음 |
 | 분석 | 시장·통화·출처·주기·기준 시각·지연 metadata | 구현됨 | `market`, `currency`, `dataSource`, `timeframe`, `quoteAt`, `stale`을 응답과 UI에 표시 | 없음 |
 | 분석 | 단타·스윙·장기 익절·손절 계획 | 구현됨 | 필수 봉·지표가 없으면 고정 퍼센트 대신 `계산 불가` 또는 `조건 대기` 반환 | 없음 |
+| 분석 | 한국 주식 관심종목 급락 반전 감시 | 구현됨 | 검증된 Toss API·앱 실행·KRX 정규장 필요. 60초 REST polling, 확정 5분봉, KOSPI 위험 배지, 단계별 중복 방지 알림 | 없음 |
 | 브리핑 | US·KR 시장 브리핑, 주도 후보, 진입 후보 큐 | 구현됨 | 시장 데이터 실패 시 safe fallback 사용 | 없음 |
 | 뉴스 | 공식/RSS 뉴스 이벤트, 2분 polling과 신뢰도 표시 | 부분 구현 | streaming이 아니며 single-flight·소스별 오류 backoff를 사용 | 없음 |
 | 민심 | 종목별 커뮤니티 공포·과열·분열 점수와 근거 링크 | 부분 구현 | 30분 캐시, 낮은 표본 우선 표시, Reddit OAuth는 앱 Keychain에서 선택 연결 | 없음 |

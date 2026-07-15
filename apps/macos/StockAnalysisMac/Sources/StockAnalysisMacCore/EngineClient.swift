@@ -191,6 +191,15 @@ public struct EngineClient: Sendable {
         try await getJSON("/api/local/watchlist/summary", timeout: 30)
     }
 
+    public func watchlistSignals() async throws -> WatchlistSignalScanResponse {
+        try await getJSON("/api/local/watchlist/signals", timeout: 30)
+    }
+
+    public func scanWatchlistSignals() async throws -> WatchlistSignalScanResponse {
+        let data = try await postJSON("/api/local/watchlist/signal-scan", body: [:] as [String: String], timeout: 30)
+        return try decoder.decode(WatchlistSignalScanResponse.self, from: data)
+    }
+
     public func addWatchlistItem(_ input: LocalWatchlistItemInput) async throws -> LocalWatchlistResponse {
         let data = try await postJSON("/api/local/watchlist", body: input)
         return try decoder.decode(LocalWatchlistResponse.self, from: data)
@@ -510,6 +519,12 @@ public struct EngineClient: Sendable {
         try await getData("/api/briefing/daily-market?session=\(session)&force=1", timeout: 45)
     }
 
+    public func sectorStrength(market: String, forceRefresh: Bool = false) async throws -> SectorStrengthResponseView {
+        let normalized = market == "US" ? "US" : "KR"
+        let refresh = forceRefresh ? "&refresh=1" : ""
+        return try await getJSON("/api/local/sector-strength?market=\(normalized)\(refresh)", timeout: 60)
+    }
+
     private func getJSON<T: Decodable>(_ path: String, timeout: TimeInterval? = nil) async throws -> T {
         try decoder.decode(T.self, from: try await getData(path, timeout: timeout))
     }
@@ -520,8 +535,8 @@ public struct EngineClient: Sendable {
         return data
     }
 
-    private func postJSON<T: Encodable>(_ path: String, body: T) async throws -> Data {
-        var request = request(path)
+    private func postJSON<T: Encodable>(_ path: String, body: T, timeout: TimeInterval? = nil) async throws -> Data {
+        var request = request(path, timeout: timeout)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONEncoder().encode(body)

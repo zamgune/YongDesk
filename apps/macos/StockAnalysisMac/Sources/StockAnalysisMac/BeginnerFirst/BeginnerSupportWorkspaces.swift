@@ -531,6 +531,11 @@ struct BeginnerWatchlistWorkspace: View {
                             .font(.caption.weight(.semibold))
                             .foregroundStyle(BeginnerPalette.muted)
                         HStack(spacing: 8) {
+                            Button(model.settings.crashSignalMonitoringEnabled ? "급락 감시 끄기" : "급락 감시 켜기") {
+                                Task { await model.toggleCrashSignalMonitoring() }
+                            }
+                            .buttonStyle(.bordered)
+                            .accessibilityIdentifier("beginner-watchlist-signal-monitoring")
                             Button("현재 종목 추가", action: onAddCurrent)
                                 .buttonStyle(.bordered)
                                 .disabled(model.watchlistItems.count >= model.watchlistMaxItems)
@@ -591,6 +596,10 @@ struct BeginnerWatchlistWorkspace: View {
                     .font(.caption)
                     .foregroundStyle(BeginnerPalette.muted)
                     .accessibilityIdentifier("beginner-watchlist-message")
+                Text(model.watchlistSignalMessage)
+                    .font(.caption)
+                    .foregroundStyle(model.watchlistSignals.contains { $0.signal.stage == "entry-ready" } ? BeginnerPalette.green : BeginnerPalette.muted)
+                    .accessibilityIdentifier("beginner-watchlist-signal-message")
             }
             .padding(20)
         }
@@ -598,6 +607,7 @@ struct BeginnerWatchlistWorkspace: View {
         .accessibilityIdentifier("beginner-watchlist-workspace")
         .task {
             await model.refreshWatchlist()
+            await model.refreshWatchlistSignals(scan: false)
         }
     }
 
@@ -662,6 +672,14 @@ struct BeginnerWatchlistWorkspace: View {
             if item.assetClass == "crypto" {
                 insightChip(title: "인사이트", value: "준비 중", detail: "코인 인사이트는 다음 단계에서 제공합니다.", status: "unsupported")
             } else {
+                if let signal = model.watchlistSignal(for: item.symbol) {
+                    insightChip(
+                        title: "급락",
+                        value: signal.signal.label,
+                        detail: signal.error ?? signal.signal.detail,
+                        status: signal.signal.stage
+                    )
+                }
                 insightChip(
                     title: "기술",
                     value: item.insights?.technical.label ?? "근거 부족",
@@ -682,7 +700,7 @@ struct BeginnerWatchlistWorkspace: View {
                 )
             }
         }
-        .frame(width: item.assetClass == "crypto" ? 92 : 228, alignment: .trailing)
+        .frame(width: item.assetClass == "crypto" ? 92 : 330, alignment: .trailing)
     }
 
     private func insightChip(title: String, value: String, detail: String, status: String) -> some View {
@@ -705,6 +723,9 @@ struct BeginnerWatchlistWorkspace: View {
     }
 
     private func insightColor(status: String, value: String) -> Color {
+        if status == "entry-ready" { return BeginnerPalette.green }
+        if status == "panic-watch" || status == "insufficient-reward" { return BeginnerPalette.amber }
+        if status == "invalidated" || status == "expired" { return BeginnerPalette.red }
         if status == "error" { return BeginnerPalette.red }
         if status == "low-evidence" || status == "unavailable" || status == "unsupported" {
             return BeginnerPalette.amber

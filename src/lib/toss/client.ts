@@ -10,6 +10,7 @@ import type {
   ExchangeRateResponse,
   HoldingsOverview,
   KrMarketCalendarResponse,
+  MarketIndicatorCandlePageResponse,
   OAuth2ErrorResponse,
   OAuth2TokenResponse,
   Order,
@@ -361,6 +362,26 @@ export const createTossClient = (credentials: TossCredentials) => ({
         adjusted: options.adjusted,
       },
     }),
+
+  getMarketIndicatorCandles: (
+    symbol: "KOSPI" | "KOSDAQ",
+    options: {
+      interval: TossCandleInterval;
+      count?: number;
+      before?: string;
+    },
+  ) =>
+    request<MarketIndicatorCandlePageResponse>(
+      credentials,
+      `/api/v1/market-indicators/${encodeURIComponent(symbol)}/candles`,
+      {
+        query: {
+          interval: options.interval,
+          count: options.count,
+          before: options.before,
+        },
+      },
+    ),
 
   getOrderbook: (symbol: string) =>
     request<OrderbookResponse>(credentials, "/api/v1/orderbook", {

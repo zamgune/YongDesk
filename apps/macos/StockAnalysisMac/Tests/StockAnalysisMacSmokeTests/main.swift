@@ -150,6 +150,10 @@ func verifyBeginnerNavigationAndConnectionWorkspaceSource() throws {
         contentsOf: packageURL.appending(path: "Sources/StockAnalysisMac/BeginnerFirst/BeginnerFirstModels.swift"),
         encoding: .utf8
     )
+    let sectorWorkspace = try String(
+        contentsOf: packageURL.appending(path: "Sources/StockAnalysisMac/BeginnerFirst/BeginnerSectorWorkspace.swift"),
+        encoding: .utf8
+    )
 
     assert(!rootView.contains("showingConnectionChooser"), "beginner flow should not reopen the API chooser dialog")
     assert(rootView.contains("selectedConnectionProvider"), "beginner flow should retain the selected inline API provider")
@@ -170,6 +174,11 @@ func verifyBeginnerNavigationAndConnectionWorkspaceSource() throws {
         "sidecar readiness failure must stop credential POST and Keychain persistence before registration"
     )
     assert(models.contains("beginner-api-provider-"), "connection providers should have stable accessibility identifiers")
+    assert(models.contains("case sector"), "beginner navigation should expose the sector destination")
+    assert(rootView.contains("BeginnerSectorWorkspace"), "sector destination should route to the native workspace")
+    assert(sectorWorkspace.contains("beginner-sector-market-picker"), "sector workspace should expose the KR/US picker")
+    assert(sectorWorkspace.contains("beginner-sector-ranking-chart"), "sector workspace should expose the strength chart")
+    assert(sectorWorkspace.contains("대표 ETF 차트 열기"), "sector tiles should explain their chart navigation action")
     assert(supportWorkspace.contains("DisclosureGroup(isExpanded: $showingAdvanced)"), "advanced diagnostics should stay collapsed until requested")
     assert(supportWorkspace.contains("TossOperationReport.make"), "Toss operational reports should remain available in advanced diagnostics")
 }
@@ -333,6 +342,7 @@ let settings = AppSettings(enginePort: 39_001, repositoryPath: "/tmp/repo", aler
 try store.saveSettings(settings)
 assert(store.loadSettings() == settings, "settings should round-trip through App Support JSON")
 assert(AppSettings().alertsEnabled == false, "new installs should keep notifications off until explicit opt-in")
+assert(AppSettings().crashSignalMonitoringEnabled == false, "new installs should keep crash monitoring off until explicit opt-in")
 
 let overrideRoot = FileManager.default.temporaryDirectory
     .appending(path: "StockAnalysisMacOverride-\(UUID().uuidString)")
@@ -1737,6 +1747,12 @@ func verifyWatchlistClientContracts() async throws {
         mockResponse(summary),
         mockResponse(stored, statusCode: 201),
         mockResponse(#"{"maxItems":20,"items":[]}"#),
+        mockResponse("""
+        {"generatedAt":"2026-07-15T02:00:00.000Z","monitoringStatus":"ready","monitoringMessage":"매수 검토 가능 신호가 있습니다. 주문은 전송하지 않았습니다.","marketContext":{"status":"weak","label":"KOSPI 약세 지속","changePct":-2.1,"recoveryPct":20,"quoteAt":"2026-07-15T02:00:00.000Z"},"items":[{"id":"watch-1","symbol":"005930.KS","name":"삼성전자","market":"KR","currency":"KRW","dataSource":"toss","generatedAt":"2026-07-15T02:00:00.000Z","quoteAt":"2026-07-15T02:00:00.000Z","stale":false,"notificationEligible":true,"notificationId":"005930.KS:1:2","error":null,"signal":{"stage":"entry-ready","confidence":"medium","label":"매수 검토 가능","detail":"확정 5분봉 반전 조건 통과","reasons":["급락 이후 반전 캔들 확인"],"blockers":[],"panicAt":1,"confirmationAt":2,"quoteAt":2,"sessionChangePct":-5.2,"recentDropPct":-3.1,"volumeRatio":2.2,"rsi14":24,"rsi2":8,"marketContext":{"status":"weak","label":"KOSPI 약세 지속","changePct":-2.1,"recoveryPct":20,"quoteAt":"2026-07-15T02:00:00.000Z"},"exitPlan":{"entryPrice":100,"stopPrice":96,"firstTakeProfit":104,"secondTakeProfit":108,"firstAllocationPct":50,"secondAllocationPct":50,"riskPerShare":4,"rewardRisk":2,"firstTargetBasis":"1R","isBrokerStopEligible":false},"orderSubmissionAttempted":false}}],"orderSubmissionAttempted":false}
+        """),
+        mockResponse("""
+        {"generatedAt":"2026-07-15T02:00:00.000Z","monitoringStatus":"ready","monitoringMessage":"저장 결과","marketContext":{"status":"weak","label":"KOSPI 약세 지속","changePct":-2.1,"recoveryPct":20,"quoteAt":null},"items":[],"orderSubmissionAttempted":false}
+        """),
     ])
 
     let loaded = try await client.watchlistSummary()
@@ -1749,13 +1765,59 @@ func verifyWatchlistClientContracts() async throws {
     _ = try await client.addWatchlistItem(LocalWatchlistItemInput(symbol: "005930.KS", assetClass: "stock", market: "KR"))
     let removed = try await client.deleteWatchlistItem(id: "watch-1")
     assert(removed.items.isEmpty, "watchlist delete should decode the updated collection")
+    let signalScan = try await client.scanWatchlistSignals()
+    assert(signalScan.items.first?.signal.stage == "entry-ready", "signal scan should decode the crash reversal stage")
+    assert(signalScan.items.first?.signal.exitPlan?.firstAllocationPct == 50, "signal scan should decode the first partial exit")
+    assert(signalScan.orderSubmissionAttempted == false, "signal scan must preserve the no-order contract")
+    let storedSignals = try await client.watchlistSignals()
+    assert(storedSignals.items.isEmpty, "stored signal endpoint should decode an empty result")
 
     let requests = EngineClientMockURLProtocol.captured()
     requireRequest(requests, 0, method: "GET", path: "/api/local/watchlist/summary")
     requireRequest(requests, 1, method: "POST", path: "/api/local/watchlist", bodyContains: ["005930.KS", "stock", "KR"])
     requireRequest(requests, 2, method: "DELETE", path: "/api/local/watchlist/watch-1")
+    requireRequest(requests, 3, method: "POST", path: "/api/local/watchlist/signal-scan")
+    requireRequest(requests, 4, method: "GET", path: "/api/local/watchlist/signals")
 }
 
 try await verifyWatchlistClientContracts()
+
+func verifySectorStrengthClientContract() async throws {
+    let configuration = URLSessionConfiguration.ephemeral
+    configuration.protocolClasses = [EngineClientMockURLProtocol.self]
+    let session = URLSession(configuration: configuration)
+    let client = EngineClient(baseURL: URL(string: "http://127.0.0.1:39099")!, session: session)
+    EngineClientMockURLProtocol.reset(responses: [mockResponse("""
+    {
+      "market":"US",
+      "generatedAt":"2026-07-15T15:00:00.000Z",
+      "asOf":"2026-07-15T15:00:00.000Z",
+      "marketState":"intraday",
+      "benchmark":{
+        "id":"us-market","name":"S&P 500","symbol":"SPY",
+        "returns":{"oneDay":0.01,"oneWeek":0.02,"oneMonth":0.03},
+        "excessReturns":{"oneDay":null,"oneWeek":null,"oneMonth":null},
+        "quoteAt":"2026-07-15T15:00:00.000Z","status":"intraday"
+      },
+      "sectors":[{
+        "id":"technology","name":"기술","symbol":"XLK",
+        "returns":{"oneDay":0.02,"oneWeek":0.04,"oneMonth":0.08},
+        "excessReturns":{"oneDay":0.01,"oneWeek":0.02,"oneMonth":0.05},
+        "quoteAt":"2026-07-15T15:00:00.000Z","status":"intraday"
+      }],
+      "errors":[],"stale":false,"cacheAgeSeconds":0
+    }
+    """)])
+
+    let response = try await client.sectorStrength(market: "US", forceRefresh: true)
+    assert(response.market == "US", "sector response should preserve market")
+    assert(response.sectors.first?.symbol == "XLK", "sector response should decode representative ETF")
+    assert(response.sectors.first?.excessReturns.oneDay == 0.01, "sector response should decode excess return")
+
+    let requests = EngineClientMockURLProtocol.captured()
+    requireRequest(requests, 0, method: "GET", path: "/api/local/sector-strength?market=US&refresh=1")
+}
+
+try await verifySectorStrengthClientContract()
 
 print("StockAnalysisMac smoke tests passed")

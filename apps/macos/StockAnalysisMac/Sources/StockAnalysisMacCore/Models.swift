@@ -4,6 +4,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
     public var enginePort: Int
     public var repositoryPath: String
     public var alertsEnabled: Bool
+    public var crashSignalMonitoringEnabled: Bool
     public var workerPaused: Bool
     public var liveTradingOperatorEnabled: Bool
     public var cryptoLiveTradingOperatorEnabled: Bool
@@ -13,6 +14,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         enginePort: Int = 38_771,
         repositoryPath: String = FileManager.default.currentDirectoryPath,
         alertsEnabled: Bool = false,
+        crashSignalMonitoringEnabled: Bool = false,
         workerPaused: Bool = false,
         liveTradingOperatorEnabled: Bool = false,
         cryptoLiveTradingOperatorEnabled: Bool = false,
@@ -21,6 +23,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         self.enginePort = enginePort
         self.repositoryPath = repositoryPath
         self.alertsEnabled = alertsEnabled
+        self.crashSignalMonitoringEnabled = crashSignalMonitoringEnabled
         self.workerPaused = workerPaused
         self.liveTradingOperatorEnabled = liveTradingOperatorEnabled
         self.cryptoLiveTradingOperatorEnabled = cryptoLiveTradingOperatorEnabled
@@ -31,6 +34,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         case enginePort
         case repositoryPath
         case alertsEnabled
+        case crashSignalMonitoringEnabled
         case workerPaused
         case liveTradingOperatorEnabled
         case cryptoLiveTradingOperatorEnabled
@@ -42,6 +46,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         self.enginePort = try container.decodeIfPresent(Int.self, forKey: .enginePort) ?? 38_771
         self.repositoryPath = try container.decodeIfPresent(String.self, forKey: .repositoryPath) ?? FileManager.default.currentDirectoryPath
         self.alertsEnabled = try container.decodeIfPresent(Bool.self, forKey: .alertsEnabled) ?? false
+        self.crashSignalMonitoringEnabled = try container.decodeIfPresent(Bool.self, forKey: .crashSignalMonitoringEnabled) ?? false
         self.workerPaused = try container.decodeIfPresent(Bool.self, forKey: .workerPaused) ?? false
         self.liveTradingOperatorEnabled = try container.decodeIfPresent(Bool.self, forKey: .liveTradingOperatorEnabled) ?? false
         self.cryptoLiveTradingOperatorEnabled = try container.decodeIfPresent(Bool.self, forKey: .cryptoLiveTradingOperatorEnabled) ?? false
@@ -1176,6 +1181,39 @@ public struct LocalSymbolSearchResponse: Codable, Equatable, Sendable {
     public let warnings: [String]
 }
 
+public struct SectorStrengthValues: Codable, Equatable, Sendable {
+    public let oneDay: Double?
+    public let oneWeek: Double?
+    public let oneMonth: Double?
+}
+
+public struct SectorStrengthItemView: Codable, Identifiable, Equatable, Sendable {
+    public let id: String
+    public let name: String
+    public let symbol: String
+    public let returns: SectorStrengthValues
+    public let excessReturns: SectorStrengthValues
+    public let quoteAt: String?
+    public let status: String
+}
+
+public struct SectorStrengthErrorView: Codable, Equatable, Sendable {
+    public let symbol: String
+    public let message: String
+}
+
+public struct SectorStrengthResponseView: Codable, Equatable, Sendable {
+    public let market: String
+    public let generatedAt: String
+    public let asOf: String
+    public let marketState: String
+    public let benchmark: SectorStrengthItemView
+    public let sectors: [SectorStrengthItemView]
+    public let errors: [SectorStrengthErrorView]
+    public let stale: Bool
+    public let cacheAgeSeconds: Int
+}
+
 public struct CryptoExchangeContractView: Codable, Equatable, Sendable {
     public let exchange: String
     public let baseUrl: String
@@ -1915,6 +1953,72 @@ public struct LocalWatchlistSummaryResponse: Codable, Equatable, Sendable {
     public let maxItems: Int
     public let generatedAt: String
     public let items: [LocalWatchlistSummaryItem]
+}
+
+public struct WatchlistSignalScanResponse: Codable, Equatable, Sendable {
+    public let generatedAt: String
+    public let monitoringStatus: String
+    public let monitoringMessage: String
+    public let marketContext: WatchlistSignalMarketContext
+    public let items: [WatchlistSignalItem]
+    public let orderSubmissionAttempted: Bool
+}
+
+public struct WatchlistSignalMarketContext: Codable, Equatable, Sendable {
+    public let status: String
+    public let label: String
+    public let changePct: Double?
+    public let recoveryPct: Double?
+    public let quoteAt: String?
+}
+
+public struct WatchlistSignalItem: Codable, Identifiable, Equatable, Sendable {
+    public let id: String
+    public let symbol: String
+    public let name: String?
+    public let market: String
+    public let currency: String
+    public let dataSource: String
+    public let generatedAt: String
+    public let quoteAt: String?
+    public let stale: Bool
+    public let notificationEligible: Bool
+    public let notificationId: String?
+    public let error: String?
+    public let signal: WatchlistCrashSignal
+}
+
+public struct WatchlistCrashSignal: Codable, Equatable, Sendable {
+    public let stage: String
+    public let confidence: String
+    public let label: String
+    public let detail: String
+    public let reasons: [String]
+    public let blockers: [String]
+    public let panicAt: Int?
+    public let confirmationAt: Int?
+    public let quoteAt: Int?
+    public let sessionChangePct: Double?
+    public let recentDropPct: Double?
+    public let volumeRatio: Double?
+    public let rsi14: Double?
+    public let rsi2: Double?
+    public let marketContext: WatchlistSignalMarketContext
+    public let exitPlan: WatchlistCrashExitPlan?
+    public let orderSubmissionAttempted: Bool
+}
+
+public struct WatchlistCrashExitPlan: Codable, Equatable, Sendable {
+    public let entryPrice: Double
+    public let stopPrice: Double
+    public let firstTakeProfit: Double
+    public let secondTakeProfit: Double
+    public let firstAllocationPct: Int
+    public let secondAllocationPct: Int
+    public let riskPerShare: Double
+    public let rewardRisk: Double
+    public let firstTargetBasis: String
+    public let isBrokerStopEligible: Bool
 }
 
 public struct LocalWatchlistItemInput: Encodable, Sendable {

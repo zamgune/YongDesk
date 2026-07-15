@@ -81,6 +81,12 @@ final class AppModel: ObservableObject {
     @Published var watchlistItems: [LocalWatchlistSummaryItem] = []
     @Published var watchlistMaxItems = 20
     @Published var watchlistMessage = "관심종목을 추가하면 현재가와 등락을 한 화면에서 비교할 수 있습니다."
+    @Published var watchlistSignals: [WatchlistSignalItem] = []
+    @Published var watchlistSignalMessage = "급락 감시를 켜면 Toss 확정 5분봉으로 관심종목을 확인합니다."
+    @Published var watchlistSignalMarketContext: WatchlistSignalMarketContext?
+    @Published var sectorStrength: SectorStrengthResponseView?
+    @Published var sectorStrengthMessage = "한국 또는 미국 시장을 선택하면 섹터 강도를 비교합니다."
+    @Published private(set) var isSectorStrengthLoading = false
     @Published var brokerCredential: BrokerCredentialView?
     @Published var brokerAccounts: [BrokerAccountView] = []
     @Published var brokerAccountPreference: BrokerAccountPreferenceView?
@@ -140,6 +146,7 @@ final class AppModel: ObservableObject {
     private var sidecar: Process?
     private var sidecarLogHandle: FileHandle?
     private var newsRefreshTask: Task<Void, Never>?
+    private var watchlistSignalRefreshTask: Task<Void, Never>?
     private var bootstrapStarted = false
     private var communityRefreshGeneration = 0
     private var workspaceAnalysisGeneration = 0
@@ -239,6 +246,8 @@ final class AppModel: ObservableObject {
             await refreshPaperTradingState()
             await refreshStrategyConfigs()
             await refreshWatchlist()
+            await refreshWatchlistSignals(scan: settings.crashSignalMonitoringEnabled && Self.isKRRegularSession())
+            startWatchlistSignalRefreshLoop()
         } else {
             startSidecar()
         }
@@ -405,6 +414,9 @@ final class AppModel: ObservableObject {
                 await refreshStrategyConfigs()
                 await refreshNews()
                 startNewsRefreshLoop()
+                await refreshWatchlist()
+                await refreshWatchlistSignals(scan: settings.crashSignalMonitoringEnabled && Self.isKRRegularSession())
+                startWatchlistSignalRefreshLoop()
                 return
             }
             if sidecar == nil {
@@ -421,6 +433,8 @@ final class AppModel: ObservableObject {
     func stopSidecar() {
         newsRefreshTask?.cancel()
         newsRefreshTask = nil
+        watchlistSignalRefreshTask?.cancel()
+        watchlistSignalRefreshTask = nil
         if let process = sidecar {
             ManagedChildProcessTerminator.terminate(process)
         }
@@ -1786,6 +1800,68 @@ final class AppModel: ObservableObject {
         }
     }
 
+    func watchlistSignal(for symbol: String) -> WatchlistSignalItem? {
+        let normalized = symbol.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        return watchlistSignals.first { $0.symbol.uppercased() == normalized }
+    }
+
+    func refreshWatchlistSignals(scan: Bool = true) async {
+        do {
+            let response = try await (scan ? client.scanWatchlistSignals() : client.watchlistSignals())
+            watchlistSignals = response.items
+            watchlistSignalMarketContext = response.marketContext
+            watchlistSignalMessage = response.monitoringMessage
+            if scan && settings.crashSignalMonitoringEnabled {
+                let alerts = response.items.filter { $0.notificationEligible && $0.signal.stage == "entry-ready" }
+                if !alerts.isEmpty {
+                    await notifier.requestAuthorization()
+                    for item in alerts.prefix(3) {
+                        await notifier.deliverCrashSignal(item)
+                    }
+                }
+            }
+        } catch {
+            watchlistSignalMessage = "급락 감시 실패: \(Self.errorMessage(error))"
+        }
+    }
+
+    func toggleCrashSignalMonitoring() async {
+        settings.crashSignalMonitoringEnabled.toggle()
+        try? store.saveSettings(settings)
+        if settings.crashSignalMonitoringEnabled {
+            await notifier.requestAuthorization()
+            await refreshWatchlistSignals(scan: Self.isKRRegularSession())
+            startWatchlistSignalRefreshLoop()
+        } else {
+            watchlistSignalRefreshTask?.cancel()
+            watchlistSignalRefreshTask = nil
+            watchlistSignalMessage = "급락 감시가 꺼져 있습니다. 저장된 마지막 결과만 표시합니다."
+        }
+    }
+
+    private func startWatchlistSignalRefreshLoop() {
+        guard settings.crashSignalMonitoringEnabled, watchlistSignalRefreshTask == nil else { return }
+        watchlistSignalRefreshTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(60))
+                guard !Task.isCancelled, let self else { return }
+                guard self.health?.ok == true, Self.isKRRegularSession() else { continue }
+                await self.refreshWatchlistSignals(scan: true)
+            }
+        }
+    }
+
+    private static func isKRRegularSession(_ date: Date = Date()) -> Bool {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "Asia/Seoul") ?? .current
+        let weekday = calendar.component(.weekday, from: date)
+        let hour = calendar.component(.hour, from: date)
+        let minute = calendar.component(.minute, from: date)
+        guard weekday >= 2 && weekday <= 6 else { return false }
+        let minutes = hour * 60 + minute
+        return minutes >= 9 * 60 && minutes < 15 * 60 + 30
+    }
+
     func addWatchlistItem(symbol: String, assetClass: String, market: String, name: String? = nil) async {
         do {
             let response = try await client.addWatchlistItem(
@@ -2017,6 +2093,26 @@ final class AppModel: ObservableObject {
         } catch {
             latestChartAnalysis = nil
             workspaceAnalysisMessage = "\(timeframe.rawValue) 차트 조회 실패: \(Self.errorMessage(error))"
+        }
+    }
+
+    func refreshSectorStrength(market: String, forceRefresh: Bool = false) async {
+        isSectorStrengthLoading = true
+        sectorStrengthMessage = "\(market == "US" ? "미국" : "한국") 섹터 시세를 불러오는 중입니다."
+        defer { isSectorStrengthLoading = false }
+        do {
+            let response = try await client.sectorStrength(market: market, forceRefresh: forceRefresh)
+            sectorStrength = response
+            let loaded = response.sectors.count
+            let warning = response.errors.isEmpty ? "" : " · 일부 조회 실패 \(response.errors.count)개"
+            let stale = response.stale ? " · 이전 데이터" : ""
+            sectorStrengthMessage = "섹터 \(loaded)개 조회\(warning)\(stale)"
+            statusLine = "\(market) sector strength loaded"
+            lastUpdated = Self.timeFormatter.string(from: Date())
+        } catch {
+            let message = Self.errorMessage(error)
+            sectorStrengthMessage = "섹터 강도 조회 실패: \(message)"
+            statusLine = message
         }
     }
 
@@ -12173,6 +12269,25 @@ final class NotificationService {
             trigger: nil
         )
         try? await UNUserNotificationCenter.current().add(request)
+    }
+
+    func deliverCrashSignal(_ item: WatchlistSignalItem) async {
+        guard let plan = item.signal.exitPlan else { return }
+        let content = UNMutableNotificationContent()
+        content.title = "\(item.name ?? item.symbol) · 매수 검토 가능"
+        content.body = "기준 \(Self.price(plan.entryPrice)) · 손절 \(Self.price(plan.stopPrice)) · 1차 \(Self.price(plan.firstTakeProfit)) · 자동 주문 아님"
+        content.sound = .default
+        content.userInfo = ["symbol": item.symbol, "kind": "crash-reversal"]
+        let request = UNNotificationRequest(
+            identifier: "crash-\(item.notificationId ?? item.symbol)",
+            content: content,
+            trigger: nil
+        )
+        try? await UNUserNotificationCenter.current().add(request)
+    }
+
+    private static func price(_ value: Double) -> String {
+        value.formatted(.number.precision(.fractionLength(value >= 1_000 ? 0 : 2)))
     }
 }
 

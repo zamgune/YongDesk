@@ -189,6 +189,10 @@ import {
   removeWatchlistItem,
   WatchlistRequestError,
 } from "../src/lib/local-engine/watchlist.ts";
+import {
+  getStoredWatchlistSignals,
+  scanWatchlistSignals,
+} from "../src/lib/local-engine/watchlist-signals.ts";
 import { buildPaperTradingCandidates } from "../src/use-cases/trading/build-paper-trading-candidates.ts";
 import {
   PAPER_STRATEGY_VERSION,
@@ -5405,6 +5409,10 @@ const callRoute = async (request: Request, pathname: string) => {
     const { GET } = await import("../src/app/api/briefing/daily-market/route.ts");
     return GET(request);
   }
+  if (pathname === "/api/local/sector-strength") {
+    const { GET } = await import("../src/app/api/local/sector-strength/route.ts");
+    return GET(request);
+  }
   const marketMatch = pathname.match(/^\/api\/market\/([^/]+)$/);
   if (marketMatch?.[1]) {
     const { GET } = await import("../src/app/api/market/[symbol]/route.ts");
@@ -5558,7 +5566,11 @@ export const handleLocalEngineRequest = async (request: Request): Promise<Respon
         },
       });
     }
-    if (request.method === "GET" && (url.pathname === "/api/briefing/daily-market" || /^\/api\/market\/[^/]+$/.test(url.pathname))) {
+    if (request.method === "GET" && (
+      url.pathname === "/api/briefing/daily-market" ||
+      url.pathname === "/api/local/sector-strength" ||
+      /^\/api\/market\/[^/]+$/.test(url.pathname)
+    )) {
       return callRoute(request, url.pathname);
     }
     if (request.method === "GET" && url.pathname === "/api/automation/health") {
@@ -5615,6 +5627,12 @@ export const handleLocalEngineRequest = async (request: Request): Promise<Respon
     }
     if (request.method === "GET" && url.pathname === "/api/local/watchlist/summary") {
       return jsonResponse(await getWatchlistSummary());
+    }
+    if (request.method === "GET" && url.pathname === "/api/local/watchlist/signals") {
+      return jsonResponse(await getStoredWatchlistSignals());
+    }
+    if (request.method === "POST" && url.pathname === "/api/local/watchlist/signal-scan") {
+      return jsonResponse(await scanWatchlistSignals());
     }
     if (request.method === "GET" && url.pathname === "/api/local/portfolio/real") {
       return realPortfolioState(url);

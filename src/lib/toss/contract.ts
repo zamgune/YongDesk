@@ -15,6 +15,7 @@ export const TOSS_OPENAPI_REQUIRED_OPERATIONS: readonly TossOpenApiRequiredOpera
   { path: "/api/v1/accounts", method: "get", accountHeader: false, purpose: "Toss account list" },
   { path: "/api/v1/prices", method: "get", accountHeader: false, purpose: "current prices" },
   { path: "/api/v1/candles", method: "get", accountHeader: false, purpose: "candles" },
+  { path: "/api/v1/market-indicators/{symbol}/candles", method: "get", accountHeader: false, purpose: "market indicator candles" },
   { path: "/api/v1/orderbook", method: "get", accountHeader: false, purpose: "orderbook" },
   { path: "/api/v1/trades", method: "get", accountHeader: false, purpose: "recent trades" },
   { path: "/api/v1/price-limits", method: "get", accountHeader: false, purpose: "KR price limits" },
