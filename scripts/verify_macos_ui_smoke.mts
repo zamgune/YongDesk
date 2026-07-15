@@ -608,7 +608,7 @@ const verifyCoreFlow = () => {
   clickAX("beginner-analysis-tab-analysis");
   waitForAX("beginner-horizon-picker");
   const horizons = [
-    ["단타", "beginner-horizon-day"],
+    ["1~3일 단기", "beginner-horizon-day"],
     ["스윙", "beginner-horizon-swing"],
   ] as const;
   for (const [horizonName, horizonIdentifier] of horizons) {
