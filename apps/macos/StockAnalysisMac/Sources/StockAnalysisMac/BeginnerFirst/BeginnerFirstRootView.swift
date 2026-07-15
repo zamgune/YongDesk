@@ -76,9 +76,24 @@ struct BeginnerFirstRootView: View {
                                 querySession: assetClass == .stock ? stockMarket.session : "US",
                                 healthOK: model.health?.ok == true,
                                 lastUpdated: model.lastUpdated,
-                                isLoading: isLoading,
+                                isLoading: destination == .sentiment ? model.isSentimentOverviewLoading : isLoading,
+                                primaryActionTitle: destination == .sentiment ? "종목 민심 새로고침" : "분석",
+                                primaryActionSystemImage: destination == .sentiment ? "arrow.clockwise" : "sparkles",
+                                primaryActionAccessibilityIdentifier: destination == .sentiment
+                                    ? "beginner-sentiment-refresh"
+                                    : "beginner-analyze-button",
                                 onSymbolResolved: { selectedSymbolName = $0 },
-                                onAnalyze: { Task { await runAnalysis() } }
+                                onSymbolSelected: {
+                                    guard destination != .sentiment else { return }
+                                    Task { await runAnalysis() }
+                                },
+                                onPrimaryAction: {
+                                    if destination == .sentiment {
+                                        Task { _ = await refreshSentimentOverview(forceRefresh: true) }
+                                    } else {
+                                        Task { await runAnalysis() }
+                                    }
+                                }
                             )
                         }
 
@@ -114,9 +129,19 @@ struct BeginnerFirstRootView: View {
         .sheet(item: $activeSheet) { sheet in
             sheetContent(sheet)
         }
+        .task(id: destination) {
+            guard destination == .sentiment,
+                  assetClass != .stock || selectedSymbol.uppercased().hasPrefix("KRW-") else {
+                return
+            }
+            assetClass = .stock
+            selectedSymbol = stockMarket == .korea ? "005930.KS" : "AAPL"
+            selectedSymbolName = nil
+        }
         .task(id: model.health?.ok == true) {
             guard model.settings.hasCompletedOnboarding,
                   model.health?.ok == true,
+                  destination == .chart,
                   analysis == nil,
                   !isLoading else {
                 return
@@ -180,6 +205,14 @@ struct BeginnerFirstRootView: View {
                 },
                 onSelect: { item, market in
                     selectSectorETF(item, market: market)
+                }
+            )
+        case .sentiment:
+            BeginnerSentimentWorkspace(
+                selectedSymbol: selectedSymbol,
+                stockMarket: stockMarket,
+                onRefresh: { force in
+                    await refreshSentimentOverview(forceRefresh: force)
                 }
             )
         case .watchlist:
@@ -252,8 +285,13 @@ struct BeginnerFirstRootView: View {
     }
 
     private func selectDestination(_ next: BeginnerDestination) {
-        if next == .sector {
+        let wasCrypto = assetClass == .crypto || selectedSymbol.uppercased().hasPrefix("KRW-")
+        if next == .sector || next == .sentiment {
             assetClass = .stock
+        }
+        if next == .sentiment, wasCrypto {
+            selectedSymbol = stockMarket == .korea ? "005930.KS" : "AAPL"
+            selectedSymbolName = nil
         }
         destination = next
         workspaceRevision = UUID()
@@ -283,6 +321,9 @@ struct BeginnerFirstRootView: View {
         guard assetClass == .stock else { return }
         selectedSymbol = next == .korea ? "005930.KS" : "AAPL"
         selectedSymbolName = nil
+        if destination == .sentiment {
+            return
+        }
         destination = .chart
         Task { await runAnalysis() }
     }
@@ -373,6 +414,25 @@ struct BeginnerFirstRootView: View {
         )
     }
 
+    private func refreshSentimentOverview(forceRefresh: Bool) async -> SentimentOverviewResponseView? {
+        guard await ensureEngineReady() else {
+            let hasMatchingPrevious = model.sentimentOverview.map {
+                beginnerCanonicalSymbol($0.canonicalSymbol) == beginnerCanonicalSymbol(selectedSymbol) &&
+                    $0.symbolMarket == stockMarket.session
+            } ?? false
+            model.sentimentOverviewUsingPreviousData = hasMatchingPrevious
+            model.sentimentOverviewErrorMessage = hasMatchingPrevious
+                ? "로컬 엔진에 연결하지 못해 이전 민심 데이터를 유지합니다."
+                : "로컬 엔진에 연결하지 못했습니다. 설정에서 엔진 상태와 로그를 확인하세요."
+            return nil
+        }
+        return await model.refreshSentimentOverview(
+            symbol: selectedSymbol,
+            market: stockMarket.session,
+            forceRefresh: forceRefresh
+        )
+    }
+
     private func addCurrentToWatchlist() async {
         let market = assetClass == .crypto ? "CRYPTO" : selectedSession
         await model.addWatchlistItem(
@@ -429,7 +489,7 @@ private struct BeginnerSidebar: View {
 
     @State private var hoveredDestination: BeginnerDestination?
 
-    private let primaryDestinations: [BeginnerDestination] = [.chart, .sector, .watchlist, .assets, .strategy, .automation]
+    private let primaryDestinations: [BeginnerDestination] = [.chart, .sector, .sentiment, .watchlist, .assets, .strategy, .automation]
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -543,8 +603,12 @@ private struct BeginnerTopBar: View {
     let healthOK: Bool
     let lastUpdated: String
     let isLoading: Bool
+    let primaryActionTitle: String
+    let primaryActionSystemImage: String
+    let primaryActionAccessibilityIdentifier: String
     let onSymbolResolved: (String?) -> Void
-    let onAnalyze: () -> Void
+    let onSymbolSelected: () -> Void
+    let onPrimaryAction: () -> Void
 
     var body: some View {
         HStack(spacing: 12) {
@@ -576,24 +640,24 @@ private struct BeginnerTopBar: View {
                 selectedSymbol: $selectedSymbol,
                 querySession: querySession,
                 onSymbolResolved: onSymbolResolved,
-                onAnalyze: onAnalyze
+                onAnalyze: onSymbolSelected
             )
             .frame(maxWidth: 520)
 
             Button {
-                onAnalyze()
+                onPrimaryAction()
             } label: {
                 if isLoading {
                     ProgressView().controlSize(.small)
                 } else {
-                    Label("분석", systemImage: "sparkles")
+                    Label(primaryActionTitle, systemImage: primaryActionSystemImage)
                 }
             }
             .buttonStyle(.borderedProminent)
             .tint(BeginnerPalette.green)
             .foregroundStyle(BeginnerPalette.backgroundDeep)
             .disabled(isLoading)
-            .accessibilityIdentifier("beginner-analyze-button")
+            .accessibilityIdentifier(primaryActionAccessibilityIdentifier)
 
             Spacer(minLength: 4)
 

@@ -87,6 +87,11 @@ final class AppModel: ObservableObject {
     @Published var sectorStrength: SectorStrengthResponseView?
     @Published var sectorStrengthMessage = "한국 또는 미국 시장을 선택하면 섹터 강도를 비교합니다."
     @Published private(set) var isSectorStrengthLoading = false
+    @Published var sentimentOverview: SentimentOverviewResponseView?
+    @Published var sentimentOverviewMessage = "종목을 선택하면 한국·해외 커뮤니티 반응을 비교합니다."
+    @Published var sentimentOverviewErrorMessage: String?
+    @Published var sentimentOverviewUsingPreviousData = false
+    @Published private(set) var isSentimentOverviewLoading = false
     @Published var brokerCredential: BrokerCredentialView?
     @Published var brokerAccounts: [BrokerAccountView] = []
     @Published var brokerAccountPreference: BrokerAccountPreferenceView?
@@ -152,6 +157,7 @@ final class AppModel: ObservableObject {
     private var watchlistSignalRefreshTask: Task<Void, Never>?
     private var bootstrapStarted = false
     private var communityRefreshGeneration = 0
+    private var sentimentRefreshGeneration = 0
     private var workspaceAnalysisGeneration = 0
 
     var menuBarIcon: String {
@@ -2116,6 +2122,74 @@ final class AppModel: ObservableObject {
             let message = Self.errorMessage(error)
             sectorStrengthMessage = "섹터 강도 조회 실패: \(message)"
             statusLine = message
+        }
+    }
+
+    @discardableResult
+    func refreshSentimentOverview(
+        symbol: String,
+        market: String,
+        forceRefresh: Bool = false
+    ) async -> SentimentOverviewResponseView? {
+        let normalizedSymbol = symbol.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        let normalizedMarket = market == "US" ? "US" : "KR"
+        guard !normalizedSymbol.isEmpty else {
+            sentimentOverviewMessage = "민심을 조회할 종목을 먼저 선택하세요."
+            return nil
+        }
+
+        sentimentRefreshGeneration += 1
+        let requestGeneration = sentimentRefreshGeneration
+        isSentimentOverviewLoading = true
+        sentimentOverviewErrorMessage = nil
+        sentimentOverviewUsingPreviousData = false
+        sentimentOverviewMessage = "\(normalizedSymbol) 수집된 반응을 확인 중입니다."
+        defer {
+            if requestGeneration == sentimentRefreshGeneration {
+                isSentimentOverviewLoading = false
+            }
+        }
+
+        do {
+            let response = try await client.sentimentOverview(
+                symbol: normalizedSymbol,
+                market: normalizedMarket,
+                forceRefresh: forceRefresh
+            )
+            guard requestGeneration == sentimentRefreshGeneration else {
+                return nil
+            }
+            guard canonicalCommunitySymbol(response.canonicalSymbol) == canonicalCommunitySymbol(normalizedSymbol),
+                  response.symbolMarket == normalizedMarket else {
+                throw NSError(
+                    domain: "YongStockDesk.SentimentOverview",
+                    code: 1,
+                    userInfo: [NSLocalizedDescriptionKey: "민심 응답의 종목 또는 시장이 현재 선택과 다릅니다."]
+                )
+            }
+
+            sentimentOverview = response
+            let stale = response.stale ? " · 이전 데이터" : ""
+            sentimentOverviewMessage = "\(normalizedSymbol) 민심 갱신\(stale)"
+            statusLine = "\(normalizedSymbol) sentiment overview loaded"
+            lastUpdated = Self.timeFormatter.string(from: Date())
+            return response
+        } catch {
+            guard requestGeneration == sentimentRefreshGeneration else {
+                return nil
+            }
+            let message = Self.errorMessage(error)
+            let hasMatchingPrevious = sentimentOverview.map {
+                canonicalCommunitySymbol($0.canonicalSymbol) == canonicalCommunitySymbol(normalizedSymbol) &&
+                    $0.symbolMarket == normalizedMarket
+            } ?? false
+            sentimentOverviewUsingPreviousData = hasMatchingPrevious
+            sentimentOverviewErrorMessage = hasMatchingPrevious
+                ? "민심 갱신 실패 · 이전 데이터를 유지합니다: \(message)"
+                : "민심 조회 실패: \(message)"
+            sentimentOverviewMessage = sentimentOverviewErrorMessage ?? "민심 조회 실패"
+            statusLine = message
+            return hasMatchingPrevious ? sentimentOverview : nil
         }
     }
 

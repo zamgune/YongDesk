@@ -10,6 +10,7 @@ extension Notification.Name {
 enum BeginnerDestination: String, CaseIterable, Identifiable {
     case chart
     case sector
+    case sentiment
     case watchlist
     case assets
     case strategy
@@ -22,6 +23,7 @@ enum BeginnerDestination: String, CaseIterable, Identifiable {
         switch self {
         case .chart: return "차트"
         case .sector: return "섹터"
+        case .sentiment: return "민심"
         case .watchlist: return "관심종목"
         case .assets: return "내 자산"
         case .strategy: return "전략"
@@ -34,6 +36,7 @@ enum BeginnerDestination: String, CaseIterable, Identifiable {
         switch self {
         case .chart: return "chart.xyaxis.line"
         case .sector: return "square.grid.3x3.fill"
+        case .sentiment: return "bubble.left.and.text.bubble.right.fill"
         case .watchlist: return "star"
         case .assets: return "wallet.bifold"
         case .strategy: return "slider.horizontal.3"

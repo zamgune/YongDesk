@@ -1214,6 +1214,85 @@ public struct SectorStrengthResponseView: Codable, Equatable, Sendable {
     public let cacheAgeSeconds: Int
 }
 
+public struct SentimentReactionRatiosView: Codable, Equatable, Sendable {
+    public let bullishHype: Int
+    public let bearishCriticism: Int
+    public let mixed: Int
+    public let neutral: Int
+
+    public var total: Int {
+        bullishHype + bearishCriticism + mixed + neutral
+    }
+}
+
+public struct SentimentSourceStatView: Codable, Identifiable, Equatable, Sendable {
+    public let id: String
+    public let label: String?
+    public let status: String
+    public let reason: String?
+    public let itemCount: Int?
+}
+
+public struct SentimentEvidenceView: Codable, Identifiable, Equatable, Sendable {
+    public let classification: String?
+    public let sourceId: String?
+    public let sourceLabel: String?
+    public let title: String?
+    public let url: String?
+    public let engagement: Int?
+    public let symbol: String?
+
+    public var id: String {
+        [classification, sourceId, url, title]
+            .compactMap { $0 }
+            .joined(separator: "|")
+    }
+}
+
+public struct SentimentBucketView: Codable, Equatable, Sendable {
+    public let status: String
+    public let ratios: SentimentReactionRatiosView?
+    public let sampleCount: Int?
+    public let uniqueAuthorCount: Int?
+    public let effectiveWindowHours: Int?
+    public let pain: Double?
+    public let fomo: Double?
+    public let toxicity: Double?
+    public let sourceStats: [SentimentSourceStatView]?
+    public let evidence: [SentimentEvidenceView]?
+    public let reason: String?
+    public let generatedAt: String?
+    public let stale: Bool?
+    public let basis: String?
+    public let universeCount: Int?
+    public let coverageCount: Int?
+    public let bullishBreadth: Int?
+    public let bearishBreadth: Int?
+    public let rankedAt: String?
+}
+
+public struct SentimentInstrumentOverviewView: Codable, Equatable, Sendable {
+    public let krCommunity: SentimentBucketView
+    public let globalCommunity: SentimentBucketView
+}
+
+public struct SentimentMarketComparisonView: Codable, Equatable, Sendable {
+    public let status: String
+    public let reason: String?
+    public let kr: SentimentBucketView?
+    public let us: SentimentBucketView?
+}
+
+public struct SentimentOverviewResponseView: Codable, Equatable, Sendable {
+    public let symbol: String
+    public let canonicalSymbol: String
+    public let symbolMarket: String
+    public let generatedAt: String
+    public let stale: Bool
+    public let instrument: SentimentInstrumentOverviewView
+    public let marketComparison: SentimentMarketComparisonView
+}
+
 public struct CryptoExchangeContractView: Codable, Equatable, Sendable {
     public let exchange: String
     public let baseUrl: String

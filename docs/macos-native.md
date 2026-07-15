@@ -5,7 +5,7 @@
 ## 아키텍처
 
 - SwiftUI가 메인 대시보드, 설정 시트, 메뉴바, 알림, Keychain과 App Support 상태를 담당한다.
-- 기본 창은 `BeginnerFirstRootView`이며 차트·섹터·관심종목·내 자산·전략·자동화·설정 workspace를 분리한다. API credential은 설정 workspace의 인라인 연결 관리에서 등록하고, 전략·점검·배포·로그 시트는 그대로 재사용한다.
+- 기본 창은 `BeginnerFirstRootView`이며 차트·섹터·민심·관심종목·내 자산·전략·자동화·설정 workspace를 분리한다. 기본 사이드바 앞 순서는 `차트 → 섹터 → 민심 → 관심종목`이다. API credential은 설정 workspace의 인라인 연결 관리에서 등록하고, 전략·점검·배포·로그 시트는 그대로 재사용한다.
 - 차트 workspace는 페이지 스크롤이 없는 `차트 + 우측 인스펙터` 구조다. 인스펙터의 `분석 / 주문 / 뉴스` 내용만 스크롤하며 1024×720에서 접을 수 있다.
 - 앱은 번들된 TypeScript sidecar를 `127.0.0.1`의 임의 포트에서 자동 시작한다.
 - sidecar는 `src/domain`, `src/use-cases`, `src/ports`와 `src/adapters`의 기존 분석·자동화·브로커 코드를 재사용한다.
@@ -43,7 +43,8 @@ curl http://127.0.0.1:38771/health
 | 멀티타임프레임 | `GET /api/local/analysis/workspace` | 1시간·4시간·일봉 분석, metadata와 단타·스윙·장기 계획 |
 | 관심종목 | `GET/POST /api/local/watchlist`, `DELETE /api/local/watchlist/:id`, `GET /api/local/watchlist/summary` | 이 Mac의 관심종목 저장과 시세·일봉 기술 요약·커뮤니티 민심·관심도 요약. 코인은 이번 버전에서 시세만 제공 |
 | 급락 감시 | `POST /api/local/watchlist/signal-scan`, `GET /api/local/watchlist/signals` | 한국 주식 관심종목의 Toss 확정 5분봉 급락·반전 상태, KOSPI 문맥, 분석 기준 진입·손절·50/50 익절 계획. 주문 제출 없음 |
-| 뉴스·민심 | `GET /api/news/events`, `GET /api/community-pain/:symbol` | 공식/RSS 뉴스와 종목별 커뮤니티 근거 |
+| 뉴스·민심 | `GET /api/news/events`, `GET /api/community-pain/:symbol` | 공식/RSS 뉴스와 기존 차트 패널의 종목별 커뮤니티 근거 |
+| 민심 레이더 | `GET /api/local/sentiment-overview?symbol=005930.KS&market=KR[&refresh=1]` | 현재 종목의 한국·해외 수집 반응과 한국·미국 거래대금 상위 30종목 시장 비교 |
 | 대시보드 | `GET /api/dashboard/terminal`, `POST /api/dashboard/playbook` | macOS 대시보드와 포지션 메모 |
 | Toss | `/api/local/broker/credentials`, `/api/local/toss/readiness` | credential과 계좌 준비 상태 |
 | 주문 | `/api/local/holdings`, `/api/local/orders/precheck`, `/api/local/orders/sync` | 조회·사전검증·체결 동기화 |
@@ -102,6 +103,20 @@ curl http://127.0.0.1:38771/health
 - 1일은 정규장 현재가와 전일 종가를 우선 사용해 `장중 잠정`으로 표시하고, 1주·1개월은 각각 확정 일봉 5·21거래일 기준이다. 강도는 `ETF 수익률 - 시장 벤치마크 수익률`이며 주문 신호가 아니다.
 - sidecar는 Yahoo provider 요청을 최대 4개씩 처리하고 시장별 결과를 5분 캐시한다. 개별 ETF 실패는 성공 항목을 유지하면서 제외 종목을 표시하고, 벤치마크 실패는 상대강도 계산을 중단한다. 이전 성공 결과가 있으면 `이전 데이터`로 명시한다.
 
+### 민심 레이더
+
+- 사이드바의 `민심`은 macOS 전용 `BeginnerSentimentWorkspace`를 연다. 코인에서 진입하면 마지막으로 사용한 주식 시장의 기본 종목으로 전환하고, 민심 화면 안에서 한국·미국을 바꾸면 각각 `005930.KS`, `AAPL`을 선택한 채 workspace를 유지한다.
+- `GET /api/local/sentiment-overview`는 `instrument.krCommunity`, `instrument.globalCommunity`, `marketComparison.status`, `marketComparison.kr`, `marketComparison.us`를 반환한다. 종목 검색 결과 선택과 자동 분석 뒤 로드는 캐시를 사용하고, 상단 `종목 민심 새로고침`만 현재 종목 요청에 `refresh=1`을 붙인다.
+- 각 종목 버킷은 `status`, nullable `ratios`, `sampleCount`, 가능한 경우 `uniqueAuthorCount`, `effectiveWindowHours`, `pain`, `fomo`, `toxicity`, 소스 상태·오류·근거 링크, `generatedAt`, `stale`을 제공한다. 네 분류는 `bullish_hype`(가즈아), `bearish_criticism`(비관·비난), `mixed`(혼재), `neutral`(중립)이며, 욕설은 방향을 바꾸지 않고 `toxicity`에만 반영한다.
+- 비율 분모는 날짜가 확인된 최상위 글이며 댓글·답글은 FOMO·공포 점수와 근거 링크에만 사용한다. 기본 24시간 표본이 5건 미만이면 버킷 전체를 72시간으로 확장한다. 20건 이상은 `ready`, 5~19건은 `low_evidence`, 5건 미만은 `unavailable`이다.
+- 화면의 100% 막대는 사람이 아니라 중복 제거와 작성자 상한을 적용한 **실험적인 수집된 반응 비율**이다. 사용 가능한 네 정수 비율은 합계 100을 유지하고, `unavailable`은 0%로 그리지 않고 `비교 불가`와 원인을 표시한다.
+- 한국 종목의 한국 반응은 Paxnet, 한국 종목의 해외 반응과 미국 종목의 해외 반응은 종목 영문명·별칭을 사용하는 Reddit OAuth에서 읽는다. 미국 종목의 한국 반응은 지원 소스가 없어 `unsupported_source_coverage`이며, 연결·부분 실패·이전 데이터 상태를 행별로 노출한다.
+- 시장 비교는 Toss `MARKET_TRADING_AMOUNT`, 1일 기준의 한국·미국 상위 30종목을 사용한다. 한국 시장은 Paxnet, 미국 시장은 Reddit을 종목별 동일가중으로 집계하며 게시물 수가 많은 종목에 가중치를 더하지 않는다. Toss 순위 또는 Reddit 인증이 없으면 Yahoo·고정 종목으로 대체하지 않고 시장 비교 전체와 차이(%p)를 숨긴 뒤 연결 조건을 안내한다.
+- 시장 버킷은 `basis`, `universeCount=30`, `coverageCount`, 가즈아·비관 우세 종목 수와 `rankedAt`을 추가로 반환한다. 20종목 이상·총 100건 이상은 `ready`, 10종목 이상·총 50건 이상은 `low_evidence`, 그 미만은 `unavailable`이다.
+- 종목 성공 응답은 30분, 실패는 1분 캐시하고 single-flight로 합친다. 강제 갱신은 선택 종목만 갱신하며 30초 연속 요청을 제한한다. 시장 집계는 30분 TTL, 실패 후 5분 backoff, 시장별 동시성 2를 사용한다.
+- 최초 시장 집계는 `warming`을 즉시 반환하고 백그라운드 단일 작업을 시작한다. 화면이 보이는 동안 5초 간격으로 최대 60초 다시 조회한다. App Support에는 원문 없이 집계 비율·유니버스·상태만 저장하며, 24시간 이내 이전 집계는 `stale`과 `이전 데이터`를 표시하면서 갱신한다.
+- 민심 결과는 매수 신호나 추천이 아니며 전략, `OrderIntent`, `RiskCheck`, broker submit, 주문·자동화 경로에 전달하지 않는다. 기존 차트의 민심 패널과 웹 `/sentiment`는 이번 workspace와 별도로 유지한다.
+
 ### Toss 연결
 
 - `검증 후 저장`은 token과 계좌 endpoint를 확인한 뒤 credential을 저장한다.
@@ -145,8 +160,8 @@ curl http://127.0.0.1:38771/health
 
 - 공식 Federal Reserve, SEC, BEA RSS는 앱 실행 중 2분마다 polling한다. 동시 갱신은 single-flight로 합치고 실패 소스에는 지수 backoff를 적용한다. 이는 streaming 실시간 뉴스가 아니다.
 - 선택 종목과 직접 연결된 ticker 뉴스, 금리·고용·GDP·무역 같은 거시 뉴스만 개요의 관련 뉴스에 표시한다.
-- 커뮤니티 민심은 사용자가 `뉴스·알림 갱신`을 실행할 때 선택 종목 기준으로 계산한다. 정상 응답은 30분 캐시하지만 수동 갱신은 캐시를 우회하고, 소스 오류·timeout 응답은 1분만 캐시한다.
-- `lowEvidence=true`이면 점수보다 `근거 부족`을 우선 표시한다. 민심 데이터는 참고 근거이며 `OrderIntent`, `RiskCheck` 또는 broker 입력으로 사용하지 않는다.
+- 기존 차트 패널의 커뮤니티 민심은 사용자가 `뉴스·알림 갱신`을 실행할 때 `/api/community-pain/:symbol`로 계산한다. 정상 응답은 30분 캐시하지만 수동 갱신은 캐시를 우회하고, 소스 오류·timeout 응답은 1분만 캐시한다. 새 `민심 레이더` 계약과 캐시는 위 절을 따른다.
+- 기존 응답의 `lowEvidence=true`이면 점수보다 `근거 부족`을 우선 표시한다. 기존 패널과 민심 레이더 모두 참고 근거이며 `OrderIntent`, `RiskCheck`, broker 또는 주문 자동화 입력으로 사용하지 않는다.
 - Reddit은 뉴스·알림 화면에서 Client ID와 Secret을 입력하면 이 Mac의 Keychain에 저장하고 sidecar를 재시작해 공식 OAuth API로만 읽는다. 앱이 관리하는 sidecar는 부모 Reddit 환경변수를 상속하지 않으며, 환경변수 방식은 독립 실행한 개발용 sidecar에서만 유지한다. 설정이 없으면 `configuration-required`로 표시한다.
 - 일반 시작은 Toss·Upbit·Bithumb 비밀값을 읽지 않고 sidecar의 비민감 상태만 사용한다. Reddit은 연결된 경우 비대화식으로 최대 한 번 읽으며, 권한 확인 UI가 필요하면 값을 노출하지 않고 연결되지 않은 상태로 시작한다.
 - `Keychain 권한 재설정`은 사용자가 명시적으로 실행할 때만 상호작용 읽기를 허용하고, 현재 정식 서명 기준으로 항목을 재등록한다. 재등록 실패 시 메모리의 원본으로 복구를 시도하며 자동 삭제나 로그 노출을 하지 않는다.

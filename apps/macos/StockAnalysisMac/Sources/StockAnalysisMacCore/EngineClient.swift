@@ -558,6 +558,30 @@ public struct EngineClient: Sendable {
         return try await getJSON("/api/local/sector-strength?market=\(normalized)\(refresh)", timeout: 60)
     }
 
+    public func sentimentOverview(
+        symbol: String,
+        market: String,
+        forceRefresh: Bool = false
+    ) async throws -> SentimentOverviewResponseView {
+        let normalizedSymbol = symbol.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedSymbol.isEmpty else {
+            throw URLError(.badURL)
+        }
+        var components = URLComponents()
+        components.path = "/api/local/sentiment-overview"
+        components.queryItems = [
+            URLQueryItem(name: "symbol", value: normalizedSymbol),
+            URLQueryItem(name: "market", value: market == "US" ? "US" : "KR"),
+        ]
+        if forceRefresh {
+            components.queryItems?.append(URLQueryItem(name: "refresh", value: "1"))
+        }
+        guard let path = components.string else {
+            throw URLError(.badURL)
+        }
+        return try await getJSON(path, timeout: 60)
+    }
+
     private func getJSON<T: Decodable>(_ path: String, timeout: TimeInterval? = nil) async throws -> T {
         try decoder.decode(T.self, from: try await getData(path, timeout: timeout))
     }
