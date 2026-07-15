@@ -14,8 +14,6 @@ struct BeginnerFirstRootView: View {
     @State private var selectedChartTimeframe: BeginnerChartTimeframe = .oneDay
     @State private var resultPreview = ""
     @State private var isLoading = false
-    @State private var showingOrderDrawer = false
-    @State private var showingLiveOrderDrawer = false
     @State private var activeSheet: BeginnerSettingsSheet?
     @State private var selectedConnectionProvider: BeginnerAPIConnectionProvider = .toss
     @State private var workspaceRevision = UUID()
@@ -89,53 +87,7 @@ struct BeginnerFirstRootView: View {
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                     }
                 }
-                .accessibilityHidden(showingOrderDrawer || showingLiveOrderDrawer || !model.settings.hasCompletedOnboarding)
-
-                if showingOrderDrawer {
-                    Color.black.opacity(0.34)
-                        .ignoresSafeArea()
-                        .onTapGesture { showingOrderDrawer = false }
-                        .accessibilityHidden(true)
-
-                    BeginnerPaperOrderDrawer(
-                        selectedSymbol: selectedSymbol,
-                        selectedSession: selectedSession,
-                        resultPreview: $resultPreview,
-                        isLoading: $isLoading,
-                        onClose: { showingOrderDrawer = false },
-                        onOpenStrategy: {
-                            showingOrderDrawer = false
-                            destination = .strategy
-                        },
-                        onOpenLiveOrder: {
-                            showingOrderDrawer = false
-                            showingLiveOrderDrawer = true
-                        }
-                    )
-                    .frame(width: min(max(proxy.size.width * 0.38, 410), 490))
-                    .transition(.move(edge: .trailing).combined(with: .opacity))
-                    .zIndex(3)
-                    .accessibilityHidden(!model.settings.hasCompletedOnboarding)
-                }
-
-                if showingLiveOrderDrawer {
-                    Color.black.opacity(0.34)
-                        .ignoresSafeArea()
-                        .onTapGesture { showingLiveOrderDrawer = false }
-                        .accessibilityHidden(true)
-
-                    BeginnerLiveOrderDrawer(
-                        selectedSymbol: selectedSymbol,
-                        selectedSession: selectedSession,
-                        resultPreview: $resultPreview,
-                        isLoading: $isLoading,
-                        onClose: { showingLiveOrderDrawer = false }
-                    )
-                    .frame(width: min(max(proxy.size.width * 0.40, 430), 520))
-                    .transition(.move(edge: .trailing).combined(with: .opacity))
-                    .zIndex(4)
-                    .accessibilityHidden(!model.settings.hasCompletedOnboarding)
-                }
+                .accessibilityHidden(!model.settings.hasCompletedOnboarding)
 
                 if !model.settings.hasCompletedOnboarding {
                     BeginnerOnboardingView(
@@ -155,8 +107,6 @@ struct BeginnerFirstRootView: View {
                     .zIndex(5)
                 }
             }
-            .animation(.easeInOut(duration: 0.18), value: showingOrderDrawer)
-            .animation(.easeInOut(duration: 0.18), value: showingLiveOrderDrawer)
         }
         .frame(minWidth: 1_024, minHeight: 720)
         .background(BeginnerPalette.backgroundDeep)
@@ -172,6 +122,14 @@ struct BeginnerFirstRootView: View {
                 return
             }
             await runAnalysis()
+        }
+        .task(id: model.health?.ok == true) {
+            guard model.health?.ok == true else { return }
+            await model.refreshManagedTradePlans()
+            while !Task.isCancelled {
+                await model.tickManagedTradePlans()
+                try? await Task.sleep(for: .seconds(30))
+            }
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
             model.stopSidecar()
@@ -207,7 +165,7 @@ struct BeginnerFirstRootView: View {
                     Task { await refreshChartTimeframe(timeframe) }
                 },
                 onAddToWatchlist: { Task { await addCurrentToWatchlist() } },
-                onOpenOrder: { showingOrderDrawer = true },
+                onOpenOrder: { selectedAnalysisTab = .order },
                 onRefreshNews: { Task { await refreshNewsAndSentiment() } }
             )
         case .sector:
@@ -486,7 +444,7 @@ private struct BeginnerSidebar: View {
                         Text("시장 판단을 한눈에")
                             .font(.system(size: 10))
                             .foregroundStyle(BeginnerPalette.muted)
-                        Text("1.2.0-beta.2 · 실주문 잠금")
+                        Text("1.3.0-beta.1 · 실주문 잠금")
                             .font(.system(size: 9, weight: .semibold))
                             .foregroundStyle(BeginnerPalette.amber)
                     }
@@ -881,8 +839,8 @@ private struct BeginnerOnboardingView: View {
                 }
 
                 HStack(spacing: 10) {
-                    BeginnerStatusBadge("PAPER ONLY", color: BeginnerPalette.green)
-                    Text("분석 결과는 투자 조언이나 실제 주문이 아닙니다. 실제 주문 버튼은 제공하지 않습니다.")
+                    BeginnerStatusBadge("LIVE LOCKED", color: BeginnerPalette.amber)
+                    Text("분석 결과는 투자 조언이나 주문이 아닙니다. 현재 설치본의 실제 제출은 잠겨 있습니다.")
                         .font(.caption)
                         .foregroundStyle(BeginnerPalette.muted)
                 }

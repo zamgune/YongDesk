@@ -1,6 +1,6 @@
 {
   "name": "stocks-app",
-  "version": "1.2.0-beta.2",
+  "version": "1.3.0-beta.1",
   "private": true,
   "packageManager": "yarn@1.22.22",
   "engines": {
@@ -61,7 +61,7 @@
     "test:symbol-search": "node --test --experimental-strip-types tests/symbol_search.test.mts",
     "test:toss": "node --test --experimental-strip-types tests/toss_client.test.mts tests/toss_openapi_contract.test.mts",
     "test:toss-readiness": "node --test --experimental-strip-types tests/toss_live_readiness.test.mts",
-    "test:trading": "node --experimental-loader ./scripts/ts_path_loader.mjs --test --experimental-strip-types tests/trading_risk_policy.test.mts tests/sync_order_fills.test.mts",
+    "test:trading": "node --experimental-loader ./scripts/ts_path_loader.mjs --test --experimental-strip-types tests/trading_risk_policy.test.mts tests/managed_trade_plan.test.mts tests/sync_order_fills.test.mts",
     "verify:desktop-readiness": "node --experimental-strip-types scripts/verify_desktop_readiness.mts",
     "toss:contract": "node --experimental-strip-types scripts/check_toss_openapi_contract.mts",
     "toss:readiness": "node --experimental-strip-types scripts/check_toss_live_readiness.mts"

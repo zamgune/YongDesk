@@ -23,6 +23,8 @@ struct BeginnerAssetsWorkspace: View {
     let onSelectRealPosition: (RealPortfolioPositionView) -> Void
 
     @State private var sort: BeginnerAssetsSort = .marketValue
+    @State private var selectedPosition: RealPortfolioPositionView?
+    @State private var isLoadingLongTerm = false
 
     private let providerKeys = ["toss", "upbit", "bithumb"]
 
@@ -182,9 +184,121 @@ struct BeginnerAssetsWorkspace: View {
 
     private var insightSidebar: some View {
         VStack(alignment: .leading, spacing: 12) {
+            longTermHoldingCard
             distributionCard
             attentionCard
             currencySummaryCard
+        }
+    }
+
+    private var longTermPlan: AnalysisHorizonPlan? {
+        guard let selectedPosition,
+              beginnerCanonicalSymbol(model.latestWorkspaceAnalysis?.symbol ?? "") == beginnerCanonicalSymbol(selectedPosition.symbol) else {
+            return nil
+        }
+        return model.latestWorkspaceAnalysis?.horizonPlans.first { $0.horizon == .long }
+    }
+
+    private var longTermHoldingCard: some View {
+        BeginnerSurface {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("장기 보유 관리")
+                            .font(.headline)
+                        Text("매매 주기가 아닌 보유 무효화 점검입니다.")
+                            .font(.caption2)
+                            .foregroundStyle(BeginnerPalette.muted)
+                    }
+                    Spacer()
+                    BeginnerStatusBadge("READ ONLY", color: BeginnerPalette.blue)
+                }
+
+                if let selectedPosition {
+                    Text(selectedPosition.name ?? selectedPosition.symbol)
+                        .font(.subheadline.weight(.semibold))
+                    HStack {
+                        Text("평단 \(beginnerPrice(selectedPosition.averagePrice, currency: selectedPosition.currency))")
+                        Spacer()
+                        Text("현재 \(beginnerPrice(selectedPosition.currentPrice, currency: selectedPosition.currency))")
+                    }
+                    .font(.caption.monospacedDigit())
+
+                    if isLoadingLongTerm {
+                        ProgressView("일봉·주봉 구조 확인 중")
+                            .controlSize(.small)
+                    } else if let plan = longTermPlan {
+                        Divider().overlay(BeginnerPalette.line)
+                        longTermMetric("점검 상태", value: longTermStatus(plan))
+                        longTermMetric("장기 무효선", value: beginnerPrice(plan.stop?.price, currency: selectedPosition.currency))
+                        if let management = plan.managementState {
+                            longTermMetric("재확인선", value: beginnerPrice(management.reentryConfirmationPrice, currency: selectedPosition.currency))
+                            ForEach(management.actions.prefix(2), id: \.self) { action in
+                                Label(action, systemImage: "checkmark.circle")
+                                    .font(.caption2)
+                                    .foregroundStyle(BeginnerPalette.muted)
+                            }
+                        } else {
+                            Text(plan.reasons.first ?? plan.blockers.first ?? "SMA200·주봉 구조 데이터를 확인하세요.")
+                                .font(.caption2)
+                                .foregroundStyle(BeginnerPalette.muted)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    } else {
+                        Text("해당 보유 종목을 선택한 기준가로 장기 구조를 다시 계산하세요.")
+                            .font(.caption2)
+                            .foregroundStyle(BeginnerPalette.muted)
+                    }
+
+                    Button("차트에서 확인") {
+                        onSelectRealPosition(selectedPosition)
+                    }
+                    .buttonStyle(.bordered)
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+                    .accessibilityIdentifier("beginner-assets-open-long-term-chart")
+                } else {
+                    Text("왼쪽 포지션을 선택하면 평단과 장기 무효화 기준을 표시합니다.")
+                        .font(.caption)
+                        .foregroundStyle(BeginnerPalette.muted)
+                }
+            }
+        }
+        .accessibilityIdentifier("beginner-assets-long-term-management")
+    }
+
+    private func longTermMetric(_ title: String, value: String) -> some View {
+        HStack {
+            Text(title).foregroundStyle(BeginnerPalette.muted)
+            Spacer()
+            Text(value).fontWeight(.semibold)
+        }
+        .font(.caption2)
+    }
+
+    private func longTermStatus(_ plan: AnalysisHorizonPlan) -> String {
+        if plan.managementState?.state == .invalidationBreached { return "무효선 이탈 · 축소 점검" }
+        if plan.managementState?.state == .recoveryWatch { return "회복 관찰" }
+        if plan.managementState?.state == .active { return "보유 구조 유지" }
+        switch plan.status {
+        case .actionable: return "보유 구조 유지"
+        case .wait: return "재점검 필요"
+        case .unavailable: return "데이터 부족"
+        case let .unknown(value): return value
+        }
+    }
+
+    private func selectPosition(_ position: RealPortfolioPositionView) {
+        selectedPosition = position
+        isLoadingLongTerm = true
+        Task {
+            _ = await model.refreshWorkspaceAnalysis(
+                symbol: position.symbol,
+                assetClass: position.provider == "toss" ? .stock : .crypto,
+                session: position.provider == "toss" ? (position.currency == "USD" ? "US" : "KR") : "CRYPTO",
+                entryPrice: position.averagePrice,
+                planMode: .positionManagement
+            )
+            isLoadingLongTerm = false
         }
     }
 
@@ -313,7 +427,7 @@ struct BeginnerAssetsWorkspace: View {
 
     private func positionRow(_ position: RealPortfolioPositionView) -> some View {
         Button {
-            onSelectRealPosition(position)
+            selectPosition(position)
         } label: {
             HStack(spacing: 12) {
                 Text(String(position.symbol.prefix(2)).uppercased())
@@ -1848,7 +1962,7 @@ private struct BeginnerAPIConnectionWorkspace: View {
                 }
             }
 
-            Text("1.2.0-beta.2에서는 실제 주문·취소·자동매매 제출이 전역에서 차단됩니다. 저장된 토글도 OFF로 초기화되며 자동화는 paper 경로만 사용합니다.")
+            Text("1.3.0-beta.1 설치본에서는 실제 주문·취소·자동매매 제출이 전역에서 차단됩니다. 저장된 토글도 OFF로 초기화되며 자동화는 paper 경로만 사용합니다.")
                 .font(.caption)
                 .foregroundStyle(BeginnerPalette.muted)
                 .fixedSize(horizontal: false, vertical: true)
@@ -2224,7 +2338,7 @@ struct BeginnerLiveTradingSettingsCard: View {
                     VStack(alignment: .leading, spacing: 4) {
                         Text("Toss 읽기 전용 준비 상태")
                             .font(.headline)
-                        Text("계좌·보유·주문 가능 금액·미체결 주문만 조회합니다. 1.2.0-beta.2에서는 실제 주문·취소·자동매매 제출이 모두 잠겨 있습니다.")
+                        Text("계좌·보유·주문 가능 금액·미체결 주문만 조회합니다. 1.3.0-beta.1 설치본에서는 실제 주문·취소·자동매매 제출이 모두 잠겨 있습니다.")
                             .font(.caption)
                             .foregroundStyle(BeginnerPalette.muted)
                     }
@@ -2287,7 +2401,7 @@ struct BeginnerLiveOrderDrawer: View {
                     Text("Toss 주문 사전검증")
                         .font(.title2.weight(.bold))
                         .accessibilityAddTraits(.isHeader)
-                    Text("1.2.0-beta.2 · 실제 제출 잠금")
+                    Text("1.3.0-beta.1 · 실제 제출 잠금")
                         .font(.caption)
                         .foregroundStyle(BeginnerPalette.muted)
                 }

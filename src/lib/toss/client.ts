@@ -6,6 +6,12 @@ import type {
   BuyingPowerResponse,
   CandlePageResponse,
   Commission,
+  ConditionalOrderCreateRequest,
+  ConditionalOrderCreateResponse,
+  ConditionalOrderDetail,
+  ConditionalOrderListStatus,
+  ConditionalOrderModifyRequest,
+  ConditionalOrderResponse,
   ErrorResponse,
   ExchangeRateResponse,
   HoldingsOverview,
@@ -21,6 +27,7 @@ import type {
   OrderOperationResponse,
   OrderResponse,
   PaginatedOrderResponse,
+  PaginatedConditionalOrderResponse,
   Price,
   PriceLimitResponse,
   TossMarketCountry,
@@ -208,7 +215,7 @@ const getAccessToken = async (credentials: TossCredentials): Promise<string> => 
 };
 
 type RequestOptions = {
-  method?: "GET" | "HEAD" | "POST";
+  method?: "DELETE" | "GET" | "HEAD" | "POST";
   accountSeq?: number;
   query?: Record<string, string | number | boolean | undefined>;
   body?: unknown;
@@ -324,6 +331,10 @@ const request = async <T>(
         rateLimit: readRateLimitHeaders(response.headers),
       },
     );
+  }
+
+  if (response.status === 204) {
+    return undefined as T;
   }
 
   return (json as ApiResponse<T>).result;
@@ -503,6 +514,53 @@ export const createTossClient = (credentials: TossCredentials) => ({
       method: "POST",
       accountSeq,
     }),
+
+  listConditionalOrders: (
+    accountSeq: number,
+    options: {
+      status: ConditionalOrderListStatus;
+      symbol?: string;
+      cursor?: string;
+      limit?: number;
+    },
+  ) =>
+    request<PaginatedConditionalOrderResponse>(credentials, "/api/v1/conditional-orders", {
+      accountSeq,
+      query: options,
+    }),
+
+  getConditionalOrder: (accountSeq: number, conditionalOrderId: string) =>
+    request<ConditionalOrderDetail>(
+      credentials,
+      `/api/v1/conditional-orders/${encodeURIComponent(conditionalOrderId)}`,
+      { accountSeq },
+    ),
+
+  createConditionalOrder: (accountSeq: number, payload: ConditionalOrderCreateRequest) =>
+    request<ConditionalOrderCreateResponse>(credentials, "/api/v1/conditional-orders", {
+      method: "POST",
+      accountSeq,
+      body: payload,
+    }),
+
+  modifyConditionalOrder: (
+    accountSeq: number,
+    conditionalOrderId: string,
+    payload: ConditionalOrderModifyRequest,
+  ) =>
+    request<ConditionalOrderResponse>(
+      credentials,
+      `/api/v1/conditional-orders/${encodeURIComponent(conditionalOrderId)}/modify`,
+      { method: "POST", accountSeq, body: payload },
+    ),
+
+  cancelConditionalOrder: async (accountSeq: number, conditionalOrderId: string) => {
+    await request<void>(
+      credentials,
+      `/api/v1/conditional-orders/${encodeURIComponent(conditionalOrderId)}`,
+      { method: "DELETE", accountSeq },
+    );
+  },
 });
 
 export type TossClient = ReturnType<typeof createTossClient>;

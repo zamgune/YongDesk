@@ -129,7 +129,7 @@ enum BeginnerStockMarket: String, CaseIterable, Identifiable {
 
 enum BeginnerAnalysisTab: String, CaseIterable, Identifiable {
     case analysis
-    case signals
+    case order
     case newsSentiment
 
     var id: String { rawValue }
@@ -137,8 +137,8 @@ enum BeginnerAnalysisTab: String, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .analysis: return "분석"
-        case .signals: return "신호"
-        case .newsSentiment: return "뉴스·민심"
+        case .order: return "주문"
+        case .newsSentiment: return "뉴스"
         }
     }
 
@@ -195,7 +195,6 @@ enum BeginnerChartTimeframe: String, CaseIterable, Identifiable {
 enum BeginnerTradeHorizon: String, CaseIterable, Identifiable {
     case day
     case swing
-    case longTerm
 
     var id: String { rawValue }
 
@@ -203,7 +202,6 @@ enum BeginnerTradeHorizon: String, CaseIterable, Identifiable {
         switch self {
         case .day: return "단타"
         case .swing: return "스윙"
-        case .longTerm: return "장투"
         }
     }
 
@@ -211,7 +209,6 @@ enum BeginnerTradeHorizon: String, CaseIterable, Identifiable {
         switch self {
         case .day: return "위험 필터 · 1시간 진입"
         case .swing: return "상위 방향 · 1시간 진입"
-        case .longTerm: return "일봉 · 주봉 구조"
         }
     }
 

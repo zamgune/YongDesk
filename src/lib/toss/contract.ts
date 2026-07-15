@@ -1,11 +1,11 @@
 export type TossOpenApiRequiredOperation = {
   path: string;
-  method: "get" | "post";
+  method: "delete" | "get" | "post";
   accountHeader: boolean;
   purpose: string;
 };
 
-export const TOSS_OPENAPI_SPEC_VERSION = "1.2.2";
+export const TOSS_OPENAPI_SPEC_VERSION = "1.2.4";
 export const TOSS_OPENAPI_BASE_URL = "https://openapi.tossinvest.com";
 export const TOSS_OPENAPI_DOCS_URL = "https://developers.tossinvest.com/docs";
 export const TOSS_OPENAPI_JSON_URL = "https://openapi.tossinvest.com/openapi-docs/latest/openapi.json";
@@ -34,6 +34,11 @@ export const TOSS_OPENAPI_REQUIRED_OPERATIONS: readonly TossOpenApiRequiredOpera
   { path: "/api/v1/orders/{orderId}", method: "get", accountHeader: true, purpose: "order detail" },
   { path: "/api/v1/orders/{orderId}/modify", method: "post", accountHeader: true, purpose: "order modification" },
   { path: "/api/v1/orders/{orderId}/cancel", method: "post", accountHeader: true, purpose: "order cancel" },
+  { path: "/api/v1/conditional-orders", method: "get", accountHeader: true, purpose: "conditional order history" },
+  { path: "/api/v1/conditional-orders", method: "post", accountHeader: true, purpose: "conditional order submission" },
+  { path: "/api/v1/conditional-orders/{conditionalOrderId}", method: "get", accountHeader: true, purpose: "conditional order detail" },
+  { path: "/api/v1/conditional-orders/{conditionalOrderId}", method: "delete", accountHeader: true, purpose: "conditional order cancel" },
+  { path: "/api/v1/conditional-orders/{conditionalOrderId}/modify", method: "post", accountHeader: true, purpose: "conditional order modification" },
 ];
 
 export const TOSS_OPENAPI_CONTRACT = {

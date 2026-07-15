@@ -108,7 +108,7 @@ test("local engine health returns sidecar metadata", async () => {
   assert.equal(payload.pid, process.pid);
   assert.equal(payload.workingDirectory, process.cwd());
   assert.equal(payload.sidecarBuildId, "test-sidecar-build");
-  assert.equal(payload.tossOpenApi?.specVersion, "1.2.2");
+  assert.equal(payload.tossOpenApi?.specVersion, "1.2.4");
   assert.equal(payload.tossOpenApi?.baseUrl, "https://openapi.tossinvest.com");
   assert.ok((payload.tossOpenApi?.requiredOperationCount ?? 0) >= 20);
 });
@@ -155,7 +155,7 @@ test("local engine exposes Toss OpenAPI contract metadata", async () => {
     accountHeaderOperationCount?: number;
     requiredOperations?: Array<{ path?: string; method?: string; accountHeader?: boolean }>;
   };
-  assert.equal(payload.specVersion, "1.2.2");
+  assert.equal(payload.specVersion, "1.2.4");
   assert.equal(payload.baseUrl, "https://openapi.tossinvest.com");
   assert.ok((payload.requiredOperationCount ?? 0) >= 20);
   assert.ok((payload.accountHeaderOperationCount ?? 0) >= 8);
@@ -1437,6 +1437,131 @@ test("local engine submits selected OrderIntent to paper state", async () => {
     } else {
       process.env.STOCK_ANALYSIS_LOCAL_USER_ID = previousUserId;
     }
+  }
+});
+
+test("local engine persists, recovers, and auto-closes managed paper plans with fresh quotes only", async () => {
+  const previousUserId = process.env.STOCK_ANALYSIS_LOCAL_USER_ID;
+  const userId = `local-engine-managed-plan-${Date.now()}`;
+  process.env.STOCK_ANALYSIS_LOCAL_USER_ID = userId;
+  try {
+    const precheckResponse = await handleLocalEngineRequest(new Request("http://127.0.0.1:38771/api/local/trade-plans/precheck", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        symbol: "ZXMANAGED",
+        assetClass: "stock",
+        currency: "USD",
+        purpose: "new-position",
+        mode: "paper",
+        horizon: "swing",
+        quantity: 2,
+        entryPrice: 100,
+        takeProfitEnabled: true,
+        takeProfitPrice: 110,
+        stopLossEnabled: true,
+        stopLossPrice: 95,
+        expiryDate: "2099-12-31",
+        session: "US",
+        market: "US",
+      }),
+    }));
+    assert.equal(precheckResponse.status, 200);
+    const precheck = await precheckResponse.json() as {
+      submitReady?: boolean;
+      record?: { plan?: { id?: string }; status?: string };
+    };
+    const planId = precheck.record?.plan?.id;
+    assert.equal(precheck.submitReady, true);
+    assert.ok(planId);
+
+    const submitResponse = await handleLocalEngineRequest(new Request("http://127.0.0.1:38771/api/local/trade-plans/paper-submit", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ planId }),
+    }));
+    assert.equal(submitResponse.status, 200);
+    const submitted = await submitResponse.json() as { record?: { status?: string } };
+    assert.equal(submitted.record?.status, "watching-exit");
+
+    const staleTick = await handleLocalEngineRequest(new Request("http://127.0.0.1:38771/api/local/trade-plans/tick", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ quotes: [{ symbol: "ZXMANAGED", price: 90, quoteAt: new Date().toISOString(), stale: true }] }),
+    }));
+    assert.equal(staleTick.status, 200);
+    let plansResponse = await handleLocalEngineRequest(new Request("http://127.0.0.1:38771/api/local/trade-plans"));
+    let plans = await plansResponse.json() as { records?: Array<{ plan?: { id?: string }; status?: string }> };
+    assert.equal(plans.records?.find((record) => record.plan?.id === planId)?.status, "watching-exit");
+
+    const oldQuoteTick = await handleLocalEngineRequest(new Request("http://127.0.0.1:38771/api/local/trade-plans/tick", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ quotes: [{ symbol: "ZXMANAGED", price: 90, quoteAt: "2026-01-01T00:00:00.000Z", stale: false }] }),
+    }));
+    assert.equal(oldQuoteTick.status, 200);
+    plansResponse = await handleLocalEngineRequest(new Request("http://127.0.0.1:38771/api/local/trade-plans"));
+    plans = await plansResponse.json() as { records?: Array<{ plan?: { id?: string }; status?: string }> };
+    assert.equal(plans.records?.find((record) => record.plan?.id === planId)?.status, "watching-exit");
+
+    const freshTick = await handleLocalEngineRequest(new Request("http://127.0.0.1:38771/api/local/trade-plans/tick", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ quotes: [{ symbol: "ZXMANAGED", price: 94, quoteAt: new Date().toISOString(), stale: false }] }),
+    }));
+    assert.equal(freshTick.status, 200);
+    const tick = await freshTick.json() as { records?: Array<{ executedExit?: string; status?: string }> };
+    assert.equal(tick.records?.[0]?.executedExit, "stop-loss");
+    assert.equal(tick.records?.[0]?.status, "completed");
+
+    const { state } = await readPaperTradingState(getPaperTradingStorageRootForUser(userId));
+    assert.equal(state.positions.some((position) => position.symbol === "ZXMANAGED"), false);
+    assert.ok(state.executions.some((execution) => execution.symbol === "ZXMANAGED" && execution.side === "sell"));
+    const sellExecutionCount = state.executions.filter((execution) => execution.symbol === "ZXMANAGED" && execution.side === "sell").length;
+
+    const opposingExitTick = await handleLocalEngineRequest(new Request("http://127.0.0.1:38771/api/local/trade-plans/tick", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ quotes: [{ symbol: "ZXMANAGED", price: 120, quoteAt: new Date().toISOString(), stale: false }] }),
+    }));
+    assert.equal(opposingExitTick.status, 200);
+    const afterOpposingExit = (await readPaperTradingState(getPaperTradingStorageRootForUser(userId))).state;
+    assert.equal(
+      afterOpposingExit.executions.filter((execution) => execution.symbol === "ZXMANAGED" && execution.side === "sell").length,
+      sellExecutionCount,
+      "the opposite OCO leg must be atomically retired after the first exit",
+    );
+
+    plansResponse = await handleLocalEngineRequest(new Request("http://127.0.0.1:38771/api/local/trade-plans"));
+    plans = await plansResponse.json() as { records?: Array<{ plan?: { id?: string }; status?: string }> };
+    assert.equal(plans.records?.find((record) => record.plan?.id === planId)?.status, "completed");
+
+    const insufficientHolding = await handleLocalEngineRequest(new Request("http://127.0.0.1:38771/api/local/trade-plans/precheck", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        symbol: "ZXMANAGED",
+        assetClass: "stock",
+        currency: "USD",
+        purpose: "manage-position",
+        mode: "paper",
+        horizon: "day",
+        quantity: 1,
+        entryPrice: 100,
+        takeProfitEnabled: true,
+        takeProfitPrice: 110,
+        stopLossEnabled: false,
+        expiryDate: "2099-12-31",
+        session: "US",
+        market: "US",
+      }),
+    }));
+    const insufficient = await insufficientHolding.json() as { submitReady?: boolean; record?: { riskCheck?: { blockers?: string[] } } };
+    assert.equal(insufficient.submitReady, false);
+    assert.ok(insufficient.record?.riskCheck?.blockers?.some((blocker) => blocker.includes("보유 수량")));
+  } finally {
+    if (previousUserId === undefined) delete process.env.STOCK_ANALYSIS_LOCAL_USER_ID;
+    else process.env.STOCK_ANALYSIS_LOCAL_USER_ID = previousUserId;
   }
 });
 

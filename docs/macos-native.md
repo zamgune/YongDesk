@@ -6,6 +6,7 @@
 
 - SwiftUI가 메인 대시보드, 설정 시트, 메뉴바, 알림, Keychain과 App Support 상태를 담당한다.
 - 기본 창은 `BeginnerFirstRootView`이며 차트·섹터·관심종목·내 자산·전략·자동화·설정 workspace를 분리한다. API credential은 설정 workspace의 인라인 연결 관리에서 등록하고, 전략·점검·배포·로그 시트는 그대로 재사용한다.
+- 차트 workspace는 페이지 스크롤이 없는 `차트 + 우측 인스펙터` 구조다. 인스펙터의 `분석 / 주문 / 뉴스` 내용만 스크롤하며 1024×720에서 접을 수 있다.
 - 앱은 번들된 TypeScript sidecar를 `127.0.0.1`의 임의 포트에서 자동 시작한다.
 - sidecar는 `src/domain`, `src/use-cases`, `src/ports`와 `src/adapters`의 기존 분석·자동화·브로커 코드를 재사용한다.
 - 앱은 `STOCK_ANALYSIS_STORAGE_ROOT`를 `~/Library/Application Support/com.stockanalysis.mac/sidecar`로 설정한다.
@@ -21,7 +22,7 @@ SwiftUI
 → Toss·Upbit·Bithumb adapter
 ```
 
-이 다이어그램은 전체 코드 경계를 나타낸다. 1.2.0-beta.2는 `liveSubmissionMode=disabled` 고정 정책으로 모든 adapter submit·cancel을 네트워크 호출 전에 차단하며 자동화는 paper 계좌에만 기록된다.
+이 다이어그램은 전체 코드 경계를 나타낸다. 1.3.0-beta.1은 Toss OpenAPI 1.2.4 조건주문 코드를 포함하지만 `liveSubmissionMode=disabled` 고정 정책으로 모든 adapter submit·cancel을 네트워크 호출 전에 차단하며 자동화는 paper 계좌에만 기록된다.
 
 ## 로컬 엔진
 
@@ -46,6 +47,7 @@ curl http://127.0.0.1:38771/health
 | 대시보드 | `GET /api/dashboard/terminal`, `POST /api/dashboard/playbook` | macOS 대시보드와 포지션 메모 |
 | Toss | `/api/local/broker/credentials`, `/api/local/toss/readiness` | credential과 계좌 준비 상태 |
 | 주문 | `/api/local/holdings`, `/api/local/orders/precheck`, `/api/local/orders/sync` | 조회·사전검증·체결 동기화 |
+| 관리형 매매 | `POST /api/local/trade-plans/precheck`, `paper-submit`, `live-submit`, `GET /api/local/trade-plans`, `POST /:id/cancel` | 신규 매수·보유분 관리, 독립 익절/손절, 모의 자동 청산과 조건주문 안전 경계 |
 | 전략 | `/api/local/strategy-configs`, `/:id/simulate` | 전략 CRUD와 시뮬레이션 |
 | 자동화 | `/api/automation/cycle`, `/api/local/automation/scheduler` | 1회·연속 자동화 실행 |
 | 안전 | `/api/local/live-trading`, `/api/local/worker-control`, `/api/local/kill-switch` | 제출 차단 경계 |
@@ -61,13 +63,13 @@ curl http://127.0.0.1:38771/health
 
 - 첫 설치에서는 시작 안내가 자동으로 열리고 `삼성전자 예제 분석 시작`, `내 API 연결하기`, `나중에 연결` 중 필요한 경로를 선택한다. API 연결은 별도 팝업이 아니라 설정 workspace의 Toss·Upbit·Bithumb 인라인 연결 관리로 이동한다.
 - credential은 선택 사항이다. API 키 없이도 삼성전자 Yahoo fallback 분석, Upbit 공개 분석, 공식/RSS 뉴스와 모의투자를 사용할 수 있다.
-- `내 자산`은 Toss·Upbit·Bithumb 실자산만 포지션 중심 보드로 표시한다. 공급자별 색상·연결 상태와 종목 수를 구분하고 평가금액은 공급자·통화별로만 표시하며, 모의계좌 전환은 노출하지 않는다. paper 엔진은 무실주문 베타의 자동화·안전 검증을 위해 유지한다.
+- `내 자산`은 Toss·Upbit·Bithumb 실자산을 포지션 중심 보드로 표시한다. 실제 보유 종목을 선택하면 평단·수익률·SMA200·주간/월간 무효화 기준을 `장기 보유 관리`에서 읽기 전용으로 보여주고 주문 CTA 없이 `차트에서 확인`만 제공한다.
 - 차트에서 현재 종목을 관심종목에 추가하면 최대 20개를 이 Mac의 sidecar 저장소에 보관한다. 관심종목은 현재가·등락·출처·갱신 상태만 비교하며, 행 선택 후 단건 분석으로 이동한다.
 - 관심종목의 `급락 감시`는 사용자가 켠 경우에만 앱 실행 중 KRX 정규장에서 60초마다 동작한다. 검증된 Toss credential이 필요하며, 1분봉을 확정 5분봉으로 집계해 `급락 감지 → 반전 대기 → 매수 검토 가능`을 구분한다. Yahoo fallback, stale 시세와 429 응답에서는 알림을 내지 않는다.
 - `매수 검토 가능`은 동일 급락·확인봉 조합에서 한 번만 macOS 알림을 보낸다. 차트 카드의 기준가·구조 손절·1R/저항 1차 50%·2R 2차 50%는 분석값이며 주문이나 보유 사실을 뜻하지 않는다.
 - Finder/Dock 실행 시 번들 sidecar를 우선 사용한다.
 - 번들 경로가 없으면 빌드 시 저장한 저장소 경로와 사용자가 저장한 sidecar 경로를 순서대로 확인한다.
-- 상단 상태와 메뉴바에서 sidecar, 모의투자, `PAPER ONLY`, 최근 갱신을 확인한다.
+- 상단 상태와 메뉴바에서 sidecar, 모의투자, `LIVE LOCKED`, 최근 갱신을 확인한다.
 - `점검` 화면은 credential이 없을 때 외부 계좌를 호출하지 않고 안전 경로를 검증한다.
 - `로그`와 운영 리포트는 secret, token과 raw account number를 제외한다.
 - 일반 설정은 API 연결·알림·자동화 안전 상태만 제공한다. self-test와 진단 로그는 앱 메뉴의 `지원` 경로로, 배포·설치 검증은 개발·패키징 경로로 분리한다.
@@ -79,12 +81,19 @@ curl http://127.0.0.1:38771/health
 - Toss는 1분봉을 한국·미국 정규장 마감 시각에 맞춘 1시간봉으로 집계한다. 세션 길이 때문에 생기는 장 초반 30분 부분 봉은 snapshot과 경고에는 남기되 지표 계산에서는 제외한다. 현재 주봉도 다음 market week가 시작되기 전에는 확정하지 않는다.
 - Upbit 공개 REST는 키 없이 KRW 마켓의 1시간·4시간·일봉을 제공한다. 코인은 일봉 방향, 4시간봉 진입과 1시간봉 재확인을 조합하고, 최근 무거래 시간 공백이 있으면 신규 진입 계획을 대기한다.
 - 데스크톱 코인 분석은 `KRW-*` 입력만 허용한다. BTC·USDT 호가 시장과 KRW 시장을 같은 종목처럼 변환하지 않는다.
-- 장기 계획은 일봉 730일을 조회해 SMA200, 주봉 SMA20/60과 10개월 이동평균을 계산하며, 10개월 평균은 진행 중인 현재 달을 제외한 완료 월 종가만 사용한다.
+- 장기 계산은 일봉 730일을 조회해 SMA200, 주봉 SMA20/60과 10개월 이동평균을 계산하며, 10개월 평균은 진행 중인 현재 달을 제외한 완료 월 종가만 사용한다. 계산 계약은 유지하되 차트의 매매 기간 선택에서는 제거하고 실제 보유 종목의 자산 화면에서만 표시한다.
 - 형성 중인 봉은 확정 분석에서 제외하고 `market`, `currency`, `dataSource`, `timeframe`, `quoteAt`, `stale`을 응답과 화면에 함께 표시한다.
-- 단타·스윙·장기 계획은 구조선·ATR·장기 이동평균 조건으로 손절·익절을 계산한다. 가격 계산 상태와 신규 진입 상태를 별도 배지로 표시하며, 추세 조건이 부족한 `조건 대기`에서도 계산된 가격은 유지한다. 필수 가격 데이터가 없을 때만 고정 퍼센트 없이 `계산 불가`를 표시한다.
+- 차트 인스펙터의 단타·스윙 계획은 구조선·ATR 조건으로 손절·익절을 계산한다. 가격 계산 상태와 신규 진입 상태를 별도 배지로 표시하며, 추세 조건이 부족한 `조건 대기`에서도 계산된 가격은 유지한다.
 - 기준가는 최근 확정 종가, 일치하는 실제 보유 평단, 직접 입력 중 선택한다. 직접 입력은 0보다 큰 유한 숫자만 `entryPrice` 쿼리로 전달한다.
 - 실제 보유 평단은 `planMode=position-management`로 전달한다. 장기 현재가가 무효선 아래면 `invalidation-breached`와 축소·청산·회복 행동을 우선 표시하고, 평단이 무효선 위일 때만 기존 평단 기준 목표를 함께 유지한다.
-- 계획의 stop과 take-profit은 분석 조언이며 주문 제출이 아니다. `orderSubmissionAttempted=false`와 broker stop 부적격 계약을 유지한다.
+- 계획의 stop과 take-profit은 분석 조언이며 주문 제출이 아니다. `분석값 채우기`는 주문 초안 가격만 복사하고 토글을 켜지 않는다. 사용자가 목적·모드·토글·만료일을 정한 뒤 모든 leg의 `OrderIntent`·`RiskCheck`와 10분 미리보기를 통과해야 제출 단계로 이동한다.
+
+### 관리형 주문 인스펙터
+
+- 익절·손절 독립 토글은 일반 매수, 익절만, 손절만, OCO 모의 청산의 네 조합을 지원한다. 모의 계획은 App Support에 영속화하고 앱 실행 중 fresh 시세만 감시하며 첫 청산 체결 뒤 반대 leg를 원자적으로 종료한다.
+- Toss 신규 매수의 청산 leg 1개는 OTO, 보유분 청산 leg 1개는 SINGLE, 보유분 익절+손절은 OCO로 매핑한다. Toss가 지원하지 않는 신규 매수 3단 브래킷은 사전검증에서 차단한다.
+- 국내 주식 손절 지정가는 트리거 한 호가 아래를 기본으로 사용하고 급락 시 미체결 가능성을 항상 표시한다. 코인은 실계좌 모드를 비활성화한다.
+- 공개·일반·임시 서명 설치본은 조건주문 제출·수정·취소를 포함한 실거래를 HTTP 423으로 차단한다. 환경변수만으로 열 수 없고 향후 서명된 QA 번들의 capability만 `local-qa`를 열 수 있다.
 
 ### 섹터 강도
 
@@ -123,7 +132,7 @@ curl http://127.0.0.1:38771/health
 - 거래소별 credential을 검증하고 암호화 저장소와 Keychain에 보관한다.
 - 계좌, 주문 가능 정보, REST 현재가 응답 신선도, 최소·최대 주문금액과 수수료를 확인하고 limit 주문 입력을 preview한다. Upbit 호가 단위는 deprecated chance 필드가 아니라 공식 `/v1/orderbook/instruments`의 `tick_size`를 사용하고, Bithumb은 chance 응답의 `price_unit`을 사용한다.
 - Upbit는 공식 `/v1/orders/test`로 실제 주문 없이 권한·JWT·KRW 지정가 형식을 확인한다. 테스트 식별자는 실제 원장·조회·취소·수동 5건 조건에 반영하지 않는다. Upbit 미체결 조회는 `/v1/orders/open`을 사용한다.
-- Bithumb은 1.2.0-beta.2에서 mock lifecycle까지만 검증하며 실제 연결·실주문 인수는 완료로 표시하지 않는다.
+- Bithumb은 1.3.0-beta.1에서 mock lifecycle까지만 검증하며 실제 연결·실주문 인수는 완료로 표시하지 않는다.
 - 암호화폐 전략은 거래소를 명시하며 페이퍼 모드에서는 소수 수량을 지원한다.
 - Upbit·Bithumb `KRW-*` 지정가는 자동 readiness, 현재 설치·API binding hash, 이용 동의, 거래소별 토글, `OrderIntent`·`RiskCheck`, 잔고·수수료·최소 주문금액·호가 단위·현재가 신선도 재검증과 주문 요약 재입력을 모두 통과한 경우에만 제출한다. 거래소별 주문당 100,000 KRW, KST 일일 누적 300,000 KRW 한도를 수동·자동이 공유한다.
 - 429·5xx·timeout 또는 응답 불명은 자동 재시도하지 않고 해당 거래소 토글을 잠근다. Upbit `identifier`, Bithumb `client_order_id` 조회가 주문을 확인할 때만 잠금을 해소한다.

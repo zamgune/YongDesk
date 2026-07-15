@@ -147,6 +147,82 @@ test("toss client sends account header for closed order history", async () => {
   );
 });
 
+test("toss client creates, reads, modifies, and cancels conditional orders", async () => {
+  await withMockFetch(
+    [
+      tokenResponse(),
+      jsonResponse({ result: { conditionalOrderId: "conditional-1", clientOrderId: "managed-1" } }),
+      jsonResponse({ result: { conditionalOrders: [], nextCursor: null, hasNext: false } }),
+      jsonResponse({ result: {
+        conditionalOrderId: "conditional-1",
+        type: "OCO",
+        status: "COMPLETED",
+        symbol: "005930",
+        market: "KR",
+        quantity: "1",
+        orderType: "LIMIT",
+        expireDate: "2026-07-30",
+        first: { type: "STOP", status: "ORDERED", triggerPrice: "73000", targetProfitRate: null, orderPrice: "73000", triggeredOrderId: "order-triggered-1" },
+        second: { type: "STOP", status: "CANCELED", triggerPrice: "68000", targetProfitRate: null, orderPrice: "67900", triggeredOrderId: null },
+        createdAt: "2026-07-15T00:00:00.000Z",
+      } }),
+      jsonResponse({ result: {
+        orderId: "order-triggered-1",
+        symbol: "005930",
+        side: "SELL",
+        orderType: "LIMIT",
+        timeInForce: "DAY",
+        status: "FILLED",
+        price: "73000",
+        quantity: "1",
+        orderAmount: "73000",
+        currency: "KRW",
+        orderedAt: "2026-07-15T00:01:00.000Z",
+        canceledAt: null,
+        execution: { filledQuantity: "1", averageFilledPrice: "73000", filledAmount: "73000", commission: "0", tax: "0", filledAt: "2026-07-15T00:01:01.000Z", settlementDate: null },
+      } }),
+      jsonResponse({ result: { conditionalOrderId: "conditional-2" } }),
+      new Response(null, { status: 204 }),
+    ],
+    async (calls) => {
+      const client = createTossClient({ clientId: "client-id", clientSecret: "client-secret" });
+      const payload = {
+        symbol: "005930",
+        type: "OCO" as const,
+        quantity: "1",
+        orderType: "LIMIT" as const,
+        clientOrderId: "managed-1",
+        expireDate: "2026-07-30",
+        first: { orderSide: "SELL" as const, triggerPrice: "73000", orderPrice: "73000" },
+        second: { orderSide: "SELL" as const, triggerPrice: "68000", orderPrice: "67900" },
+      };
+      const created = await client.createConditionalOrder(7, payload);
+      await client.listConditionalOrders(7, { status: "OPEN", symbol: "005930" });
+      const detail = await client.getConditionalOrder(7, created.conditionalOrderId);
+      const triggered = await client.getOrder(7, detail.first.triggeredOrderId ?? "");
+      const modified = await client.modifyConditionalOrder(7, "conditional-1", {
+        ...payload,
+        clientOrderId: undefined,
+        symbol: undefined,
+        first: { ...payload.first, triggerPrice: "74000", orderPrice: "74000" },
+      });
+      await client.cancelConditionalOrder(7, modified.conditionalOrderId);
+
+      assert.equal(created.conditionalOrderId, "conditional-1");
+      assert.equal(detail.first.triggeredOrderId, "order-triggered-1");
+      assert.equal(triggered.status, "FILLED");
+      assert.equal(modified.conditionalOrderId, "conditional-2");
+      assert.equal(calls[1]?.init?.method, "POST");
+      assert.match(calls[2]?.url ?? "", /status=OPEN/);
+      assert.match(calls[3]?.url ?? "", /conditional-orders\/conditional-1$/);
+      assert.match(calls[4]?.url ?? "", /orders\/order-triggered-1$/);
+      assert.match(calls[5]?.url ?? "", /conditional-1\/modify$/);
+      assert.equal(calls[6]?.init?.method, "DELETE");
+      assert.equal((calls[6]?.init?.headers as Record<string, string>)["X-Tossinvest-Account"], "7");
+    },
+  );
+});
+
 test("toss client separates cached tokens when the client secret changes", async () => {
   await withMockFetch(
     [

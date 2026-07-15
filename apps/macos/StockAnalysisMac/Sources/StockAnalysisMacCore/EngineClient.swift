@@ -419,6 +419,39 @@ public struct EngineClient: Sendable {
         return try decoder.decode(LocalLiveOrderSubmissionResponse.self, from: data)
     }
 
+    public func precheckManagedTradePlan(_ input: ManagedTradePlanInput) async throws -> ManagedTradePlanPrecheckResponse {
+        let data = try await postJSON("/api/local/trade-plans/precheck", body: input)
+        return try decoder.decode(ManagedTradePlanPrecheckResponse.self, from: data)
+    }
+
+    public func managedTradePlans() async throws -> ManagedTradePlanListResponse {
+        try await getJSON("/api/local/trade-plans")
+    }
+
+    public func submitManagedPaperPlan(planId: String) async throws -> ManagedTradePlanActionResponse {
+        let data = try await postJSON("/api/local/trade-plans/paper-submit", body: ManagedTradePlanIdPayload(planId: planId))
+        return try decoder.decode(ManagedTradePlanActionResponse.self, from: data)
+    }
+
+    public func submitManagedLivePlan(planId: String, confirmation: String) async throws -> ManagedTradePlanActionResponse {
+        let data = try await postJSON(
+            "/api/local/trade-plans/live-submit",
+            body: ManagedTradePlanSubmitPayload(planId: planId, confirmation: confirmation)
+        )
+        return try decoder.decode(ManagedTradePlanActionResponse.self, from: data)
+    }
+
+    public func tickManagedTradePlans() async throws -> ManagedTradePlanActionResponse {
+        let data = try await postJSON("/api/local/trade-plans/tick", body: [:] as [String: String], timeout: 45)
+        return try decoder.decode(ManagedTradePlanActionResponse.self, from: data)
+    }
+
+    public func cancelManagedTradePlan(planId: String) async throws -> ManagedTradePlanActionResponse {
+        guard let encoded = percentEncodedPathSegment(planId) else { throw URLError(.badURL) }
+        let data = try await postJSON("/api/local/trade-plans/\(encoded)/cancel", body: [:] as [String: String])
+        return try decoder.decode(ManagedTradePlanActionResponse.self, from: data)
+    }
+
     public func analyze(
         symbol: String,
         timeframe: AnalysisTimeframe,
@@ -790,6 +823,15 @@ private struct LocalLiveTradingConfirmationPayload: Encodable {
 
 private struct LocalLiveOrderSubmitPayload: Encodable {
     let previewId: String
+    let confirmation: String
+}
+
+private struct ManagedTradePlanIdPayload: Encodable {
+    let planId: String
+}
+
+private struct ManagedTradePlanSubmitPayload: Encodable {
+    let planId: String
     let confirmation: String
 }
 

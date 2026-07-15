@@ -1,6 +1,6 @@
 /**
  * 토스증권 Open API (https://openapi.tossinvest.com) 타입.
- * OpenAPI 1.2.2 스펙 기준. 필요한 엔드포인트만 추렸습니다.
+ * OpenAPI 1.2.4 스펙 기준. 필요한 엔드포인트만 추렸습니다.
  *
  * 주의:
  * - 모든 금액/수량/가격은 API 에서 문자열(decimal)로 내려옵니다. 정밀도 손실을
@@ -259,6 +259,83 @@ export type OrderModifyRequest = {
   quantity?: string;
   price?: string;
   confirmHighValueOrder?: boolean;
+};
+
+// --- Conditional Order ---
+
+export type ConditionalOrderType = "SINGLE" | "OCO" | "OTO";
+export type ConditionalOrderListStatus = "OPEN" | "CLOSED";
+export type ConditionalOrderStatus =
+  | "WATCHING"
+  | "PAUSED"
+  | "ORDERING"
+  | "ORDERED"
+  | "COMPLETED"
+  | "EXPIRED";
+export type ConditionalOrderLegStatus =
+  | ConditionalOrderStatus
+  | "HOLDING"
+  | "CANCELED";
+
+export type ConditionalOrderConditionRequest = {
+  orderSide: TossOrderSide;
+  triggerPrice: string;
+  orderPrice?: string;
+};
+
+export type ConditionalOrderCreateRequest = {
+  symbol: string;
+  type: ConditionalOrderType;
+  quantity: string;
+  orderType: TossOrderType;
+  clientOrderId?: string;
+  expireDate: string;
+  first: ConditionalOrderConditionRequest;
+  second?: ConditionalOrderConditionRequest | null;
+  confirmHighValueOrder?: boolean;
+};
+
+export type ConditionalOrderModifyRequest = Omit<
+  ConditionalOrderCreateRequest,
+  "symbol" | "clientOrderId"
+>;
+
+export type ConditionalOrderCondition = {
+  type: "STOP" | "PROFIT_RATE";
+  status: ConditionalOrderLegStatus;
+  triggerPrice: string | null;
+  targetProfitRate: string | null;
+  orderPrice: string | null;
+  triggeredOrderId: string | null;
+};
+
+export type ConditionalOrderDetail = {
+  conditionalOrderId: string;
+  type: ConditionalOrderType;
+  status: ConditionalOrderStatus;
+  symbol: string;
+  market: TossMarketCountry;
+  quantity: string;
+  orderType: TossOrderType;
+  expireDate: string;
+  first: ConditionalOrderCondition;
+  second: ConditionalOrderCondition | null;
+  createdAt: string;
+};
+
+export type ConditionalOrderCreateResponse = {
+  conditionalOrderId: string;
+  clientOrderId: string | null;
+};
+
+export type ConditionalOrderResponse = {
+  conditionalOrderId: string;
+};
+
+export type PaginatedConditionalOrderResponse = {
+  conditionalOrders: ConditionalOrderDetail[];
+  nextCursor: string | null;
+  hasNext: boolean;
 };
 
 // --- Order History (조회) ---

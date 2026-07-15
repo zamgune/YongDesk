@@ -16,7 +16,7 @@ type Frame = {
   height: number;
 };
 
-type AXAction = "exists" | "enabled" | "frame" | "press";
+type AXAction = "exists" | "enabled" | "frame" | "press" | "value";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const argumentsList = process.argv.slice(2);
@@ -167,6 +167,15 @@ const axActionScript = (query: string, action: AXAction, role?: string) => {
       "          end try",
     );
     break;
+  case "value":
+    actionLines.push(
+      "          try",
+      "            return (value of candidate as text)",
+      "          on error",
+      "            return \"\"",
+      "          end try",
+    );
+    break;
   case "frame":
     actionLines.push(
       "          try",
@@ -235,7 +244,7 @@ const axActionScript = (query: string, action: AXAction, role?: string) => {
     "    end repeat",
     "  end tell",
     "end tell",
-    action === "exists" || action === "enabled" ? "return \"false\"" : `error "AX element not found: ${query.replace(/"/g, "\\\"")}"`,
+    action === "exists" || action === "enabled" ? "return \"false\"" : action === "value" ? "return \"\"" : `error "AX element not found: ${query.replace(/"/g, "\\\"")}"`,
   ];
 };
 
@@ -249,6 +258,9 @@ const axExists = (query: string, role?: string) =>
 
 const axEnabled = (query: string, role?: string) =>
   axAction(query, "enabled", role, true).output === "true";
+
+const axValue = (query: string, role?: string) =>
+  axAction(query, "value", role, true).output.trim().toLowerCase();
 
 const parseFrame = (output: string, context: string): Frame => {
   const values = output.split("|").map(Number);
@@ -378,32 +390,6 @@ const axTextContains = (text: string) =>
     "return false",
   ], { allowFailure: true }).output === "true";
 
-const interactiveControlNames = () =>
-  osascript([
-    "set outputText to \"\"",
-    "tell application \"System Events\"",
-    `  tell (first process whose bundle identifier is "${bundleIdentifier}")`,
-    "    repeat with candidateWindow in windows",
-    "      set candidates to entire contents of candidateWindow",
-    "      repeat with candidate in candidates",
-    "        set candidateRole to \"\"",
-    "        set candidateName to \"\"",
-    "        try",
-    "          set candidateRole to role of candidate as text",
-    "        end try",
-    "        try",
-    "          set candidateName to name of candidate as text",
-    "        end try",
-    "        if candidateRole is \"AXButton\" or candidateRole is \"AXMenuItem\" or candidateRole is \"AXRadioButton\" then",
-    "          set outputText to outputText & candidateRole & \"|\" & candidateName & linefeed",
-    "        end if",
-    "      end repeat",
-    "    end repeat",
-    "  end tell",
-    "end tell",
-    "return outputText",
-  ], { allowFailure: true }).output;
-
 const waitForAX = (query: string, timeoutMs = 20_000, role?: string) => {
   const startedAt = Date.now();
   while (Date.now() - startedAt < timeoutMs) {
@@ -479,39 +465,6 @@ const pressEscape = () => {
   if (!result.ok) {
     throw new Error(result.output || "Could not dismiss the presented UI with Escape.");
   }
-};
-
-const setScrollPosition = (identifier: string, value: number) => {
-  const result = osascript([
-    `set targetIdentifier to ${appleScriptString(identifier)}`,
-    `set targetValue to ${Math.min(1, Math.max(0, value))}`,
-    "tell application \"System Events\"",
-    `  tell (first process whose bundle identifier is "${bundleIdentifier}")`,
-    "    repeat with candidateWindow in windows",
-    "      set candidates to entire contents of candidateWindow",
-    "      repeat with candidate in candidates",
-    "        set candidateIdentifier to \"\"",
-    "        try",
-    "          set candidateIdentifier to value of attribute \"AXIdentifier\" of candidate as text",
-    "        end try",
-    "        if candidateIdentifier is targetIdentifier then",
-    "          try",
-    "            set value of scroll bar 1 of candidate to targetValue",
-    "            return \"scrolled\"",
-    "          on error errorMessage",
-    "            error \"Could not set scroll position: \" & errorMessage",
-    "          end try",
-    "        end if",
-    "      end repeat",
-    "    end repeat",
-    "  end tell",
-    "end tell",
-    `error "Scroll area not found: ${identifier.replace(/"/g, "\\\"")}"`,
-  ], { allowFailure: true });
-  if (!result.ok || result.output !== "scrolled") {
-    throw new Error(result.output || `Could not scroll ${identifier}.`);
-  }
-  sleep(500);
 };
 
 const windowFrame = (): Frame => {
@@ -594,6 +547,7 @@ const verifyWorkspaceLayout = (size: WindowSize) => {
 
   clickAX("beginner-nav-chart");
   waitForAX("beginner-chart-workspace");
+  waitForAX("beginner-chart-split-workbench");
   waitForAX("beginner-symbol-search");
   waitForAX("beginner-analyze-button");
   waitForAX("beginner-chart-timeframe");
@@ -602,6 +556,10 @@ const verifyWorkspaceLayout = (size: WindowSize) => {
   waitForAX("beginner-chart-timeframe");
   assertInsideWindow("beginner-symbol-search", actual);
   assertInsideWindow("beginner-analyze-button", actual);
+  clickAX("beginner-toggle-chart-inspector");
+  waitForAXAbsent("beginner-chart-split-workbench");
+  clickAX("beginner-open-order-inspector");
+  waitForAX("beginner-chart-split-workbench");
 
   return {
     requested: `${size.width}x${size.height}`,
@@ -615,24 +573,21 @@ const verifyStrategyWorkflowOrder = () => {
   waitForAX("beginner-strategy-workflow-order");
 };
 
-const assertNoBrokerSubmitControl = () => {
-  const controls = interactiveControlNames();
-  const prohibited = controls.split("\n").find((line) =>
-    /(?:실제|실계좌|broker).*(?:주문|제출)|(?:주문|제출).*(?:실제|실계좌|broker)/i.test(line)
-    && !/(?:없음|차단|금지)/.test(line));
+const assertNoOrderSubmissionAttempt = () => {
+  const prohibited = pressedTargets.find((target) =>
+    target === "beginner-managed-order-submit"
+    || target === "beginner-paper-order-submit"
+    || target === "beginner-live-order-submit");
   if (prohibited) {
-    throw new Error(`A broker/live-submit control is exposed in PAPER ONLY UI: ${prohibited}`);
-  }
-  if (pressedTargets.includes("beginner-paper-order-submit")) {
-    throw new Error("UI smoke must never press the paper-order submit control.");
+    throw new Error(`UI smoke must never press an order submit control: ${prohibited}`);
   }
 };
 
 const verifyCoreFlow = () => {
   waitForAX("beginner-onboarding", 30_000);
-  waitForText("PAPER ONLY");
+  waitForText("LIVE LOCKED");
   waitForText("삼성전자 예제");
-  waitForText("실제 주문 버튼은 제공하지 않습니다");
+  waitForText("현재 설치본의 실제 제출은 잠겨 있습니다");
   waitForAX("beginner-onboarding-example");
   clickAX("beginner-onboarding-example");
   waitForAXAbsent("beginner-onboarding", 30_000);
@@ -642,7 +597,7 @@ const verifyCoreFlow = () => {
   waitForAX("beginner-analyze-button");
   waitForAXEnabled("beginner-analyze-button", 60_000);
   waitForText("삼성전자", 60_000);
-  waitForText("테스트 fixture 데이터입니다", 60_000);
+  waitForText("FIXTURE", 60_000);
   waitForText("일봉 차트", 60_000);
   waitForText("FIXTURE", 60_000);
   waitForText("KRW", 60_000);
@@ -655,24 +610,46 @@ const verifyCoreFlow = () => {
   const horizons = [
     ["단타", "beginner-horizon-day"],
     ["스윙", "beginner-horizon-swing"],
-    ["장투", "beginner-horizon-longTerm"],
   ] as const;
   for (const [horizonName, horizonIdentifier] of horizons) {
     clickAX(horizonName);
     waitForAX(horizonIdentifier);
-    setScrollPosition("beginner-chart-workspace", 1);
     waitForText("손절·무효화", 8_000);
     waitForText("1차 익절", 8_000);
     waitForText("2차 익절", 8_000);
-    setScrollPosition("beginner-chart-workspace", 0);
   }
 
-  clickAX("beginner-analysis-tab-signals");
   waitForAX("beginner-signal-panel");
   clickAX("beginner-analysis-tab-newsSentiment");
   waitForAX("beginner-news-sentiment-panel");
   waitForText("뉴스와 종목 민심");
   clickAX("beginner-analysis-tab-analysis");
+  clickAX("beginner-analysis-apply-order");
+  clickAX("beginner-analysis-tab-order");
+  waitForAX("beginner-order-inspector");
+  waitForAX("beginner-take-profit-toggle");
+  waitForAX("beginner-stop-loss-toggle");
+  if (!["0", "false", "off"].includes(axValue("beginner-take-profit-toggle"))
+      || !["0", "false", "off"].includes(axValue("beginner-stop-loss-toggle"))) {
+    throw new Error("Copying analysis values must not enable take-profit or stop-loss.");
+  }
+  clickAX("beginner-take-profit-toggle");
+  clickAX("beginner-stop-loss-toggle");
+  waitForAX("beginner-take-profit-price");
+  waitForAX("beginner-stop-loss-price");
+  waitForAX("beginner-stop-loss-order-price");
+  waitForAX("beginner-order-expiry");
+
+  clickAX("Toss 실계좌");
+  waitForText("현재 설치본은 서명 identity가 없어 실제 제출이 잠겨 있습니다");
+  waitForAX("beginner-managed-order-precheck");
+  clickAX("모의");
+  assertNoOrderSubmissionAttempt();
+
+  clickAX("코인");
+  waitForText("코인은 이번 버전에서 모의 자동 청산만 제공합니다", 60_000);
+  clickAX("주식");
+  waitForText("삼성전자", 60_000);
 
   clickAX("beginner-add-watchlist");
   clickAX("beginner-nav-watchlist");
@@ -682,19 +659,6 @@ const verifyCoreFlow = () => {
   waitForAX("beginner-watchlist-insights");
   waitForText("관심종목");
 
-  clickAX("beginner-nav-chart");
-  waitForAX("beginner-chart-workspace");
-  clickAX("beginner-open-paper-order");
-  waitForAX("beginner-paper-order-drawer");
-  waitForText("PAPER ONLY");
-  waitForText("실제 주문 없음");
-  waitForText("기존 OrderIntent · RiskCheck");
-  waitForAX("beginner-paper-order-close");
-  waitForAX("beginner-paper-order-submit");
-  assertNoBrokerSubmitControl();
-  clickAX("beginner-paper-order-close");
-  waitForAXAbsent("beginner-paper-order-drawer");
-
   clickAX("beginner-nav-assets");
   waitForAX("beginner-assets-workspace");
   waitForText("포트폴리오 보드");
@@ -702,12 +666,13 @@ const verifyCoreFlow = () => {
   waitForAX("beginner-assets-provider-status");
   waitForAX("beginner-assets-sort");
   waitForAX("beginner-assets-position-list");
+  waitForAX("beginner-assets-long-term-management");
 
   clickAX("beginner-nav-strategy");
   waitForAX("beginner-strategy-workspace");
   waitForText("처음 만드는 자동매매", 30_000);
   waitForText("매매 문장으로 전략 만들기", 30_000);
-  assertNoBrokerSubmitControl();
+  assertNoOrderSubmissionAttempt();
   verifyStrategyWorkflowOrder();
   for (const identifier of [
     "beginner-strategy-name",
@@ -731,7 +696,7 @@ const verifyCoreFlow = () => {
   waitForAX("beginner-automation-workspace");
   waitForText("PAPER ONLY");
   waitForText("실행 제어");
-  assertNoBrokerSubmitControl();
+  assertNoOrderSubmissionAttempt();
 
   clickAX("beginner-nav-settings");
   waitForAX("beginner-settings-workspace");
@@ -751,11 +716,8 @@ const verifyCoreFlow = () => {
   waitForAX("beginner-api-identifier");
   waitForAX("beginner-api-secret");
   waitForAX("beginner-api-save");
-  typeAXValue("beginner-api-identifier", "friend-test-id");
-  typeAXValue("beginner-api-secret", "friend-test-secret");
-  waitForAXEnabled("beginner-api-save");
 
-  assertNoBrokerSubmitControl();
+  assertNoOrderSubmissionAttempt();
 };
 
 const verifyAPIRegistrationControls = () => {
@@ -832,7 +794,7 @@ const main = () => {
     }
     verifyCoreFlow();
     const windowSizes = requestedWindowSizes.map(verifyWorkspaceLayout);
-    assertNoBrokerSubmitControl();
+    assertNoOrderSubmissionAttempt();
 
     const requiredIdentifiers = [
       "beginner-onboarding",
@@ -855,15 +817,20 @@ const main = () => {
       "beginner-watchlist-refresh",
       "beginner-watchlist-insights",
       "beginner-analysis-tab-analysis",
-      "beginner-analysis-tab-signals",
+      "beginner-analysis-tab-order",
       "beginner-analysis-tab-newsSentiment",
       "beginner-horizon-picker",
       "beginner-horizon-day",
       "beginner-horizon-swing",
-      "beginner-horizon-longTerm",
-      "beginner-open-paper-order",
-      "beginner-paper-order-drawer",
-      "beginner-paper-order-close",
+      "beginner-chart-split-workbench",
+      "beginner-toggle-chart-inspector",
+      "beginner-open-order-inspector",
+      "beginner-analysis-apply-order",
+      "beginner-order-inspector",
+      "beginner-take-profit-toggle",
+      "beginner-stop-loss-toggle",
+      "beginner-managed-order-precheck",
+      "beginner-assets-long-term-management",
       "beginner-strategy-name",
       "beginner-strategy-save",
       "beginner-strategy-preview",
@@ -902,14 +869,18 @@ const main = () => {
         sourceCurrencyTimeframeVisible: true,
         horizonPlans: true,
         signalAndNewsSentimentTabs: true,
-        paperOrderDrawerNoSubmit: true,
+        managedOrderInspectorNoSubmit: true,
+        analysisCopyKeepsExitTogglesOff: true,
+        coinLiveModeBlocked: true,
+        liveSubmissionLocked: true,
+        longTermManagementMovedToAssets: true,
         assetsWorkspace: true,
         strategyWorkflowOrder: true,
         strategyWorkspaceSmoke: true,
         automationPaperOnly: true,
         killSwitchReachable: true,
         settingsApiReachable: true,
-        apiSaveEnabledAfterInput: true,
+        apiFieldsReachable: true,
         sidecarRecoveryReachable: true,
         supportToolsSeparated: true,
         responsiveWindowSizes: true,

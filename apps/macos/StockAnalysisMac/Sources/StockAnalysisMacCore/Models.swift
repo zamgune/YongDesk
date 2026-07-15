@@ -1492,6 +1492,142 @@ public struct LocalLiveOrderSubmissionResponse: Codable, Equatable, Sendable {
     public let remainingDailyBuyKrw: Double?
 }
 
+public struct ManagedTradePlanInput: Encodable, Equatable, Sendable {
+    public let symbol: String
+    public let assetClass: String
+    public let currency: String
+    public let purpose: String
+    public let mode: String
+    public let horizon: String
+    public let quantity: Double
+    public let entryPrice: Double?
+    public let takeProfitEnabled: Bool
+    public let takeProfitPrice: Double?
+    public let stopLossEnabled: Bool
+    public let stopLossPrice: Double?
+    public let stopLossOrderPrice: Double?
+    public let expiryDate: String
+    public let accountSeq: Int?
+    public let sourceAnalysisId: String?
+    public let session: String
+    public let market: String
+
+    public init(
+        symbol: String,
+        assetClass: String,
+        currency: String,
+        purpose: String,
+        mode: String,
+        horizon: String,
+        quantity: Double,
+        entryPrice: Double?,
+        takeProfitEnabled: Bool,
+        takeProfitPrice: Double?,
+        stopLossEnabled: Bool,
+        stopLossPrice: Double?,
+        stopLossOrderPrice: Double?,
+        expiryDate: String,
+        accountSeq: Int?,
+        sourceAnalysisId: String?,
+        session: String,
+        market: String
+    ) {
+        self.symbol = symbol
+        self.assetClass = assetClass
+        self.currency = currency
+        self.purpose = purpose
+        self.mode = mode
+        self.horizon = horizon
+        self.quantity = quantity
+        self.entryPrice = entryPrice
+        self.takeProfitEnabled = takeProfitEnabled
+        self.takeProfitPrice = takeProfitPrice
+        self.stopLossEnabled = stopLossEnabled
+        self.stopLossPrice = stopLossPrice
+        self.stopLossOrderPrice = stopLossOrderPrice
+        self.expiryDate = expiryDate
+        self.accountSeq = accountSeq
+        self.sourceAnalysisId = sourceAnalysisId
+        self.session = session
+        self.market = market
+    }
+}
+
+public struct ManagedTradeExitLegView: Codable, Equatable, Sendable {
+    public let kind: String
+    public let enabled: Bool
+    public let triggerPrice: Double?
+    public let orderPrice: Double?
+}
+
+public struct ManagedTradeExitsView: Codable, Equatable, Sendable {
+    public let takeProfit: ManagedTradeExitLegView
+    public let stopLoss: ManagedTradeExitLegView
+}
+
+public struct ManagedTradePlanView: Codable, Equatable, Sendable {
+    public let id: String
+    public let symbol: String
+    public let assetClass: String
+    public let currency: String
+    public let purpose: String
+    public let mode: String
+    public let horizon: String
+    public let quantity: Double
+    public let referencePrice: Double?
+    public let entry: DashboardOrderIntent?
+    public let exits: ManagedTradeExitsView
+    public let expiryDate: String
+    public let accountSeq: Int?
+    public let sourceAnalysisId: String?
+    public let status: String
+    public let createdAt: String
+    public let updatedAt: String
+}
+
+public struct ManagedTradePlanRecordView: Codable, Identifiable, Equatable, Sendable {
+    public var id: String { plan.id }
+    public let plan: ManagedTradePlanView
+    public let session: String
+    public let market: String
+    public let status: String
+    public let riskCheck: DashboardRiskCheck
+    public let previewExpiresAt: String
+    public let submittedAt: String?
+    public let lastPrice: Double?
+    public let lastQuoteAt: String?
+    public let executedExit: String?
+    public let conditionalOrderId: String?
+    public let liveAttemptId: String?
+    public let trackedBrokerOrderIds: [String]?
+    public let error: String?
+}
+
+public struct ManagedTradePlanPrecheckResponse: Codable, Equatable, Sendable {
+    public let generatedAt: String
+    public let record: ManagedTradePlanRecordView
+    public let confirmationText: String
+    public let submitReady: Bool
+    public let liveSubmissionMode: String
+    public let orderSubmissionAttempted: Bool
+}
+
+public struct ManagedTradePlanListResponse: Codable, Equatable, Sendable {
+    public let generatedAt: String
+    public let records: [ManagedTradePlanRecordView]
+    public let liveSubmissionMode: String
+}
+
+public struct ManagedTradePlanActionResponse: Codable, Equatable, Sendable {
+    public let generatedAt: String?
+    public let status: String?
+    public let record: ManagedTradePlanRecordView?
+    public let records: [ManagedTradePlanRecordView]?
+    public let evaluated: Int?
+    public let orderSubmissionAttempted: Bool?
+    public let error: String?
+}
+
 public struct AutomationCycleResponseView: Codable, Equatable, Sendable {
     public let generatedAt: String
     public let dryRun: Bool?
@@ -2040,7 +2176,7 @@ public struct DashboardOrderIntent: Codable, Equatable, Sendable {
     public let symbol: String
     public let side: String
     public let type: String
-    public let quantity: Int
+    public let quantity: Double
     public let limitPrice: Double?
     public let stopPrice: Double?
     public let currency: String

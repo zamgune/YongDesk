@@ -198,6 +198,14 @@ func verifyInteractiveChartWorkbenchSource() throws {
         contentsOf: packageURL.appending(path: "Sources/StockAnalysisMac/BeginnerFirst/BeginnerChartWorkspace.swift"),
         encoding: .utf8
     )
+    let models = try String(
+        contentsOf: packageURL.appending(path: "Sources/StockAnalysisMac/BeginnerFirst/BeginnerFirstModels.swift"),
+        encoding: .utf8
+    )
+    let supportWorkspace = try String(
+        contentsOf: packageURL.appending(path: "Sources/StockAnalysisMac/BeginnerFirst/BeginnerSupportWorkspaces.swift"),
+        encoding: .utf8
+    )
 
     assert(chartView.contains("WKWebView"), "chart workbench should use the bundled WebKit chart surface")
     assert(chartView.contains("lightweight-charts.standalone.production.js"), "chart workbench should load the bundled lightweight chart library")
@@ -212,6 +220,17 @@ func verifyInteractiveChartWorkbenchSource() throws {
     assert(workspace.contains("beginner-entry-price-mode"), "horizon plans should expose a stable entry-price selector")
     assert(workspace.contains("beginner-custom-entry-price"), "custom entry price should remain keyboard accessible")
     assert(workspace.contains("가격 계산 완료") && workspace.contains("진입 대기"), "price availability and entry readiness must stay separate")
+    assert(workspace.contains("HSplitView") && workspace.contains("beginner-chart-split-workbench"), "chart and inspector should share a fixed split workbench")
+    assert(workspace.contains("let forceCollapsed = proxy.size.width < 850"), "minimum window width should collapse the inspector before shrinking the chart")
+    assert(workspace.contains("beginner-order-inspector"), "order controls should live in the chart inspector")
+    assert(workspace.contains("identifier: \"take-profit\"") && workspace.contains("identifier: \"stop-loss\""), "take-profit and stop-loss must stay independently selectable")
+    assert(workspace.contains(".disabled(assetClass == .crypto)"), "crypto must keep the Toss live mode disabled")
+    assert(workspace.contains("beginner-analysis-apply-order"), "analysis values should be explicitly copied into the order draft")
+    assert(workspace.contains("beginner-managed-order-submit"), "managed order submission control must remain behind precheck state")
+    assert(workspace.contains("precheck.record.plan.mode"), "submission must remain bound to the exact prechecked execution mode")
+    assert(!models.contains("case longTerm"), "long-term should not remain a chart trading horizon")
+    assert(supportWorkspace.contains("beginner-assets-long-term-management"), "long-term holding management should live in assets")
+    assert(supportWorkspace.contains("beginner-assets-open-long-term-chart"), "long-term holdings should expose only chart navigation")
 }
 
 try verifyInteractiveChartWorkbenchSource()
